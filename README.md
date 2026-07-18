@@ -61,6 +61,7 @@ Keys inside the TUI:
 | `Tab` / `Shift+Tab` | Command completion (popup appears on `/`; repeat to cycle) |
 | `↑` / `↓` | Select a completion candidate |
 | `y` / `n` | Approve / deny a tool call |
+| `Esc` | Stop the generation in progress |
 | `PgUp` / `PgDn` | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |

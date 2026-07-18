@@ -23,14 +23,15 @@ async fn main() -> anyhow::Result<()> {
     // Fail before entering the TUI if the provider client can't be built
     // (e.g. a missing API key).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
-    let cmd_tx = agent::spawn(&cfg, event_tx.clone())?;
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
+    let cmd_tx = agent::spawn(&cfg, event_tx.clone(), cancel_rx)?;
 
     if let Some(prompt) = smoke {
         return run_smoke(prompt, event_rx, cmd_tx).await;
     }
 
     let terminal = ratatui::init();
-    let result = app::App::new(&cfg, event_tx, cmd_tx)
+    let result = app::App::new(&cfg, event_tx, cmd_tx, cancel_tx)
         .run(terminal, event_rx)
         .await;
     ratatui::restore();
@@ -65,6 +66,7 @@ async fn run_smoke(
                 println!("\n[compacted] {messages} messages\n{summary}");
             }
             AgentEvent::ShellOutput { output } => println!("[shell]\n{output}"),
+            AgentEvent::Cancelled => println!("\n[cancelled]"),
             AgentEvent::Error(e) => println!("\n[error] {e}"),
             AgentEvent::TurnComplete => break,
         }

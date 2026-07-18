@@ -26,6 +26,8 @@ pub enum AgentEvent {
     Compacted { messages: usize, summary: String },
     /// Output of a user-typed `!` shell command.
     ShellOutput { output: String },
+    /// The user stopped the current generation with Esc.
+    Cancelled,
     /// The current run finished (successfully or not).
     TurnComplete,
     /// An error occurred during the run.

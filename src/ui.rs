@@ -299,6 +299,12 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::DarkGray),
         ),
     ];
+    if app.running > 0 {
+        spans.push(Span::styled(
+            " · Esc stop",
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
     if !app.follow {
         spans.push(Span::styled(
             "  ⇡ scrolled (PgDn to bottom)",

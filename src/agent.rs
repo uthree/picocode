@@ -11,7 +11,7 @@ use rig::message::ToolResultContent;
 use rig::prelude::*;
 use rig::providers::{anthropic, ollama, openai};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::approval::ApprovalHook;
 use crate::config::{Config, Provider};
@@ -19,10 +19,12 @@ use crate::event::{AgentEvent, WorkerCmd};
 use crate::tools;
 
 /// Build the agent for the configured provider and spawn the worker task.
-/// Returns the command channel the TUI uses to drive it.
+/// Returns the command channel the TUI uses to drive it. A signal on
+/// `cancel_rx` aborts the generation in progress (Esc in the TUI).
 pub fn spawn(
     cfg: &Config,
     event_tx: mpsc::Sender<AgentEvent>,
+    cancel_rx: watch::Receiver<()>,
 ) -> anyhow::Result<mpsc::Sender<WorkerCmd>> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
     let cfg = cfg.clone();
@@ -53,7 +55,7 @@ pub fn spawn(
                 .preamble(COMPACT_PREAMBLE)
                 .max_tokens(8192)
                 .build();
-            tokio::spawn(worker(agent, compactor, cmd_rx, event_tx, cfg));
+            tokio::spawn(worker(agent, compactor, cmd_rx, event_tx, cfg, cancel_rx));
         }};
     }
 
@@ -151,6 +153,7 @@ async fn worker<M>(
     mut cmd_rx: mpsc::Receiver<WorkerCmd>,
     event_tx: mpsc::Sender<AgentEvent>,
     cfg: Config,
+    mut cancel_rx: watch::Receiver<()>,
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
@@ -171,11 +174,19 @@ async fn worker<M>(
             }
             WorkerCmd::SeedHistory(h) => history = h,
             WorkerCmd::Prompt(prompt) => {
-                run_once(&agent, &mut history, prompt, &event_tx, &cfg).await;
+                run_once(
+                    &agent,
+                    &mut history,
+                    prompt,
+                    &event_tx,
+                    &cfg,
+                    &mut cancel_rx,
+                )
+                .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
             WorkerCmd::Compact => {
-                compact(&compactor, &mut history, &event_tx).await;
+                compact(&compactor, &mut history, &event_tx, &mut cancel_rx).await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
         }
@@ -188,6 +199,7 @@ async fn compact<M>(
     compactor: &Agent<M>,
     history: &mut Vec<Message>,
     event_tx: &mpsc::Sender<AgentEvent>,
+    cancel: &mut watch::Receiver<()>,
 ) where
     M: CompletionModel + 'static,
 {
@@ -202,11 +214,16 @@ async fn compact<M>(
     }
 
     let messages = history.len();
-    match compactor
-        .prompt(COMPACT_REQUEST)
-        .history(history.clone())
-        .await
-    {
+    let _ = cancel.borrow_and_update(); // discard stale signals
+    let result = tokio::select! {
+        biased;
+        _ = cancel.changed() => {
+            let _ = event_tx.send(AgentEvent::Cancelled).await;
+            return; // history untouched
+        }
+        res = async { compactor.prompt(COMPACT_REQUEST).history(history.clone()).await } => res,
+    };
+    match result {
         Ok(summary) => {
             let summary = summary.trim().to_string();
             if summary.is_empty() {
@@ -244,6 +261,7 @@ async fn run_once<M>(
     prompt: String,
     event_tx: &mpsc::Sender<AgentEvent>,
     cfg: &Config,
+    cancel: &mut watch::Receiver<()>,
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
@@ -257,8 +275,23 @@ async fn run_once<M>(
 
     let mut got_final = false;
     let mut reasoning_delta_seen = false;
+    let mut cancelled = false;
+    let _ = cancel.borrow_and_update(); // discard stale signals
 
-    while let Some(item) = stream.next().await {
+    loop {
+        // Dropping the stream on cancel also aborts the in-flight request and
+        // any tool execution it is driving.
+        let item = tokio::select! {
+            biased;
+            _ = cancel.changed() => {
+                cancelled = true;
+                break;
+            }
+            item = stream.next() => match item {
+                Some(item) => item,
+                None => break,
+            },
+        };
         match item {
             Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
                 StreamedAssistantContent::Text(t) => {
@@ -330,9 +363,13 @@ async fn run_once<M>(
         }
     }
 
+    if cancelled {
+        drop(stream);
+        let _ = event_tx.send(AgentEvent::Cancelled).await;
+    }
     if !got_final {
-        // The run errored out; keep the user's message so the next turn still
-        // has it as context.
+        // The run was cancelled or errored out; keep the user's message so
+        // the next turn still has it as context.
         history.push(Message::user(prompt));
     }
 }

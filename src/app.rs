@@ -6,7 +6,7 @@ use std::time::Duration;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::config::Config;
 use crate::event::{AgentEvent, WorkerCmd};
@@ -104,6 +104,8 @@ pub struct App {
     event_tx: mpsc::Sender<AgentEvent>,
     /// Command channel of the current worker (replaced on model switch).
     cmd_tx: mpsc::Sender<WorkerCmd>,
+    /// Signals the worker to abort the generation in progress (Esc).
+    cancel_tx: watch::Sender<()>,
     /// Id of the session being written; a fresh one is issued by /clear.
     session_id: String,
     /// Where sessions are stored (None disables persistence, e.g. no $HOME).
@@ -120,6 +122,7 @@ impl App {
         cfg: &Config,
         event_tx: mpsc::Sender<AgentEvent>,
         cmd_tx: mpsc::Sender<WorkerCmd>,
+        cancel_tx: watch::Sender<()>,
     ) -> Self {
         let mut app = Self {
             entries: Vec::new(),
@@ -141,6 +144,7 @@ impl App {
             cfg: cfg.clone(),
             event_tx,
             cmd_tx,
+            cancel_tx,
             session_id: session::new_id(),
             sessions_dir: session::sessions_dir(&cfg.root),
             session_picker: None,
@@ -308,6 +312,9 @@ impl App {
                     self.input.remove(i);
                     self.reset_completion();
                 }
+            }
+            KeyCode::Esc if self.running > 0 => {
+                let _ = self.cancel_tx.send(());
             }
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Right => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
@@ -485,7 +492,11 @@ impl App {
 
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
-        let new_tx = match crate::agent::spawn(&new_cfg, self.event_tx.clone()) {
+        let new_tx = match crate::agent::spawn(
+            &new_cfg,
+            self.event_tx.clone(),
+            self.cancel_tx.subscribe(),
+        ) {
             Ok(tx) => tx,
             Err(e) => {
                 self.push(
@@ -786,6 +797,10 @@ impl App {
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
+            }
+            AgentEvent::Cancelled => {
+                self.close_blocks();
+                self.push(EntryKind::Notice, "Generation stopped (Esc)".to_string());
             }
             AgentEvent::Compacted { messages, summary } => {
                 if messages == 0 {
