@@ -65,7 +65,7 @@ Keys inside the TUI:
 | `↑` / `↓` | Select a completion candidate |
 | `y` / `n` | Approve / deny a tool call |
 | `Esc` | Stop the generation in progress |
-| `PgUp` / `PgDn` | Scroll (follow resumes at the bottom) |
+| `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
 | `/model` | List models; `/model <name>` switches (history carries over) |
@@ -73,6 +73,10 @@ Keys inside the TUI:
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |
+
+Mouse capture is enabled for wheel scrolling, so terminal-native text selection
+needs the usual bypass modifier held (`Shift` on most terminals, `Option`/`Fn`
+on macOS ones).
 
 ## Permission modes
 

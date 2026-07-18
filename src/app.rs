@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -248,6 +250,11 @@ impl App {
                 let text = text.replace(['\r', '\n'], " ");
                 self.insert_str(&text);
             }
+            Event::Mouse(m) => match m.kind {
+                MouseEventKind::ScrollUp => self.scroll_by(-3),
+                MouseEventKind::ScrollDown => self.scroll_by(3),
+                _ => {}
+            },
             _ => {}
         }
     }
