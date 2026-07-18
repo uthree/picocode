@@ -38,6 +38,7 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
                 .tool(tools::WriteFile::new(root.clone()))
                 .tool(tools::EditFile::new(root.clone()))
                 .tool(tools::Bash::new(root))
+                .tool(tools::WebFetch::new())
                 .max_tokens(8192)
                 .build();
             tokio::spawn(worker(agent, cmd_rx, event_tx, cfg));
@@ -57,7 +58,7 @@ fn system_prompt(cfg: &Config) -> String {
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
          \n\
-         Available tools: read_file, list_files, grep, write_file, edit_file, bash.\n\
+         Available tools: read_file, list_files, grep, write_file, edit_file, bash, web_fetch.\n\
          \n\
          Workflow:\n\
          1. Explore first: use list_files and grep to locate relevant files, and read_file \
@@ -68,6 +69,7 @@ fn system_prompt(cfg: &Config) -> String {
          \n\
          Rules:\n\
          - Use the tools instead of guessing about the project.\n\
+         - Use web_fetch to read a URL the user shares or online documentation you need.\n\
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display()

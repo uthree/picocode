@@ -17,6 +17,8 @@ regex = "1"
 ignore = "0.4"
 textwrap = "0.16"
 unicode-width = "0.2"
+html2text = "0.17"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "charset"] }
 
 [dev-dependencies]
 tempfile = "3"

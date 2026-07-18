@@ -2,6 +2,7 @@
 
 mod bash;
 mod edit;
+mod fetch;
 mod grep;
 mod list;
 mod read;
@@ -9,6 +10,7 @@ mod write;
 
 pub use bash::Bash;
 pub use edit::EditFile;
+pub use fetch::WebFetch;
 pub use grep::Grep;
 pub use list::ListFiles;
 pub use read::ReadFile;

@@ -8,7 +8,7 @@ minimalist coding agent — Rust 製のミニマルな TUI コーディングエ
 ## 機能
 
 - **TUI チャット**: ストリーミング表示(本文・推論)、スクロール、トークン使用量表示
-- **6 つの組み込みツール**: `read_file` / `list_files` / `grep` / `write_file` / `edit_file` / `bash`
+- **7 つの組み込みツール**: `read_file` / `list_files` / `grep` / `write_file` / `edit_file` / `bash` / `web_fetch`
 - **承認フロー**: 破壊的操作(bash・ファイル書き込み)のみ y/n 確認。読み取り系は自動実行
 - **マルチターン**: 会話履歴・ツール実行結果を保持したまま対話を継続
 
