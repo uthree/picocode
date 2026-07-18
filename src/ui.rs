@@ -11,7 +11,7 @@ use crate::app::{App, EntryKind, PendingApproval};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub fn draw(f: &mut Frame, app: &App) {
+pub fn draw(f: &mut Frame, app: &mut App) {
     let [transcript, input, status] = Layout::vertical([
         Constraint::Min(1),
         Constraint::Length(3),
@@ -30,18 +30,25 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 // ----- transcript ----------------------------------------------------------
 
-fn draw_transcript(f: &mut Frame, app: &App, area: Rect) {
+fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     let width = area.width.saturating_sub(1) as usize;
     if width < 4 {
         return;
     }
     let lines = transcript_lines(app, width);
     let height = area.height as usize;
-    let max_scroll = lines.len().saturating_sub(height);
-    let scroll = app.scroll.min(max_scroll);
-    let start = lines.len().saturating_sub(height + scroll);
-    let end = (start + height).min(lines.len());
-    let visible: Vec<Line> = lines[start..end].to_vec();
+    let total = lines.len();
+
+    // Record layout for the scroll key handlers.
+    app.last_total_lines = total;
+    app.last_view_height = height;
+
+    let max_top = total.saturating_sub(height);
+    let top = if app.follow { max_top } else { app.top_line.min(max_top) };
+    app.top_line = top;
+
+    let end = (top + height).min(total);
+    let visible: Vec<Line> = lines[top..end].to_vec();
     f.render_widget(Paragraph::new(visible), area);
 }
 
@@ -68,12 +75,20 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             EntryKind::Reasoning => {
                 lines.push(Line::default());
-                push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
-                    Line::from(Span::styled(
-                        format!("  {s}"),
+                if app.show_reasoning {
+                    push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
+                        Line::from(Span::styled(
+                            format!("  {s}"),
+                            Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ))
+                    });
+                } else {
+                    // Collapsed: one dim line with a live-updating size.
+                    lines.push(Line::from(Span::styled(
+                        format!("∴ thinking… ({} lines · Ctrl+T)", entry.text.lines().count()),
                         Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-                    ))
-                });
+                    )));
+                }
             }
             EntryKind::Tool => {
                 lines.push(Line::default());
@@ -172,7 +187,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Span::styled("● idle", Style::new().fg(Color::DarkGray))
     };
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         indicator,
         Span::raw("  "),
@@ -183,9 +198,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::DarkGray),
         ),
         Span::raw("  "),
-        Span::styled("PgUp/PgDn scroll", Style::new().fg(Color::DarkGray)),
-    ]);
-    f.render_widget(Paragraph::new(line), area);
+        Span::styled("PgUp/PgDn scroll · Ctrl+T thinking", Style::new().fg(Color::DarkGray)),
+    ];
+    if !app.follow {
+        spans.push(Span::styled(
+            "  ⇡ scrolled (PgDn to bottom)",
+            Style::new().fg(Color::Yellow),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 // ----- approval modal ------------------------------------------------------

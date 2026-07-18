@@ -38,8 +38,16 @@ pub struct App {
     pub input: String,
     /// Cursor position in the input, in chars.
     pub cursor: usize,
-    /// Scroll offset from the bottom of the transcript, in lines.
-    pub scroll: usize,
+    /// When true the view sticks to the bottom of the transcript; scrolling up
+    /// switches to a fixed `top_line` so streaming output doesn't move the view.
+    pub follow: bool,
+    /// First visible transcript line when not following the bottom.
+    pub top_line: usize,
+    /// Layout info from the last render, used by the scroll key handlers.
+    pub last_total_lines: usize,
+    pub last_view_height: usize,
+    /// Show full model reasoning instead of a collapsed one-liner.
+    pub show_reasoning: bool,
     /// Number of prompts submitted but not yet completed.
     pub running: usize,
     pub spinner: usize,
@@ -60,7 +68,11 @@ impl App {
             entries: Vec::new(),
             input: String::new(),
             cursor: 0,
-            scroll: 0,
+            follow: true,
+            top_line: 0,
+            last_total_lines: 0,
+            last_view_height: 0,
+            show_reasoning: false,
             running: 0,
             spinner: 0,
             pending: None,
@@ -88,7 +100,7 @@ impl App {
         let mut tick = tokio::time::interval(Duration::from_millis(120));
 
         loop {
-            terminal.draw(|f| crate::ui::draw(f, &self))?;
+            terminal.draw(|f| crate::ui::draw(f, &mut self))?;
             tokio::select! {
                 Some(ev) = term_rx.recv() => self.handle_terminal_event(ev, &cmd_tx).await,
                 Some(ev) = agent_rx.recv() => self.handle_agent_event(ev),
@@ -96,6 +108,18 @@ impl App {
                     self.spinner = self.spinner.wrapping_add(1);
                 }
                 else => break,
+            }
+            // Batch-drain pending agent events so a streaming burst costs one
+            // redraw instead of one per delta (keeps the UI responsive).
+            let mut drained = 0;
+            while drained < 128 {
+                match agent_rx.try_recv() {
+                    Ok(ev) => {
+                        self.handle_agent_event(ev);
+                        drained += 1;
+                    }
+                    Err(_) => break,
+                }
             }
             if self.should_quit {
                 break;
@@ -123,6 +147,10 @@ impl App {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
             self.should_quit = true;
+            return;
+        }
+        if ctrl && key.code == KeyCode::Char('t') {
+            self.show_reasoning = !self.show_reasoning;
             return;
         }
 
@@ -156,8 +184,8 @@ impl App {
             KeyCode::Right => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
             KeyCode::Home => self.cursor = 0,
             KeyCode::End => self.cursor = self.input.chars().count(),
-            KeyCode::PageUp => self.scroll += 10,
-            KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(10),
+            KeyCode::PageUp => self.scroll_by(-10),
+            KeyCode::PageDown => self.scroll_by(10),
             _ => {}
         }
     }
@@ -177,6 +205,8 @@ impl App {
                 self.ctx_tokens = 0;
                 self.assistant_open = false;
                 self.reasoning_open = false;
+                self.follow = true;
+                self.top_line = 0;
                 let _ = cmd_tx.send(WorkerCmd::Clear).await;
                 self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
@@ -185,12 +215,28 @@ impl App {
                 self.push(EntryKind::User, text.clone());
                 if cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
                     self.running += 1;
-                    self.scroll = 0;
+                    self.follow = true;
                 } else {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
             }
         }
+    }
+
+    /// Scroll the transcript. The view is anchored to a fixed top line while
+    /// scrolled up, so streaming output doesn't drag it along; scrolling past
+    /// the bottom re-enables follow mode.
+    fn scroll_by(&mut self, delta: i64) {
+        let height = self.last_view_height;
+        let max_top = self.last_total_lines.saturating_sub(height);
+        if max_top == 0 {
+            self.follow = true;
+            return;
+        }
+        let current_top = if self.follow { max_top } else { self.top_line };
+        let new_top = current_top.saturating_add_signed(delta as isize).min(max_top);
+        self.top_line = new_top;
+        self.follow = new_top >= max_top;
     }
 
     fn resolve_approval(&mut self, approve: bool) {
