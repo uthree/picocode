@@ -20,6 +20,9 @@ pub enum AgentEvent {
     },
     /// Token usage for one completion request within the run.
     Usage { input: u64, output: u64 },
+    /// The conversation history was compacted into a summary.
+    /// `messages == 0` means there was nothing to compact.
+    Compacted { messages: usize, summary: String },
     /// The current run finished (successfully or not).
     TurnComplete,
     /// An error occurred during the run.
@@ -32,4 +35,6 @@ pub enum WorkerCmd {
     Prompt(String),
     /// Clear the conversation history.
     Clear,
+    /// Summarize the history and replace it with the summary.
+    Compact,
 }

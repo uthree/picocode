@@ -28,8 +28,9 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
     // lives in a macro and each arm spawns its own typed worker.
     macro_rules! spawn_for {
         ($client:expr) => {{
+            let client = $client;
             let root = cfg.root.clone();
-            let agent = $client
+            let agent = client
                 .agent(&cfg.model)
                 .preamble(&system_prompt(&cfg))
                 .tool(tools::ReadFile::new(root.clone()))
@@ -41,7 +42,14 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
                 .tool(tools::WebFetch::new())
                 .max_tokens(8192)
                 .build();
-            tokio::spawn(worker(agent, cmd_rx, event_tx, cfg));
+            // A second, tool-less agent used by /compact: it only ever needs
+            // to read the history and write a summary.
+            let compactor = client
+                .agent(&cfg.model)
+                .preamble(COMPACT_PREAMBLE)
+                .max_tokens(8192)
+                .build();
+            tokio::spawn(worker(agent, compactor, cmd_rx, event_tx, cfg));
         }};
     }
 
@@ -76,8 +84,20 @@ fn system_prompt(cfg: &Config) -> String {
     )
 }
 
+const COMPACT_PREAMBLE: &str = "You compress conversation history for a coding agent. \
+     Write a faithful, concise summary that preserves everything needed to continue \
+     the work: the user's goals and requests, key facts learned about the project \
+     (files, structure, commands, findings), what was done and the results, and any \
+     unresolved tasks or next steps. Plain text only. Reply with the summary only — \
+     no preface, no commentary.";
+
+const COMPACT_REQUEST: &str = "Summarize our entire conversation above so that you \
+     could seamlessly continue the work from the summary alone. Reply with the \
+     summary only.";
+
 async fn worker<M>(
     agent: Agent<M>,
+    compactor: Agent<M>,
     mut cmd_rx: mpsc::Receiver<WorkerCmd>,
     event_tx: mpsc::Sender<AgentEvent>,
     cfg: Config,
@@ -94,6 +114,48 @@ async fn worker<M>(
                 run_once(&agent, &mut history, prompt, &event_tx, &cfg).await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
+            WorkerCmd::Compact => {
+                compact(&compactor, &mut history, &event_tx).await;
+                let _ = event_tx.send(AgentEvent::TurnComplete).await;
+            }
+        }
+    }
+}
+
+/// Ask the tool-less compactor agent to summarize the history, then replace the
+/// history with that summary. On failure the history is left untouched.
+async fn compact<M>(compactor: &Agent<M>, history: &mut Vec<Message>, event_tx: &mpsc::Sender<AgentEvent>)
+where
+    M: CompletionModel + 'static,
+{
+    if history.is_empty() {
+        let _ = event_tx
+            .send(AgentEvent::Compacted { messages: 0, summary: String::new() })
+            .await;
+        return;
+    }
+
+    let messages = history.len();
+    match compactor.prompt(COMPACT_REQUEST).history(history.clone()).await {
+        Ok(summary) => {
+            let summary = summary.trim().to_string();
+            if summary.is_empty() {
+                let _ = event_tx
+                    .send(AgentEvent::Error("compaction returned an empty summary; history unchanged".into()))
+                    .await;
+                return;
+            }
+            history.clear();
+            history.push(Message::user(format!(
+                "Summary of our conversation so far (earlier messages were compacted to save context):\n\n{summary}"
+            )));
+            history.push(Message::assistant("Understood — I'll continue from that summary."));
+            let _ = event_tx.send(AgentEvent::Compacted { messages, summary }).await;
+        }
+        Err(e) => {
+            let _ = event_tx
+                .send(AgentEvent::Error(format!("compaction failed: {e}; history unchanged")))
+                .await;
         }
     }
 }

@@ -26,6 +26,7 @@ pub const LOGO: &str = r"            ███                                  
 /// Slash commands with a short description, used by the completion popup.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
+    ("/compact", "Summarize history to free context"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -38,6 +39,8 @@ pub enum EntryKind {
     Tool,
     ToolOut,
     Notice,
+    /// The conversation summary produced by /compact.
+    Summary,
     Error,
     /// Rendered verbatim without wrapping (startup logo).
     Logo,
@@ -248,6 +251,16 @@ impl App {
                 self.push(EntryKind::Logo, LOGO.to_string());
                 self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
+            "/compact" => {
+                self.close_blocks();
+                if cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
+                    self.running += 1;
+                    self.follow = true;
+                    self.push(EntryKind::Notice, "Compacting conversation…".to_string());
+                } else {
+                    self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+                }
+            }
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
@@ -391,6 +404,24 @@ impl App {
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
                 self.out_tokens += output;
+            }
+            AgentEvent::Compacted { messages, summary } => {
+                if messages == 0 {
+                    self.push(EntryKind::Notice, "Nothing to compact — conversation history is empty".to_string());
+                } else {
+                    // Mirror the model's new context: drop the old transcript
+                    // and show what the model now remembers.
+                    self.entries.clear();
+                    self.close_blocks();
+                    self.ctx_tokens = 0;
+                    self.follow = true;
+                    self.top_line = 0;
+                    self.push(
+                        EntryKind::Notice,
+                        format!("Conversation compacted ({messages} messages → summary)"),
+                    );
+                    self.push(EntryKind::Summary, summary);
+                }
             }
             AgentEvent::TurnComplete => {
                 self.running = self.running.saturating_sub(1);

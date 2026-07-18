@@ -161,6 +161,12 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     Line::from(Span::styled(format!("· {s}"), Style::new().fg(Color::Blue)))
                 });
             }
+            EntryKind::Summary => {
+                lines.push(Line::default());
+                push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
+                    Line::from(Span::styled(format!("  {s}"), Style::new().fg(Color::Gray)))
+                });
+            }
             EntryKind::Error => {
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |i, s| {
                     let prefix = if i == 0 { "✗ " } else { "  " };

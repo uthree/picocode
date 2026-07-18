@@ -58,6 +58,9 @@ async fn run_smoke(
                 let _ = respond.send(true);
             }
             AgentEvent::Usage { input, output } => println!("\n[usage] ctx={input} out={output}"),
+            AgentEvent::Compacted { messages, summary } => {
+                println!("\n[compacted] {messages} messages\n{summary}");
+            }
             AgentEvent::Error(e) => println!("\n[error] {e}"),
             AgentEvent::TurnComplete => break,
         }
