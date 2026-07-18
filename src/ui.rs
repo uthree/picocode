@@ -98,7 +98,11 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
     app.last_view_height = height;
 
     let max_top = total.saturating_sub(height);
-    let top = if app.follow { max_top } else { app.top_line.min(max_top) };
+    let top = if app.follow {
+        max_top
+    } else {
+        app.top_line.min(max_top)
+    };
     app.top_line = top;
 
     let end = (top + height).min(total);
@@ -133,14 +137,21 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
                         Line::from(Span::styled(
                             format!("  {s}"),
-                            Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                            Style::new()
+                                .fg(Color::DarkGray)
+                                .add_modifier(Modifier::ITALIC),
                         ))
                     });
                 } else {
                     // Collapsed: one dim line with a live-updating size.
                     lines.push(Line::from(Span::styled(
-                        format!("∴ thinking… ({} lines · Ctrl+T)", entry.text.lines().count()),
-                        Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        format!(
+                            "∴ thinking… ({} lines · Ctrl+T)",
+                            entry.text.lines().count()
+                        ),
+                        Style::new()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
                     )));
                 }
             }
@@ -148,12 +159,18 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 lines.push(Line::default());
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |i, s| {
                     let prefix = if i == 0 { "⚙ " } else { "  " };
-                    Line::from(Span::styled(format!("{prefix}{s}"), Style::new().fg(Color::Yellow)))
+                    Line::from(Span::styled(
+                        format!("{prefix}{s}"),
+                        Style::new().fg(Color::Yellow),
+                    ))
                 });
             }
             EntryKind::ToolOut => {
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(4), |_, s| {
-                    Line::from(Span::styled(format!("    {s}"), Style::new().fg(Color::DarkGray)))
+                    Line::from(Span::styled(
+                        format!("    {s}"),
+                        Style::new().fg(Color::DarkGray),
+                    ))
                 });
             }
             EntryKind::Notice => {
@@ -170,7 +187,10 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             EntryKind::Error => {
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |i, s| {
                     let prefix = if i == 0 { "✗ " } else { "  " };
-                    Line::from(Span::styled(format!("{prefix}{s}"), Style::new().fg(Color::Red)))
+                    Line::from(Span::styled(
+                        format!("{prefix}{s}"),
+                        Style::new().fg(Color::Red),
+                    ))
                 });
             }
             EntryKind::Logo => {
@@ -213,7 +233,9 @@ fn push_wrapped(
 // ----- input ---------------------------------------------------------------
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().title(" picocode ").border_style(Style::new().fg(Color::DarkGray));
+    let block = Block::bordered()
+        .title(" picocode ")
+        .border_style(Style::new().fg(Color::DarkGray));
     let inner_width = area.width.saturating_sub(2) as usize;
 
     if app.input.is_empty() {
@@ -269,7 +291,10 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::DarkGray),
         ),
         Span::raw("  "),
-        Span::styled("PgUp/PgDn scroll · Ctrl+T thinking", Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            "PgUp/PgDn scroll · Ctrl+T thinking",
+            Style::new().fg(Color::DarkGray),
+        ),
     ];
     if !app.follow {
         spans.push(Span::styled(
@@ -312,7 +337,10 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     });
     if body.len() > body_budget {
         body.truncate(body_budget.saturating_sub(1));
-        body.push(Line::from(Span::styled("…", Style::new().fg(Color::DarkGray))));
+        body.push(Line::from(Span::styled(
+            "…",
+            Style::new().fg(Color::DarkGray),
+        )));
     }
     lines.extend(body);
     lines.push(Line::default());

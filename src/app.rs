@@ -99,7 +99,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>, cmd_tx: mpsc::Sender<WorkerCmd>) -> Self {
+    pub fn new(
+        cfg: &Config,
+        event_tx: mpsc::Sender<AgentEvent>,
+        cmd_tx: mpsc::Sender<WorkerCmd>,
+    ) -> Self {
         let mut app = Self {
             entries: Vec::new(),
             input: String::new(),
@@ -125,20 +129,39 @@ impl App {
             reasoning_open: false,
         };
         app.push(EntryKind::Logo, LOGO.to_string());
-        app.push(EntryKind::Notice, format!("picocode — {} (cwd: {})", app.model_label, cfg.root.display()));
+        app.push(
+            EntryKind::Notice,
+            format!(
+                "picocode — {} (cwd: {})",
+                app.model_label,
+                cfg.root.display()
+            ),
+        );
         if !cfg.config_files.is_empty() {
-            app.push(EntryKind::Notice, format!("Config: {}", cfg.config_files.join(", ")));
+            app.push(
+                EntryKind::Notice,
+                format!("Config: {}", cfg.config_files.join(", ")),
+            );
         }
         if !cfg.instructions.is_empty() {
             let names: Vec<&str> = cfg.instructions.iter().map(|(n, _)| n.as_str()).collect();
-            app.push(EntryKind::Notice, format!("Instructions: {}", names.join(", ")));
+            app.push(
+                EntryKind::Notice,
+                format!("Instructions: {}", names.join(", ")),
+            );
         }
         if cfg.models.len() > 1 {
             let names: Vec<&str> = cfg.models.iter().map(|m| m.name.as_str()).collect();
-            app.push(EntryKind::Notice, format!("Models: {} — /model <name> to switch", names.join(", ")));
+            app.push(
+                EntryKind::Notice,
+                format!("Models: {} — /model <name> to switch", names.join(", ")),
+            );
         }
         if cfg.yolo {
-            app.push(EntryKind::Notice, "--yolo: skipping all tool approvals".to_string());
+            app.push(
+                EntryKind::Notice,
+                "--yolo: skipping all tool approvals".to_string(),
+            );
         }
         app
     }
@@ -209,8 +232,12 @@ impl App {
         // Approval modal captures y/n while pending.
         if self.pending.is_some() {
             match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => self.resolve_approval(true),
-                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.resolve_approval(false),
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.resolve_approval(true)
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.resolve_approval(false)
+                }
                 _ => {}
             }
             return;
@@ -269,7 +296,10 @@ impl App {
                 self.top_line = 0;
                 let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
                 self.push(EntryKind::Logo, LOGO.to_string());
-                self.push(EntryKind::Notice, "Conversation history cleared".to_string());
+                self.push(
+                    EntryKind::Notice,
+                    "Conversation history cleared".to_string(),
+                );
             }
             "/compact" => {
                 self.close_blocks();
@@ -323,14 +353,19 @@ impl App {
         tokio::spawn(async move {
             use rig::tool::Tool;
             let output = match crate::tools::Bash::new(root)
-                .call(crate::tools::BashArgs { command: command.clone() })
+                .call(crate::tools::BashArgs {
+                    command: command.clone(),
+                })
                 .await
             {
                 Ok(out) => out,
                 Err(e) => format!("error: {e}"),
             };
             let _ = cmd_tx
-                .send(WorkerCmd::ShellRecord { command, output: output.clone() })
+                .send(WorkerCmd::ShellRecord {
+                    command,
+                    output: output.clone(),
+                })
                 .await;
             let _ = event_tx.send(AgentEvent::ShellOutput { output }).await;
             let _ = event_tx.send(AgentEvent::TurnComplete).await;
@@ -351,7 +386,11 @@ impl App {
         }
         let mut out = String::from("Models (/model <name> to switch):");
         for m in &self.cfg.models {
-            let marker = if self.cfg.active_model.as_deref() == Some(&m.name) { "▸" } else { " " };
+            let marker = if self.cfg.active_model.as_deref() == Some(&m.name) {
+                "▸"
+            } else {
+                " "
+            };
             out.push_str(&format!("\n{marker} {} — {}", m.name, m.label()));
             if let Some(url) = &m.base_url {
                 out.push_str(&format!(" @ {url}"));
@@ -364,7 +403,10 @@ impl App {
     /// conversation history over to it.
     async fn switch_model(&mut self, name: &str) {
         if self.running > 0 {
-            self.push(EntryKind::Error, "Cannot switch models while a turn is running".to_string());
+            self.push(
+                EntryKind::Error,
+                "Cannot switch models while a turn is running".to_string(),
+            );
             return;
         }
         let Some(entry) = self.cfg.models.iter().find(|m| m.name == name).cloned() else {
@@ -378,7 +420,10 @@ impl App {
             return;
         };
         if self.cfg.active_model.as_deref() == Some(name) {
-            self.push(EntryKind::Notice, format!("Already using {name} ({})", entry.label()));
+            self.push(
+                EntryKind::Notice,
+                format!("Already using {name} ({})", entry.label()),
+            );
             return;
         }
 
@@ -393,7 +438,10 @@ impl App {
         let new_tx = match crate::agent::spawn(&new_cfg, self.event_tx.clone()) {
             Ok(tx) => tx,
             Err(e) => {
-                self.push(EntryKind::Error, format!("Failed to switch to `{name}`: {e:#}"));
+                self.push(
+                    EntryKind::Error,
+                    format!("Failed to switch to `{name}`: {e:#}"),
+                );
                 return;
             }
         };
@@ -409,7 +457,10 @@ impl App {
         self.cmd_tx = new_tx; // dropping the old sender shuts the old worker down
         self.cfg = new_cfg;
         self.model_label = self.cfg.model_label();
-        self.push(EntryKind::Notice, format!("Model switched to {name} ({})", self.model_label));
+        self.push(
+            EntryKind::Notice,
+            format!("Model switched to {name} ({})", self.model_label),
+        );
     }
 
     /// Slash-command candidates for the completion popup. Uses the locked
@@ -488,14 +539,20 @@ impl App {
             return;
         }
         let current_top = if self.follow { max_top } else { self.top_line };
-        let new_top = current_top.saturating_add_signed(delta as isize).min(max_top);
+        let new_top = current_top
+            .saturating_add_signed(delta as isize)
+            .min(max_top);
         self.top_line = new_top;
         self.follow = new_top >= max_top;
     }
 
     fn resolve_approval(&mut self, approve: bool) {
         if let Some(p) = self.pending.take() {
-            let label = if approve { "✔ approved" } else { "✘ denied" };
+            let label = if approve {
+                "✔ approved"
+            } else {
+                "✘ denied"
+            };
             self.push(EntryKind::Notice, format!("{label}: {}", p.name));
             let _ = p.respond.send(approve);
         }
@@ -533,8 +590,16 @@ impl App {
                     self.push(EntryKind::ToolOut, text);
                 }
             }
-            AgentEvent::ApprovalRequest { name, args, respond } => {
-                self.pending = Some(PendingApproval { name, args, respond });
+            AgentEvent::ApprovalRequest {
+                name,
+                args,
+                respond,
+            } => {
+                self.pending = Some(PendingApproval {
+                    name,
+                    args,
+                    respond,
+                });
             }
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
@@ -546,7 +611,10 @@ impl App {
             }
             AgentEvent::Compacted { messages, summary } => {
                 if messages == 0 {
-                    self.push(EntryKind::Notice, "Nothing to compact — conversation history is empty".to_string());
+                    self.push(
+                        EntryKind::Notice,
+                        "Nothing to compact — conversation history is empty".to_string(),
+                    );
                 } else {
                     // Mirror the model's new context: drop the old transcript
                     // and show what the model now remembers.

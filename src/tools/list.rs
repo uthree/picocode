@@ -51,7 +51,10 @@ impl Tool for ListFiles {
             None => self.root.clone(),
         };
         if !base.is_dir() {
-            return Err(ToolError::new(format!("{} is not a directory", base.display())));
+            return Err(ToolError::new(format!(
+                "{} is not a directory",
+                base.display()
+            )));
         }
 
         let base_clone = base.clone();
@@ -82,7 +85,11 @@ impl Tool for ListFiles {
         .map_err(|e| ToolError::new(format!("walk failed: {e}")))?;
 
         let total = entries.len();
-        let mut out: String = entries.into_iter().take(MAX_ENTRIES).collect::<Vec<_>>().join("\n");
+        let mut out: String = entries
+            .into_iter()
+            .take(MAX_ENTRIES)
+            .collect::<Vec<_>>()
+            .join("\n");
         if total > MAX_ENTRIES {
             out.push_str(&format!("\n... ({} more entries)", total - MAX_ENTRIES));
         }

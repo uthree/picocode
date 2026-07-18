@@ -20,7 +20,10 @@ use crate::tools;
 
 /// Build the agent for the configured provider and spawn the worker task.
 /// Returns the command channel the TUI uses to drive it.
-pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result<mpsc::Sender<WorkerCmd>> {
+pub fn spawn(
+    cfg: &Config,
+    event_tx: mpsc::Sender<AgentEvent>,
+) -> anyhow::Result<mpsc::Sender<WorkerCmd>> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
     let cfg = cfg.clone();
 
@@ -70,7 +73,10 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
             Some(url) => {
                 let key = std::env::var("ANTHROPIC_API_KEY")
                     .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY is not set"))?;
-                anthropic::Client::builder().api_key(key).base_url(&url).build()?
+                anthropic::Client::builder()
+                    .api_key(key)
+                    .base_url(&url)
+                    .build()?
             }
             None => anthropic::Client::from_env()?,
         }),
@@ -78,7 +84,10 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
             Some(url) => {
                 // Local OpenAI-compatible servers usually don't check the key.
                 let key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into());
-                openai::Client::builder().api_key(&key).base_url(&url).build()?
+                openai::Client::builder()
+                    .api_key(&key)
+                    .base_url(&url)
+                    .build()?
             }
             None => openai::Client::from_env()?,
         }),
@@ -165,24 +174,36 @@ async fn worker<M>(
 
 /// Ask the tool-less compactor agent to summarize the history, then replace the
 /// history with that summary. On failure the history is left untouched.
-async fn compact<M>(compactor: &Agent<M>, history: &mut Vec<Message>, event_tx: &mpsc::Sender<AgentEvent>)
-where
+async fn compact<M>(
+    compactor: &Agent<M>,
+    history: &mut Vec<Message>,
+    event_tx: &mpsc::Sender<AgentEvent>,
+) where
     M: CompletionModel + 'static,
 {
     if history.is_empty() {
         let _ = event_tx
-            .send(AgentEvent::Compacted { messages: 0, summary: String::new() })
+            .send(AgentEvent::Compacted {
+                messages: 0,
+                summary: String::new(),
+            })
             .await;
         return;
     }
 
     let messages = history.len();
-    match compactor.prompt(COMPACT_REQUEST).history(history.clone()).await {
+    match compactor
+        .prompt(COMPACT_REQUEST)
+        .history(history.clone())
+        .await
+    {
         Ok(summary) => {
             let summary = summary.trim().to_string();
             if summary.is_empty() {
                 let _ = event_tx
-                    .send(AgentEvent::Error("compaction returned an empty summary; history unchanged".into()))
+                    .send(AgentEvent::Error(
+                        "compaction returned an empty summary; history unchanged".into(),
+                    ))
                     .await;
                 return;
             }
@@ -190,12 +211,18 @@ where
             history.push(Message::user(format!(
                 "Summary of our conversation so far (earlier messages were compacted to save context):\n\n{summary}"
             )));
-            history.push(Message::assistant("Understood — I'll continue from that summary."));
-            let _ = event_tx.send(AgentEvent::Compacted { messages, summary }).await;
+            history.push(Message::assistant(
+                "Understood — I'll continue from that summary.",
+            ));
+            let _ = event_tx
+                .send(AgentEvent::Compacted { messages, summary })
+                .await;
         }
         Err(e) => {
             let _ = event_tx
-                .send(AgentEvent::Error(format!("compaction failed: {e}; history unchanged")))
+                .send(AgentEvent::Error(format!(
+                    "compaction failed: {e}; history unchanged"
+                )))
                 .await;
         }
     }
@@ -248,7 +275,8 @@ async fn run_once<M>(
                 }
                 _ => {}
             },
-            Ok(MultiTurnStreamItem::StreamUserItem(user_content)) => {
+            Ok(MultiTurnStreamItem::StreamUserItem(user_content)) =>
+            {
                 #[allow(irrefutable_let_patterns)]
                 if let StreamedUserContent::ToolResult { tool_result, .. } = user_content {
                     let output = tool_result

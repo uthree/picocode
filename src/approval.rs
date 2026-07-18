@@ -43,12 +43,18 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
     async fn on_event(&self, _ctx: &HookContext, event: StepEvent<'_, M>) -> rig::agent::Flow {
         use rig::agent::Flow;
 
-        let StepEvent::ToolCall { tool_name, args, .. } = event else {
+        let StepEvent::ToolCall {
+            tool_name, args, ..
+        } = event
+        else {
             return Flow::Continue;
         };
         let command = bash_command(tool_name, args);
         let destructive = DESTRUCTIVE_TOOLS.contains(&tool_name);
-        match self.rules.decide(self.yolo, tool_name, command.as_deref(), destructive) {
+        match self
+            .rules
+            .decide(self.yolo, tool_name, command.as_deref(), destructive)
+        {
             Decision::Allow => return Flow::Continue,
             Decision::Deny(reason) => return Flow::Skip { reason },
             Decision::Ask => {}
@@ -61,7 +67,9 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
             respond,
         };
         if self.tx.send(request).await.is_err() {
-            return Flow::Terminate { reason: "the UI has shut down".to_string() };
+            return Flow::Terminate {
+                reason: "the UI has shut down".to_string(),
+            };
         }
 
         // Fail closed: anything but an explicit approval denies the call.
@@ -79,6 +87,9 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
     fn observes(&self, kind: StepEventKind) -> bool {
         // Skip the high-frequency streaming delta events; the steering
         // `ToolCall` event fires regardless of this hint.
-        !matches!(kind, StepEventKind::TextDelta | StepEventKind::ToolCallDelta)
+        !matches!(
+            kind,
+            StepEventKind::TextDelta | StepEventKind::ToolCallDelta
+        )
     }
 }

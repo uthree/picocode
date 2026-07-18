@@ -92,7 +92,10 @@ fn validate_models(models: &[ModelEntry], default: Option<&str>) -> anyhow::Resu
     let mut seen = std::collections::HashSet::new();
     for m in models {
         if m.name.is_empty() || m.name.contains(char::is_whitespace) {
-            anyhow::bail!("invalid model entry name `{}` (must be non-empty, no spaces)", m.name);
+            anyhow::bail!(
+                "invalid model entry name `{}` (must be non-empty, no spaces)",
+                m.name
+            );
         }
         if !seen.insert(m.name.as_str()) {
             anyhow::bail!("duplicate model entry name `{}` in config", m.name);
@@ -146,7 +149,13 @@ impl ApprovalRules {
     /// Decide what to do with a tool call. `bash_command` is the command string
     /// when the call is the bash tool, `destructive` whether the tool requires
     /// approval by default. Precedence: deny rules > --yolo > allow rules > ask.
-    pub fn decide(&self, yolo: bool, tool: &str, bash_command: Option<&str>, destructive: bool) -> Decision {
+    pub fn decide(
+        &self,
+        yolo: bool,
+        tool: &str,
+        bash_command: Option<&str>,
+        destructive: bool,
+    ) -> Decision {
         let in_list = |list: &[String]| list.iter().any(|t| t == tool);
         if in_list(&self.deny_tools) {
             return Decision::Deny(deny_reason(tool, "deny_tools"));
@@ -174,13 +183,21 @@ impl ApprovalRules {
             {
                 return Decision::Allow;
             }
-            return if destructive { Decision::Ask } else { Decision::Allow };
+            return if destructive {
+                Decision::Ask
+            } else {
+                Decision::Allow
+            };
         }
 
         if yolo || in_list(&self.allow_tools) {
             return Decision::Allow;
         }
-        if destructive { Decision::Ask } else { Decision::Allow }
+        if destructive {
+            Decision::Ask
+        } else {
+            Decision::Allow
+        }
     }
 }
 
@@ -334,29 +351,33 @@ impl Config {
 
         // CLI flags select an ad-hoc model and take precedence over the
         // config file's [[models]]; the entries stay available to /model.
-        let cli_selection = args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
-        let (provider, model, base_url, active_model) = match pick_entry(&models, file.default_model.as_deref()) {
-            Some(entry) if !cli_selection => (
-                entry.provider,
-                entry.model.clone(),
-                entry.base_url.clone(),
-                Some(entry.name.clone()),
-            ),
-            _ => {
-                let provider = args.provider.unwrap_or(Provider::Ollama);
-                let model = args.model.unwrap_or_else(|| {
-                    match provider {
-                        Provider::Ollama => "qwen3:4b",
-                        Provider::Anthropic => "claude-opus-4-8",
-                        Provider::Openai => "gpt-4o",
-                    }
-                    .to_string()
-                });
-                (provider, model, args.base_url, None)
-            }
-        };
+        let cli_selection =
+            args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
+        let (provider, model, base_url, active_model) =
+            match pick_entry(&models, file.default_model.as_deref()) {
+                Some(entry) if !cli_selection => (
+                    entry.provider,
+                    entry.model.clone(),
+                    entry.base_url.clone(),
+                    Some(entry.name.clone()),
+                ),
+                _ => {
+                    let provider = args.provider.unwrap_or(Provider::Ollama);
+                    let model = args.model.unwrap_or_else(|| {
+                        match provider {
+                            Provider::Ollama => "qwen3:4b",
+                            Provider::Anthropic => "claude-opus-4-8",
+                            Provider::Openai => "gpt-4o",
+                        }
+                        .to_string()
+                    });
+                    (provider, model, args.base_url, None)
+                }
+            };
 
-        let instruction_names = file.instructions.unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
+        let instruction_names = file
+            .instructions
+            .unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
         let instructions = load_instructions(&root, &instruction_names);
 
         Ok(Self {
@@ -383,7 +404,12 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn rules(allow_tools: &[&str], deny_tools: &[&str], allow_bash: &[&str], deny_bash: &[&str]) -> ApprovalRules {
+    fn rules(
+        allow_tools: &[&str],
+        deny_tools: &[&str],
+        allow_bash: &[&str],
+        deny_bash: &[&str],
+    ) -> ApprovalRules {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
         ApprovalRules {
             allow_tools: v(allow_tools),
@@ -418,7 +444,10 @@ mod tests {
     #[test]
     fn deny_tools_wins_over_everything() {
         let r = rules(&["web_fetch"], &["web_fetch"], &[], &[]);
-        assert!(matches!(r.decide(true, "web_fetch", None, false), Decision::Deny(_)));
+        assert!(matches!(
+            r.decide(true, "web_fetch", None, false),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]
@@ -433,15 +462,27 @@ mod tests {
     #[test]
     fn allow_bash_requires_every_segment_to_match() {
         let r = rules(&[], &[], &["cargo", "ls"], &[]);
-        assert_eq!(r.decide(false, "bash", Some("cargo build && ls -la"), true), Decision::Allow);
-        assert_eq!(r.decide(false, "bash", Some("cargo build && curl x"), true), Decision::Ask);
+        assert_eq!(
+            r.decide(false, "bash", Some("cargo build && ls -la"), true),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(false, "bash", Some("cargo build && curl x"), true),
+            Decision::Ask
+        );
     }
 
     #[test]
     fn command_substitution_never_auto_runs() {
         let r = rules(&[], &[], &["echo"], &[]);
-        assert_eq!(r.decide(false, "bash", Some("echo $(rm -rf /)"), true), Decision::Ask);
-        assert_eq!(r.decide(false, "bash", Some("echo `date`"), true), Decision::Ask);
+        assert_eq!(
+            r.decide(false, "bash", Some("echo $(rm -rf /)"), true),
+            Decision::Ask
+        );
+        assert_eq!(
+            r.decide(false, "bash", Some("echo `date`"), true),
+            Decision::Ask
+        );
     }
 
     #[test]
@@ -546,6 +587,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "be nice").unwrap();
         let loaded = load_instructions(dir.path(), &["AGENTS.md".into(), "MISSING.md".into()]);
-        assert_eq!(loaded, vec![("AGENTS.md".to_string(), "be nice".to_string())]);
+        assert_eq!(
+            loaded,
+            vec![("AGENTS.md".to_string(), "be nice".to_string())]
+        );
     }
 }

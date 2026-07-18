@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn resolve_relative_and_absolute() {
         let root = Path::new("/tmp/proj");
-        assert_eq!(resolve(root, "src/main.rs"), PathBuf::from("/tmp/proj/src/main.rs"));
+        assert_eq!(
+            resolve(root, "src/main.rs"),
+            PathBuf::from("/tmp/proj/src/main.rs")
+        );
         assert_eq!(resolve(root, "/etc/hosts"), PathBuf::from("/etc/hosts"));
     }
 

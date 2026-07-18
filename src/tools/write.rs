@@ -48,9 +48,9 @@ impl Tool for WriteFile {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = resolve(&self.root, &args.path);
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| ToolError::new(format!("failed to create {}: {e}", parent.display())))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                ToolError::new(format!("failed to create {}: {e}", parent.display()))
+            })?;
         }
         tokio::fs::write(&path, &args.content)
             .await
@@ -73,10 +73,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = WriteFile::new(dir.path().to_path_buf());
         let out = tool
-            .call(WriteArgs { path: "sub/dir/x.txt".into(), content: "hi\n".into() })
+            .call(WriteArgs {
+                path: "sub/dir/x.txt".into(),
+                content: "hi\n".into(),
+            })
             .await
             .unwrap();
         assert!(out.contains("Wrote 3 bytes"));
-        assert_eq!(std::fs::read_to_string(dir.path().join("sub/dir/x.txt")).unwrap(), "hi\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/dir/x.txt")).unwrap(),
+            "hi\n"
+        );
     }
 }

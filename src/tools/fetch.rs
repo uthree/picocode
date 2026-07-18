@@ -56,7 +56,9 @@ impl Tool for WebFetch {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         if !args.url.starts_with("http://") && !args.url.starts_with("https://") {
-            return Err(ToolError::new("only http:// and https:// URLs are supported"));
+            return Err(ToolError::new(
+                "only http:// and https:// URLs are supported",
+            ));
         }
 
         let response = self
@@ -82,7 +84,8 @@ impl Tool for WebFetch {
             )));
         }
 
-        let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
+        let is_html =
+            content_type.contains("text/html") || content_type.contains("application/xhtml");
         let is_text = is_html
             || content_type.starts_with("text/")
             || content_type.contains("json")
@@ -167,7 +170,9 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_http_schemes() {
         let err = WebFetch::new()
-            .call(FetchArgs { url: "ftp://example.com/file".into() })
+            .call(FetchArgs {
+                url: "ftp://example.com/file".into(),
+            })
             .await
             .unwrap_err();
         assert!(err.0.contains("only http"));

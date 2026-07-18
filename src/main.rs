@@ -29,7 +29,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let terminal = ratatui::init();
-    let result = app::App::new(&cfg, event_tx, cmd_tx).run(terminal, event_rx).await;
+    let result = app::App::new(&cfg, event_tx, cmd_tx)
+        .run(terminal, event_rx)
+        .await;
     ratatui::restore();
     result
 }

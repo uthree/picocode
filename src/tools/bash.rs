@@ -105,7 +105,9 @@ impl Tool for Bash {
         if !status.success() {
             text.push_str(&format!(
                 "\n[exit code: {}]",
-                status.code().map_or("signal".to_string(), |c| c.to_string())
+                status
+                    .code()
+                    .map_or("signal".to_string(), |c| c.to_string())
             ));
         }
         Ok(text)
@@ -120,7 +122,12 @@ mod tests {
     async fn runs_command_and_captures_output() {
         let dir = tempfile::tempdir().unwrap();
         let tool = Bash::new(dir.path().to_path_buf());
-        let out = tool.call(BashArgs { command: "echo hello && echo err >&2".into() }).await.unwrap();
+        let out = tool
+            .call(BashArgs {
+                command: "echo hello && echo err >&2".into(),
+            })
+            .await
+            .unwrap();
         assert!(out.contains("hello"));
         assert!(out.contains("err"));
     }
@@ -129,7 +136,12 @@ mod tests {
     async fn reports_exit_code() {
         let dir = tempfile::tempdir().unwrap();
         let tool = Bash::new(dir.path().to_path_buf());
-        let out = tool.call(BashArgs { command: "exit 3".into() }).await.unwrap();
+        let out = tool
+            .call(BashArgs {
+                command: "exit 3".into(),
+            })
+            .await
+            .unwrap();
         assert!(out.contains("[exit code: 3]"));
     }
 }

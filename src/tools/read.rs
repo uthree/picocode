@@ -73,7 +73,10 @@ impl Tool for ReadFile {
                 break;
             }
             let line = if line.len() > MAX_LINE_LEN {
-                let end = (0..=MAX_LINE_LEN).rev().find(|&j| line.is_char_boundary(j)).unwrap_or(0);
+                let end = (0..=MAX_LINE_LEN)
+                    .rev()
+                    .find(|&j| line.is_char_boundary(j))
+                    .unwrap_or(0);
                 format!("{}…", &line[..end])
             } else {
                 line.to_string()
@@ -105,7 +108,11 @@ mod tests {
         std::fs::write(dir.path().join("a.txt"), "hello\nworld\n").unwrap();
         let tool = ReadFile::new(dir.path().to_path_buf());
         let out = tool
-            .call(ReadArgs { path: "a.txt".into(), offset: None, limit: None })
+            .call(ReadArgs {
+                path: "a.txt".into(),
+                offset: None,
+                limit: None,
+            })
             .await
             .unwrap();
         assert!(out.contains("1\thello"));
@@ -117,7 +124,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = ReadFile::new(dir.path().to_path_buf());
         let err = tool
-            .call(ReadArgs { path: "nope.txt".into(), offset: None, limit: None })
+            .call(ReadArgs {
+                path: "nope.txt".into(),
+                offset: None,
+                limit: None,
+            })
             .await
             .unwrap_err();
         assert!(err.0.contains("failed to read"));

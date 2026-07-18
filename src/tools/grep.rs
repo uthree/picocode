@@ -97,7 +97,9 @@ impl Tool for Grep {
             }
             let mut out = matches.join("\n");
             if truncated {
-                out.push_str(&format!("\n... (stopped at {MAX_MATCHES} matches; narrow the pattern)"));
+                out.push_str(&format!(
+                    "\n... (stopped at {MAX_MATCHES} matches; narrow the pattern)"
+                ));
             }
             if out.is_empty() {
                 out = "(no matches)".to_string();
@@ -120,7 +122,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a.rs"), "fn main() {}\nfn helper() {}\n").unwrap();
         let tool = Grep::new(dir.path().to_path_buf());
-        let out = tool.call(GrepArgs { pattern: "fn \\w+".into(), path: None }).await.unwrap();
+        let out = tool
+            .call(GrepArgs {
+                pattern: "fn \\w+".into(),
+                path: None,
+            })
+            .await
+            .unwrap();
         assert!(out.contains("a.rs:1: fn main() {}"));
         assert!(out.contains("a.rs:2: fn helper() {}"));
     }
@@ -129,7 +137,13 @@ mod tests {
     async fn invalid_regex_is_error() {
         let dir = tempfile::tempdir().unwrap();
         let tool = Grep::new(dir.path().to_path_buf());
-        let err = tool.call(GrepArgs { pattern: "(".into(), path: None }).await.unwrap_err();
+        let err = tool
+            .call(GrepArgs {
+                pattern: "(".into(),
+                path: None,
+            })
+            .await
+            .unwrap_err();
         assert!(err.0.contains("invalid regex"));
     }
 }

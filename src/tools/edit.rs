@@ -63,9 +63,9 @@ impl Tool for EditFile {
             )),
             1 => {
                 let updated = content.replacen(&args.old_string, &args.new_string, 1);
-                tokio::fs::write(&path, &updated)
-                    .await
-                    .map_err(|e| ToolError::new(format!("failed to write {}: {e}", path.display())))?;
+                tokio::fs::write(&path, &updated).await.map_err(|e| {
+                    ToolError::new(format!("failed to write {}: {e}", path.display()))
+                })?;
                 Ok(format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
@@ -101,14 +101,21 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.txt")).unwrap(), "foo\nBAR\nbaz\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.txt")).unwrap(),
+            "foo\nBAR\nbaz\n"
+        );
     }
 
     #[tokio::test]
     async fn rejects_ambiguous_match() {
         let (_dir, tool) = setup("x\nx\n");
         let err = tool
-            .call(EditArgs { path: "f.txt".into(), old_string: "x".into(), new_string: "y".into() })
+            .call(EditArgs {
+                path: "f.txt".into(),
+                old_string: "x".into(),
+                new_string: "y".into(),
+            })
             .await
             .unwrap_err();
         assert!(err.0.contains("appears"));
@@ -118,7 +125,11 @@ mod tests {
     async fn rejects_missing_match() {
         let (_dir, tool) = setup("abc\n");
         let err = tool
-            .call(EditArgs { path: "f.txt".into(), old_string: "zzz".into(), new_string: "y".into() })
+            .call(EditArgs {
+                path: "f.txt".into(),
+                old_string: "zzz".into(),
+                new_string: "y".into(),
+            })
             .await
             .unwrap_err();
         assert!(err.0.contains("not found"));
