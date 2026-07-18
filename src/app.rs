@@ -116,6 +116,13 @@ impl App {
         };
         app.push(EntryKind::Logo, LOGO.to_string());
         app.push(EntryKind::Notice, format!("picocode — {} (cwd: {})", app.model_label, cfg.root.display()));
+        if !cfg.config_files.is_empty() {
+            app.push(EntryKind::Notice, format!("Config: {}", cfg.config_files.join(", ")));
+        }
+        if !cfg.instructions.is_empty() {
+            let names: Vec<&str> = cfg.instructions.iter().map(|(n, _)| n.as_str()).collect();
+            app.push(EntryKind::Notice, format!("Instructions: {}", names.join(", ")));
+        }
         if cfg.yolo {
             app.push(EntryKind::Notice, "--yolo: skipping all tool approvals".to_string());
         }

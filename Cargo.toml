@@ -19,6 +19,7 @@ textwrap = "0.16"
 unicode-width = "0.2"
 html2text = "0.17"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "charset"] }
+toml = "0.9"
 
 [dev-dependencies]
 tempfile = "3"

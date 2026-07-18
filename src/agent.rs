@@ -62,7 +62,7 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
 }
 
 fn system_prompt(cfg: &Config) -> String {
-    format!(
+    let mut prompt = format!(
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
          \n\
@@ -81,7 +81,13 @@ fn system_prompt(cfg: &Config) -> String {
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display()
-    )
+    );
+    for (name, content) in &cfg.instructions {
+        prompt.push_str(&format!(
+            "\n\nProject instructions from {name} (follow them):\n{content}"
+        ));
+    }
+    prompt
 }
 
 const COMPACT_PREAMBLE: &str = "You compress conversation history for a coding agent. \
@@ -170,7 +176,7 @@ async fn run_once<M>(
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
 {
-    let hook = ApprovalHook::new(event_tx.clone(), cfg.yolo);
+    let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.yolo);
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
         .max_turns(cfg.max_turns)

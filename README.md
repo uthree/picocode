@@ -12,6 +12,7 @@ minimalist coding agent — Rust 製のミニマルな TUI コーディングエ
 - **承認フロー**: 破壊的操作(bash・ファイル書き込み)のみ y/n 確認。読み取り系は自動実行
 - **マルチターン**: 会話履歴・ツール実行結果を保持したまま対話を継続
 - **コンテキスト圧縮**: `/compact` で会話履歴を LLM 要約に置き換えてコンテキストを節約
+- **設定ファイル**: `picocode.toml` で承認の allow/deny ルールと指示ファイル読み込みを設定
 
 ## セットアップ (ローカル LLM)
 
@@ -45,6 +46,32 @@ TUI 内のキー操作:
 | `/clear` | 会話履歴をクリア |
 | `/compact` | 会話履歴を要約に圧縮 |
 | `/quit` (`Ctrl+C`) | 終了 |
+
+## 設定ファイル
+
+プロジェクト直下の `picocode.toml` を読み込む(グローバル設定
+`~/.config/picocode/config.toml` があれば先に読み、プロジェクト側で上書き・追記)。
+
+```toml
+provider = "ollama"        # CLI 引数が優先
+model = "qwen3:4b"
+
+# 起動時にシステムプロンプトへ読み込む指示ファイル (デフォルト: ["AGENTS.md"])
+instructions = ["AGENTS.md"]
+
+[approval]
+allow_tools = ["write_file"]      # 承認なしで実行するツール
+deny_tools = ["web_fetch"]        # 常に自動拒否するツール (--yolo より優先)
+allow_bash = ["cargo", "git status", "ls"]  # 承認なしで実行する bash コマンド
+deny_bash = ["sudo", "rm -rf"]              # 常に自動拒否する bash コマンド
+```
+
+bash のルールはコマンドを `&&` `||` `;` `|` `&`・改行で分割し、各部分に**単語境界の前方一致**で適用する
+(`cargo` は `cargo build` に一致、`cargofoo` には不一致。末尾の `*` は無視されるので `cargo *` とも書ける):
+
+- `deny_bash`: どこか 1 箇所でも一致したら自動拒否(**`--yolo` でも拒否される**)
+- `allow_bash`: **全ての**部分が一致した場合のみ承認なしで実行。コマンド置換 (`` ` `` や `$(`) を含む場合は自動実行しない
+- どちらにも該当しなければ通常どおり y/n の承認プロンプト
 
 ## 構成
 

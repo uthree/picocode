@@ -1,26 +1,42 @@
 //! Human-in-the-loop approval for destructive tool calls.
 //!
-//! Implemented as a rig [`AgentHook`]: before a destructive tool runs, the hook
-//! sends an [`AgentEvent::ApprovalRequest`] to the TUI and awaits the user's
-//! y/n decision. Denials are returned to the model as the tool result so it can
-//! adapt instead of failing the run.
+//! Implemented as a rig [`AgentHook`]: each tool call is first checked against
+//! the config allow/deny rules ([`ApprovalRules::decide`]); calls that resolve
+//! to `Ask` send an [`AgentEvent::ApprovalRequest`] to the TUI and await the
+//! user's y/n decision. Denials are returned to the model as the tool result so
+//! it can adapt instead of failing the run.
 
 use rig::agent::{AgentHook, HookContext, StepEvent, StepEventKind};
 use rig::completion::CompletionModel;
+use rig::tool::Tool;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::config::{ApprovalRules, Decision};
 use crate::event::AgentEvent;
-use crate::tools::DESTRUCTIVE_TOOLS;
+use crate::tools::{Bash, DESTRUCTIVE_TOOLS};
 
 pub struct ApprovalHook {
     tx: mpsc::Sender<AgentEvent>,
+    rules: ApprovalRules,
     yolo: bool,
 }
 
 impl ApprovalHook {
-    pub fn new(tx: mpsc::Sender<AgentEvent>, yolo: bool) -> Self {
-        Self { tx, yolo }
+    pub fn new(tx: mpsc::Sender<AgentEvent>, rules: ApprovalRules, yolo: bool) -> Self {
+        Self { tx, rules, yolo }
     }
+}
+
+/// Extract the `command` string from the bash tool's JSON args.
+fn bash_command(tool_name: &str, args: &str) -> Option<String> {
+    if tool_name != Bash::NAME {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()?
+        .get("command")?
+        .as_str()
+        .map(str::to_string)
 }
 
 impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
@@ -30,8 +46,12 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
         let StepEvent::ToolCall { tool_name, args, .. } = event else {
             return Flow::Continue;
         };
-        if self.yolo || !DESTRUCTIVE_TOOLS.contains(&tool_name) {
-            return Flow::Continue;
+        let command = bash_command(tool_name, args);
+        let destructive = DESTRUCTIVE_TOOLS.contains(&tool_name);
+        match self.rules.decide(self.yolo, tool_name, command.as_deref(), destructive) {
+            Decision::Allow => return Flow::Continue,
+            Decision::Deny(reason) => return Flow::Skip { reason },
+            Decision::Ask => {}
         }
 
         let (respond, decision) = oneshot::channel();
