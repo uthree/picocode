@@ -53,10 +53,35 @@ pub fn spawn(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>) -> anyhow::Result
         }};
     }
 
+    // With a configured base_url the client is built directly (bypassing the
+    // *_BASE_URL env vars); otherwise `from_env` handles env-based setup.
     match cfg.provider {
-        Provider::Ollama => spawn_for!(ollama::Client::from_env()?),
-        Provider::Anthropic => spawn_for!(anthropic::Client::from_env()?),
-        Provider::Openai => spawn_for!(openai::Client::from_env()?),
+        Provider::Ollama => spawn_for!(match cfg.base_url.clone() {
+            Some(url) => {
+                let key = std::env::var("OLLAMA_API_KEY").unwrap_or_default();
+                ollama::Client::builder()
+                    .api_key(ollama::OllamaApiKey::from(key.as_str()))
+                    .base_url(&url)
+                    .build()?
+            }
+            None => ollama::Client::from_env()?,
+        }),
+        Provider::Anthropic => spawn_for!(match cfg.base_url.clone() {
+            Some(url) => {
+                let key = std::env::var("ANTHROPIC_API_KEY")
+                    .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY is not set"))?;
+                anthropic::Client::builder().api_key(key).base_url(&url).build()?
+            }
+            None => anthropic::Client::from_env()?,
+        }),
+        Provider::Openai => spawn_for!(match cfg.base_url.clone() {
+            Some(url) => {
+                // Local OpenAI-compatible servers usually don't check the key.
+                let key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into());
+                openai::Client::builder().api_key(&key).base_url(&url).build()?
+            }
+            None => openai::Client::from_env()?,
+        }),
     }
     Ok(cmd_tx)
 }

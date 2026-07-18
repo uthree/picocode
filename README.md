@@ -30,8 +30,12 @@ picocode                                   # ollama/qwen3:4b (デフォルト)
 picocode --model qwen3:8b                  # モデル変更
 picocode --provider anthropic              # ANTHROPIC_API_KEY を使用
 picocode --provider openai --model gpt-4o  # OPENAI_API_KEY を使用
+picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b  # vLLM 等の互換サーバ
 picocode --yolo                            # 承認プロンプトを全てスキップ (危険)
 ```
+
+ベース URL の優先順位: `--base-url` > 設定ファイル `base_url` > 環境変数
+(`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`) > デフォルト。
 
 TUI 内のキー操作:
 
@@ -55,6 +59,10 @@ TUI 内のキー操作:
 ```toml
 provider = "ollama"        # CLI 引数が優先
 model = "qwen3:4b"
+# base_url = "http://localhost:11434"        # プロバイダの API ベース URL
+# vLLM などの OpenAI 互換サーバに繋ぐ例:
+#   provider = "openai" + base_url = "http://host:8000/v1"
+#   (OPENAI_API_KEY が未設定ならプレースホルダを送る)
 
 # 起動時にシステムプロンプトへ読み込む指示ファイル (デフォルト: ["AGENTS.md"])
 instructions = ["AGENTS.md"]

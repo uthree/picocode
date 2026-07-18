@@ -27,6 +27,11 @@ pub struct Args {
     #[arg(long)]
     pub model: Option<String>,
 
+    /// Provider API base URL (e.g. http://localhost:11434 for Ollama, or an
+    /// OpenAI-compatible server's .../v1). Overrides the *_BASE_URL env vars.
+    #[arg(long)]
+    pub base_url: Option<String>,
+
     /// Skip all tool-approval prompts (dangerous). Config deny rules still apply.
     #[arg(long)]
     pub yolo: bool,
@@ -50,6 +55,7 @@ pub struct Args {
 struct FileConfig {
     provider: Option<Provider>,
     model: Option<String>,
+    base_url: Option<String>,
     /// Instruction files loaded into the system prompt when present.
     instructions: Option<Vec<String>>,
     #[serde(default)]
@@ -204,6 +210,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
     FileConfig {
         provider: project.provider.or(global.provider),
         model: project.model.or(global.model),
+        base_url: project.base_url.or(global.base_url),
         instructions: project.instructions.or(global.instructions),
         approval,
     }
@@ -233,6 +240,8 @@ fn load_instructions(root: &Path, files: &[String]) -> Vec<(String, String)> {
 pub struct Config {
     pub provider: Provider,
     pub model: String,
+    /// Provider API base URL override (CLI > config file > env var > default).
+    pub base_url: Option<String>,
     pub yolo: bool,
     pub max_turns: usize,
     /// Working directory the tools operate in.
@@ -267,6 +276,7 @@ impl Config {
         let file = merge(global.unwrap_or_default(), project.unwrap_or_default());
 
         let provider = args.provider.or(file.provider).unwrap_or(Provider::Ollama);
+        let base_url = args.base_url.or(file.base_url);
         let model = args.model.or(file.model).unwrap_or_else(|| {
             match provider {
                 Provider::Ollama => "qwen3:4b",
@@ -281,6 +291,7 @@ impl Config {
         Ok(Self {
             provider,
             model,
+            base_url,
             yolo: args.yolo,
             max_turns: args.max_turns,
             root,
@@ -384,6 +395,7 @@ mod tests {
         let global: FileConfig = toml::from_str(
             r#"
             model = "qwen3:8b"
+            base_url = "http://global:1234"
             [approval]
             allow_bash = ["ls"]
             "#,
@@ -401,6 +413,7 @@ mod tests {
         .unwrap();
         let merged = merge(global, project);
         assert_eq!(merged.model.as_deref(), Some("qwen3:4b"));
+        assert_eq!(merged.base_url.as_deref(), Some("http://global:1234"));
         assert_eq!(merged.approval.allow_bash, vec!["ls", "cargo"]);
         assert_eq!(merged.approval.deny_bash, vec!["sudo"]);
         assert_eq!(merged.instructions.unwrap(), vec!["AGENTS.md", "STYLE.md"]);
