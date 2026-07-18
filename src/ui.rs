@@ -136,25 +136,24 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             EntryKind::Reasoning => {
                 lines.push(Line::default());
+                let dim = Style::new()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC);
                 if app.show_reasoning {
+                    lines.push(Line::from(Span::styled(
+                        "∴ thinking (Ctrl+T to collapse)".to_string(),
+                        dim,
+                    )));
                     push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
-                        Line::from(Span::styled(
-                            format!("  {s}"),
-                            Style::new()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ))
+                        Line::from(Span::styled(format!("  {s}"), dim))
                     });
                 } else {
                     // Collapsed: one dim line with a live-updating size.
+                    let n = entry.text.lines().count();
+                    let plural = if n == 1 { "" } else { "s" };
                     lines.push(Line::from(Span::styled(
-                        format!(
-                            "∴ thinking… ({} lines · Ctrl+T)",
-                            entry.text.lines().count()
-                        ),
-                        Style::new()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
+                        format!("∴ thinking … {n} line{plural} (Ctrl+T to expand)"),
+                        dim,
                     )));
                 }
             }
@@ -293,17 +292,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!("[{}]", mode.label()), mode_style),
         Span::raw("  "),
         indicator,
-        Span::raw("  "),
-        Span::styled(
-            "PgUp/PgDn scroll · Ctrl+T thinking",
-            Style::new().fg(Color::DarkGray),
-        ),
     ];
     if app.running > 0 {
-        left.push(Span::styled(
-            " · Esc stop",
-            Style::new().fg(Color::DarkGray),
-        ));
+        left.push(Span::styled("  Esc stop", Style::new().fg(Color::DarkGray)));
     }
     if !app.follow {
         left.push(Span::styled(
