@@ -1,13 +1,16 @@
 //! Application state and the main event loop.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::event::{AgentEvent, WorkerCmd};
+use crate::session;
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 
@@ -28,11 +31,12 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
     ("/model", "List models or switch: /model <name>"),
+    ("/resume", "List sessions or resume: /resume <n>"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntryKind {
     User,
     Assistant,
@@ -47,6 +51,7 @@ pub enum EntryKind {
     Logo,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub kind: EntryKind,
     pub text: String,
@@ -93,6 +98,12 @@ pub struct App {
     event_tx: mpsc::Sender<AgentEvent>,
     /// Command channel of the current worker (replaced on model switch).
     cmd_tx: mpsc::Sender<WorkerCmd>,
+    /// Id of the session being written; a fresh one is issued by /clear.
+    session_id: String,
+    /// Where sessions are stored (None disables persistence, e.g. no $HOME).
+    sessions_dir: Option<PathBuf>,
+    /// Session ids as numbered in the last `/resume` listing.
+    resume_ids: Vec<String>,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
@@ -124,6 +135,9 @@ impl App {
             cfg: cfg.clone(),
             event_tx,
             cmd_tx,
+            session_id: session::new_id(),
+            sessions_dir: session::sessions_dir(&cfg.root),
+            resume_ids: Vec::new(),
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -301,6 +315,8 @@ impl App {
                 self.follow = true;
                 self.top_line = 0;
                 let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
+                // The cleared conversation stays on disk; start a fresh log.
+                self.session_id = session::new_id();
                 self.push(EntryKind::Logo, LOGO.to_string());
                 self.push(
                     EntryKind::Notice,
@@ -321,6 +337,11 @@ impl App {
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
                 self.switch_model(&name).await;
+            }
+            "/resume" => self.list_sessions(),
+            _ if text.starts_with("/resume ") => {
+                let arg = text["/resume ".len()..].trim().to_string();
+                self.resume_session(&arg).await;
             }
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
@@ -467,6 +488,159 @@ impl App {
             EntryKind::Notice,
             format!("Model switched to {name} ({})", self.model_label),
         );
+    }
+
+    /// `/resume` with no argument: list this project's saved sessions.
+    fn list_sessions(&mut self) {
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(
+                EntryKind::Error,
+                "Session storage is unavailable (no $HOME)".to_string(),
+            );
+            return;
+        };
+        let sessions = session::list(&dir);
+        if sessions.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                "No saved sessions for this project yet".to_string(),
+            );
+            return;
+        }
+        let mut out = String::from("Sessions (/resume <n> to resume):");
+        self.resume_ids.clear();
+        for (i, s) in sessions.iter().enumerate() {
+            let marker = if s.id == self.session_id { "▸" } else { " " };
+            let snippet = if s.snippet.is_empty() {
+                "(no prompt)".to_string()
+            } else {
+                format!("\"{}\"", s.snippet)
+            };
+            out.push_str(&format!(
+                "\n{marker} {}. {} · {} msgs · {} · {snippet}",
+                i + 1,
+                session::age(s.modified),
+                s.messages,
+                s.model,
+            ));
+            self.resume_ids.push(s.id.clone());
+        }
+        self.push(EntryKind::Notice, out);
+    }
+
+    /// `/resume <n|id>`: load a saved session, seed the worker with its
+    /// history, and restore the transcript.
+    async fn resume_session(&mut self, arg: &str) {
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot resume while a turn is running".to_string(),
+            );
+            return;
+        }
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(
+                EntryKind::Error,
+                "Session storage is unavailable (no $HOME)".to_string(),
+            );
+            return;
+        };
+
+        // A small number picks from the last `/resume` listing (fetched fresh
+        // if the user skipped it); anything else is a raw session id.
+        let id = match arg.parse::<usize>() {
+            Ok(n) if n >= 1 => {
+                if self.resume_ids.is_empty() {
+                    self.resume_ids = session::list(&dir).into_iter().map(|s| s.id).collect();
+                }
+                match self.resume_ids.get(n - 1) {
+                    Some(id) => id.clone(),
+                    None => {
+                        self.push(
+                            EntryKind::Error,
+                            format!("No session {n} — run /resume to see the list"),
+                        );
+                        return;
+                    }
+                }
+            }
+            _ => arg.to_string(),
+        };
+        if id == self.session_id {
+            self.push(EntryKind::Notice, "That is the current session".to_string());
+            return;
+        }
+
+        let saved = match session::load(&dir, &id) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("Failed to resume: {e:#}"));
+                return;
+            }
+        };
+        let messages = saved.history.len();
+        if self
+            .cmd_tx
+            .send(WorkerCmd::SeedHistory(saved.history))
+            .await
+            .is_err()
+        {
+            self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+            return;
+        }
+
+        self.entries.clear();
+        self.close_blocks();
+        self.ctx_tokens = 0;
+        self.follow = true;
+        self.top_line = 0;
+        self.push(EntryKind::Logo, LOGO.to_string());
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Resumed session {id} — {messages} messages, last saved with {}",
+                saved.model
+            ),
+        );
+        self.entries.extend(saved.entries);
+        self.session_id = id;
+    }
+
+    /// Snapshot the conversation to disk. Runs in the background after each
+    /// completed turn; empty conversations are not written.
+    fn autosave(&mut self) {
+        let Some(dir) = self.sessions_dir.clone() else {
+            return;
+        };
+        let id = self.session_id.clone();
+        let cwd = self.cfg.root.display().to_string();
+        let model = self.model_label.clone();
+        let entries: Vec<Entry> = self
+            .entries
+            .iter()
+            .filter(|e| e.kind != EntryKind::Logo)
+            .cloned()
+            .collect();
+        let cmd_tx = self.cmd_tx.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let (htx, hrx) = oneshot::channel();
+            if cmd_tx.send(WorkerCmd::TakeHistory(htx)).await.is_err() {
+                return;
+            }
+            let Ok(history) = hrx.await else {
+                return;
+            };
+            if history.is_empty() {
+                return;
+            }
+            let file = session::SessionFile::new(cwd, model, history, entries);
+            if let Err(e) = session::save(&dir, &id, &file) {
+                let _ = event_tx
+                    .send(AgentEvent::Error(format!("Failed to save session: {e:#}")))
+                    .await;
+            }
+        });
     }
 
     /// Slash-command candidates for the completion popup. Uses the locked
@@ -639,6 +813,9 @@ impl App {
             AgentEvent::TurnComplete => {
                 self.running = self.running.saturating_sub(1);
                 self.close_blocks();
+                if self.running == 0 {
+                    self.autosave();
+                }
             }
             AgentEvent::Error(s) => {
                 self.close_blocks();

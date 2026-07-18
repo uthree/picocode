@@ -3,6 +3,7 @@ mod app;
 mod approval;
 mod config;
 mod event;
+mod session;
 mod tools;
 mod ui;
 
