@@ -67,6 +67,9 @@ struct FileConfig {
     models: Option<Vec<ModelEntry>>,
     /// Instruction files loaded into the system prompt when present.
     instructions: Option<Vec<String>>,
+    /// Replaces the built-in base system prompt. `{root}` expands to the
+    /// working directory. Instruction files are still appended after it.
+    system_prompt: Option<String>,
     #[serde(default)]
     approval: ApprovalRules,
 }
@@ -279,6 +282,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         default_model: project.default_model.or(global.default_model),
         models: project.models.or(global.models),
         instructions: project.instructions.or(global.instructions),
+        system_prompt: project.system_prompt.or(global.system_prompt),
         approval,
     }
 }
@@ -318,6 +322,8 @@ pub struct Config {
     /// Working directory the tools operate in.
     pub root: PathBuf,
     pub approval: ApprovalRules,
+    /// Base system prompt override from the config file (None = built-in).
+    pub system_prompt: Option<String>,
     /// Instruction files that were found: (file name, content).
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
@@ -390,6 +396,7 @@ impl Config {
             max_turns: args.max_turns,
             root,
             approval: file.approval,
+            system_prompt: file.system_prompt,
             instructions,
             config_files,
         })
@@ -516,6 +523,7 @@ mod tests {
         let project: FileConfig = toml::from_str(
             r#"
             instructions = ["AGENTS.md", "STYLE.md"]
+            system_prompt = "You are a project bot in {root}."
             [[models]]
             name = "local"
             provider = "ollama"
@@ -540,6 +548,20 @@ mod tests {
         assert_eq!(merged.approval.allow_bash, vec!["ls", "cargo"]);
         assert_eq!(merged.approval.deny_bash, vec!["sudo"]);
         assert_eq!(merged.instructions.unwrap(), vec!["AGENTS.md", "STYLE.md"]);
+        assert_eq!(
+            merged.system_prompt.as_deref(),
+            Some("You are a project bot in {root}.")
+        );
+    }
+
+    #[test]
+    fn system_prompt_falls_back_to_global() {
+        let global: FileConfig = toml::from_str(r#"system_prompt = "global prompt""#).unwrap();
+        let project = FileConfig::default();
+        assert_eq!(
+            merge(global, project).system_prompt.as_deref(),
+            Some("global prompt")
+        );
     }
 
     #[test]

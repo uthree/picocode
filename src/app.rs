@@ -143,6 +143,12 @@ impl App {
                 format!("Config: {}", cfg.config_files.join(", ")),
             );
         }
+        if cfg.system_prompt.is_some() {
+            app.push(
+                EntryKind::Notice,
+                "System prompt: overridden by config".to_string(),
+            );
+        }
         if !cfg.instructions.is_empty() {
             let names: Vec<&str> = cfg.instructions.iter().map(|(n, _)| n.as_str()).collect();
             app.push(

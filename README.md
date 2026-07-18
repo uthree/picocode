@@ -79,6 +79,13 @@ default_model = "local"    # [[models]] entry used at startup (default: first)
 # Instruction files loaded into the system prompt (default: ["AGENTS.md"])
 instructions = ["AGENTS.md"]
 
+# Optional: replace the built-in base system prompt entirely. `{root}` expands
+# to the working directory; instruction files are still appended after it.
+system_prompt = """
+You are a careful coding assistant working in {root}.
+Prefer small, verifiable changes.
+"""
+
 [[models]]
 name = "local"
 provider = "ollama"

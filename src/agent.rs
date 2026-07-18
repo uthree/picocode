@@ -96,7 +96,20 @@ pub fn spawn(
 }
 
 fn system_prompt(cfg: &Config) -> String {
-    let mut prompt = format!(
+    let mut prompt = match &cfg.system_prompt {
+        Some(custom) => custom.replace("{root}", &cfg.root.display().to_string()),
+        None => default_system_prompt(cfg),
+    };
+    for (name, content) in &cfg.instructions {
+        prompt.push_str(&format!(
+            "\n\nProject instructions from {name} (follow them):\n{content}"
+        ));
+    }
+    prompt
+}
+
+fn default_system_prompt(cfg: &Config) -> String {
+    format!(
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
          \n\
@@ -115,13 +128,7 @@ fn system_prompt(cfg: &Config) -> String {
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display()
-    );
-    for (name, content) in &cfg.instructions {
-        prompt.push_str(&format!(
-            "\n\nProject instructions from {name} (follow them):\n{content}"
-        ));
-    }
-    prompt
+    )
 }
 
 const COMPACT_PREAMBLE: &str = "You compress conversation history for a coding agent. \
@@ -338,4 +345,51 @@ fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApprovalRules, Provider};
+    use std::path::PathBuf;
+
+    fn test_cfg() -> Config {
+        Config {
+            provider: Provider::Ollama,
+            model: "qwen3:4b".into(),
+            base_url: None,
+            models: Vec::new(),
+            active_model: None,
+            yolo: false,
+            max_turns: 50,
+            root: PathBuf::from("/tmp/proj"),
+            approval: ApprovalRules::default(),
+            system_prompt: None,
+            instructions: Vec::new(),
+            config_files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn default_prompt_mentions_root_and_instructions() {
+        let mut cfg = test_cfg();
+        cfg.instructions = vec![("AGENTS.md".into(), "be nice".into())];
+        let p = system_prompt(&cfg);
+        assert!(p.contains("You are picocode"));
+        assert!(p.contains("/tmp/proj"));
+        assert!(p.contains("Project instructions from AGENTS.md"));
+        assert!(p.contains("be nice"));
+    }
+
+    #[test]
+    fn config_override_replaces_base_and_expands_root() {
+        let mut cfg = test_cfg();
+        cfg.system_prompt = Some("Custom bot. Workdir: {root}.".into());
+        cfg.instructions = vec![("AGENTS.md".into(), "be nice".into())];
+        let p = system_prompt(&cfg);
+        assert!(p.starts_with("Custom bot. Workdir: /tmp/proj."));
+        assert!(!p.contains("You are picocode"));
+        // Instruction files are still appended after the override.
+        assert!(p.contains("Project instructions from AGENTS.md"));
+    }
 }
