@@ -23,9 +23,63 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
 
+    if app.pending.is_none() {
+        let matches = app.completions();
+        if !matches.is_empty() {
+            draw_completions(f, app, &matches, input);
+        }
+    }
     if let Some(pending) = &app.pending {
         draw_approval(f, pending);
     }
+}
+
+// ----- command completion popup --------------------------------------------
+
+fn draw_completions(f: &mut Frame, app: &App, matches: &[(&str, &str)], input_area: Rect) {
+    const CMD_COL: usize = 8;
+    let height = (matches.len() as u16 + 2).min(input_area.y);
+    if height < 3 {
+        return;
+    }
+    let inner_width = matches
+        .iter()
+        .map(|(_, desc)| CMD_COL + desc.len() + 3)
+        .max()
+        .unwrap_or(20) as u16;
+    let width = (inner_width + 2).min(f.area().width.saturating_sub(2));
+    let area = Rect {
+        x: input_area.x + 1,
+        y: input_area.y.saturating_sub(height),
+        width,
+        height,
+    };
+
+    let selected = app.comp_selected.min(matches.len() - 1);
+    let lines: Vec<Line> = matches
+        .iter()
+        .enumerate()
+        .map(|(i, (cmd, desc))| {
+            let text = format!(" {cmd:<CMD_COL$} {desc}");
+            if i == selected {
+                Line::from(Span::styled(
+                    text,
+                    Style::new().fg(Color::Black).bg(Color::Cyan),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(format!(" {cmd:<CMD_COL$}"), Style::new().fg(Color::Cyan)),
+                    Span::styled(format!(" {desc}"), Style::new().fg(Color::DarkGray)),
+                ])
+            }
+        })
+        .collect();
+
+    let block = Block::bordered()
+        .title(" Tab: complete · ↑↓: select ")
+        .border_style(Style::new().fg(Color::DarkGray));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 // ----- transcript ----------------------------------------------------------

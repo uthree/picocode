@@ -11,6 +11,13 @@ use crate::event::{AgentEvent, WorkerCmd};
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 
+/// Slash commands with a short description, used by the completion popup.
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("/clear", "Clear conversation history"),
+    ("/quit", "Exit picocode"),
+    ("/exit", "Exit picocode"),
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     User,
@@ -48,6 +55,11 @@ pub struct App {
     pub last_view_height: usize,
     /// Show full model reasoning instead of a collapsed one-liner.
     pub show_reasoning: bool,
+    /// Selected index in the command-completion popup.
+    pub comp_selected: usize,
+    /// Filter prefix locked at the first Tab / arrow press, so cycling keeps
+    /// the full candidate list even after the input is filled with a match.
+    comp_prefix: Option<String>,
     /// Number of prompts submitted but not yet completed.
     pub running: usize,
     pub spinner: usize,
@@ -73,6 +85,8 @@ impl App {
             last_total_lines: 0,
             last_view_height: 0,
             show_reasoning: false,
+            comp_selected: 0,
+            comp_prefix: None,
             running: 0,
             spinner: 0,
             pending: None,
@@ -166,18 +180,25 @@ impl App {
 
         match key.code {
             KeyCode::Enter => self.submit(cmd_tx).await,
-            KeyCode::Char(c) if !ctrl => self.insert_char(c),
+            KeyCode::Tab | KeyCode::BackTab => self.complete(key.code == KeyCode::BackTab),
+            KeyCode::Up | KeyCode::Down => self.move_completion(key.code == KeyCode::Up),
+            KeyCode::Char(c) if !ctrl => {
+                self.insert_char(c);
+                self.reset_completion();
+            }
             KeyCode::Backspace => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     let i = self.byte_index();
                     self.input.remove(i);
+                    self.reset_completion();
                 }
             }
             KeyCode::Delete => {
                 if self.cursor < self.input.chars().count() {
                     let i = self.byte_index();
                     self.input.remove(i);
+                    self.reset_completion();
                 }
             }
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
@@ -197,6 +218,7 @@ impl App {
         }
         self.input.clear();
         self.cursor = 0;
+        self.reset_completion();
 
         match text.as_str() {
             "/quit" | "/q" | "/exit" => self.should_quit = true,
@@ -210,6 +232,9 @@ impl App {
                 let _ = cmd_tx.send(WorkerCmd::Clear).await;
                 self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
+            _ if text.starts_with('/') && !text.contains(' ') => {
+                self.push(EntryKind::Error, format!("Unknown command: {text}"));
+            }
             _ => {
                 self.close_blocks();
                 self.push(EntryKind::User, text.clone());
@@ -221,6 +246,71 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Slash-command candidates for the completion popup. Uses the locked
+    /// prefix while cycling, otherwise the current input.
+    pub fn completions(&self) -> Vec<(&'static str, &'static str)> {
+        let filter = self.comp_prefix.as_deref().unwrap_or(&self.input);
+        if !filter.starts_with('/') || filter.contains(' ') {
+            return Vec::new();
+        }
+        COMMANDS
+            .iter()
+            .copied()
+            .filter(|(cmd, _)| cmd.starts_with(filter))
+            .collect()
+    }
+
+    /// Tab completion: the first press fills the input with the highlighted
+    /// candidate; subsequent presses cycle through the candidates matched by
+    /// the prefix as it was when completion started.
+    fn complete(&mut self, backwards: bool) {
+        let was_cycling = self.comp_prefix.is_some();
+        let matches = self.completions();
+        if matches.is_empty() {
+            self.comp_prefix = None;
+            return;
+        }
+        if !was_cycling {
+            self.comp_prefix = Some(self.input.clone());
+        }
+        let count = matches.len();
+        self.comp_selected = self.comp_selected.min(count - 1);
+        if was_cycling {
+            self.comp_selected = if backwards {
+                (self.comp_selected + count - 1) % count
+            } else {
+                (self.comp_selected + 1) % count
+            };
+        }
+        self.input = matches[self.comp_selected].0.to_string();
+        self.cursor = self.input.chars().count();
+    }
+
+    /// Move the completion selection with the arrow keys (fills the input).
+    fn move_completion(&mut self, up: bool) {
+        let matches = self.completions();
+        if matches.is_empty() {
+            return;
+        }
+        if self.comp_prefix.is_none() {
+            self.comp_prefix = Some(self.input.clone());
+        }
+        let count = matches.len();
+        self.comp_selected = self.comp_selected.min(count - 1);
+        self.comp_selected = if up {
+            (self.comp_selected + count - 1) % count
+        } else {
+            (self.comp_selected + 1) % count
+        };
+        self.input = matches[self.comp_selected].0.to_string();
+        self.cursor = self.input.chars().count();
+    }
+
+    fn reset_completion(&mut self) {
+        self.comp_selected = 0;
+        self.comp_prefix = None;
     }
 
     /// Scroll the transcript. The view is anchored to a fixed top line while
@@ -324,6 +414,7 @@ impl App {
         let i = self.byte_index();
         self.input.insert_str(i, s);
         self.cursor += s.chars().count();
+        self.comp_selected = 0;
     }
 
     fn byte_index(&self) -> usize {
