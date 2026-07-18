@@ -167,6 +167,17 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     Line::from(Span::styled(format!("{prefix}{s}"), Style::new().fg(Color::Red)))
                 });
             }
+            EntryKind::Logo => {
+                // Verbatim, unwrapped: block art would fall apart if wrapped
+                // (overflow is clipped on narrow terminals).
+                for raw in entry.text.lines() {
+                    lines.push(Line::from(Span::styled(
+                        raw.to_string(),
+                        Style::new().fg(Color::Cyan),
+                    )));
+                }
+                lines.push(Line::default());
+            }
         }
     }
     lines

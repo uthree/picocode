@@ -11,6 +11,18 @@ use crate::event::{AgentEvent, WorkerCmd};
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 
+pub const LOGO: &str = r"            ███                                          █████
+           ░░░                                          ░░███
+ ████████  ████   ██████   ██████   ██████   ██████   ███████   ██████
+░░███░░███░░███  ███░░███ ███░░███ ███░░███ ███░░███ ███░░███  ███░░███
+ ░███ ░███ ░███ ░███ ░░░ ░███ ░███░███ ░░░ ░███ ░███░███ ░███ ░███████
+ ░███ ░███ ░███ ░███  ███░███ ░███░███  ███░███ ░███░███ ░███ ░███░░░
+ ░███████  █████░░██████ ░░██████ ░░██████ ░░██████ ░░████████░░██████
+ ░███░░░  ░░░░░  ░░░░░░   ░░░░░░   ░░░░░░   ░░░░░░   ░░░░░░░░  ░░░░░░
+ ░███
+ █████
+░░░░░";
+
 /// Slash commands with a short description, used by the completion popup.
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
@@ -27,6 +39,8 @@ pub enum EntryKind {
     ToolOut,
     Notice,
     Error,
+    /// Rendered verbatim without wrapping (startup logo).
+    Logo,
 }
 
 pub struct Entry {
@@ -97,6 +111,7 @@ impl App {
             assistant_open: false,
             reasoning_open: false,
         };
+        app.push(EntryKind::Logo, LOGO.to_string());
         app.push(EntryKind::Notice, format!("picocode — {} (cwd: {})", app.model_label, cfg.root.display()));
         if cfg.yolo {
             app.push(EntryKind::Notice, "--yolo: skipping all tool approvals".to_string());
@@ -230,6 +245,7 @@ impl App {
                 self.follow = true;
                 self.top_line = 0;
                 let _ = cmd_tx.send(WorkerCmd::Clear).await;
+                self.push(EntryKind::Logo, LOGO.to_string());
                 self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
             _ if text.starts_with('/') && !text.contains(' ') => {
