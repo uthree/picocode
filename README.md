@@ -1,20 +1,29 @@
 # picocode
 
-minimalist coding agent — Rust 製のミニマルな TUI コーディングエージェント
+A minimal TUI coding agent written in Rust — a pocket-sized take on opencode.
 
-[rig](https://github.com/0xPlaygrounds/rig) のプロバイダ抽象と [ratatui](https://ratatui.rs) で構築。
-ローカル LLM (Ollama) をデフォルトに、Anthropic / OpenAI にも切り替え可能。
+Built on [rig](https://github.com/0xPlaygrounds/rig)'s provider abstractions and
+[ratatui](https://ratatui.rs). Defaults to a local LLM via Ollama, and can talk
+to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 
-## 機能
+## Features
 
-- **TUI チャット**: ストリーミング表示、スクロール(生成中も視点固定)、トークン使用量表示。モデルの思考ログはデフォルト折りたたみ(`Ctrl+T` で展開)
-- **7 つの組み込みツール**: `read_file` / `list_files` / `grep` / `write_file` / `edit_file` / `bash` / `web_fetch`
-- **承認フロー**: 破壊的操作(bash・ファイル書き込み)のみ y/n 確認。読み取り系は自動実行
-- **マルチターン**: 会話履歴・ツール実行結果を保持したまま対話を継続
-- **コンテキスト圧縮**: `/compact` で会話履歴を LLM 要約に置き換えてコンテキストを節約
-- **設定ファイル**: `picocode.toml` で承認の allow/deny ルールと指示ファイル読み込みを設定
+- **TUI chat**: streaming output, scrolling that stays put while the model is
+  generating, token usage in the status bar. Model reasoning is collapsed by
+  default (`Ctrl+T` to expand)
+- **7 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
+  `edit_file` / `bash` / `web_fetch`
+- **Approval flow**: destructive operations (bash, file writes) ask for y/n
+  confirmation; reads run automatically; configurable allow/deny rules
+- **Multi-turn**: keeps conversation history and tool results across turns
+- **Context compaction**: `/compact` replaces the history with an LLM-written
+  summary to free context
+- **Model switching**: define a model roster in the config file and switch at
+  runtime with `/model <name>` — the conversation carries over
+- **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
+  prompt automatically
 
-## セットアップ (ローカル LLM)
+## Setup (local LLM)
 
 ```sh
 brew install ollama
@@ -23,73 +32,94 @@ ollama pull qwen3:4b
 cargo run
 ```
 
-## 使い方
+## Usage
 
 ```sh
-picocode                                   # ollama/qwen3:4b (デフォルト)
-picocode --model qwen3:8b                  # モデル変更
-picocode --provider anthropic              # ANTHROPIC_API_KEY を使用
-picocode --provider openai --model gpt-4o  # OPENAI_API_KEY を使用
-picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b  # vLLM 等の互換サーバ
-picocode --yolo                            # 承認プロンプトを全てスキップ (危険)
+picocode                                   # ollama/qwen3:4b (default)
+picocode --model qwen3:8b                  # different model
+picocode --provider anthropic              # uses ANTHROPIC_API_KEY
+picocode --provider openai --model gpt-4o  # uses OPENAI_API_KEY
+picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b
+                                           # OpenAI-compatible server (vLLM etc.)
+picocode --yolo                            # skip all approval prompts (dangerous)
 ```
 
-ベース URL の優先順位: `--base-url` > 設定ファイル `base_url` > 環境変数
-(`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`) > デフォルト。
+CLI flags select an ad-hoc model and take precedence over the config file's
+`[[models]]` entries. Base URL precedence: `--base-url` > config file >
+environment variables (`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` /
+`ANTHROPIC_BASE_URL`) > provider default.
 
-TUI 内のキー操作:
+Keys inside the TUI:
 
-| キー | 動作 |
+| Key | Action |
 |---|---|
-| `Enter` | 送信 |
-| `Tab` / `Shift+Tab` | コマンド補完(`/` 入力で候補ポップアップ、連打で循環) |
-| `↑` / `↓` | 補完候補の選択 |
-| `y` / `n` | ツール実行の承認 / 拒否 |
-| `PgUp` / `PgDn` | スクロール(最下部まで戻ると追従再開) |
-| `Ctrl+T` | 思考ログの展開 / 折りたたみ |
-| `/clear` | 会話履歴をクリア |
-| `/compact` | 会話履歴を要約に圧縮 |
-| `/quit` (`Ctrl+C`) | 終了 |
+| `Enter` | Send |
+| `Tab` / `Shift+Tab` | Command completion (popup appears on `/`; repeat to cycle) |
+| `↑` / `↓` | Select a completion candidate |
+| `y` / `n` | Approve / deny a tool call |
+| `PgUp` / `PgDn` | Scroll (follow resumes at the bottom) |
+| `Ctrl+T` | Expand / collapse model reasoning |
+| `/model` | List models; `/model <name>` switches (history carries over) |
+| `/compact` | Compact the conversation into a summary |
+| `/clear` | Clear conversation history |
+| `/quit` (`Ctrl+C`) | Quit |
 
-## 設定ファイル
+## Configuration
 
-プロジェクト直下の `picocode.toml` を読み込む(グローバル設定
-`~/.config/picocode/config.toml` があれば先に読み、プロジェクト側で上書き・追記)。
+picocode reads `picocode.toml` from the working directory, merged over the
+global `~/.config/picocode/config.toml` (project values win; approval lists are
+concatenated).
 
 ```toml
-provider = "ollama"        # CLI 引数が優先
-model = "qwen3:4b"
-# base_url = "http://localhost:11434"        # プロバイダの API ベース URL
-# vLLM などの OpenAI 互換サーバに繋ぐ例:
-#   provider = "openai" + base_url = "http://host:8000/v1"
-#   (OPENAI_API_KEY が未設定ならプレースホルダを送る)
+default_model = "local"    # [[models]] entry used at startup (default: first)
 
-# 起動時にシステムプロンプトへ読み込む指示ファイル (デフォルト: ["AGENTS.md"])
+# Instruction files loaded into the system prompt (default: ["AGENTS.md"])
 instructions = ["AGENTS.md"]
 
+[[models]]
+name = "local"
+provider = "ollama"
+model = "qwen3:4b"
+
+[[models]]
+name = "vllm"
+provider = "openai"          # any OpenAI-compatible server
+model = "qwen3:8b"
+base_url = "http://host:8000/v1"
+# If OPENAI_API_KEY is unset, a placeholder key is sent — fine for local
+# servers that don't check it.
+
+[[models]]
+name = "opus"
+provider = "anthropic"
+model = "claude-opus-4-8"
+
 [approval]
-allow_tools = ["write_file"]      # 承認なしで実行するツール
-deny_tools = ["web_fetch"]        # 常に自動拒否するツール (--yolo より優先)
-allow_bash = ["cargo", "git status", "ls"]  # 承認なしで実行する bash コマンド
-deny_bash = ["sudo", "rm -rf"]              # 常に自動拒否する bash コマンド
+allow_tools = ["write_file"]      # tools that run without a prompt
+deny_tools  = ["web_fetch"]       # tools that are always denied (wins over --yolo)
+allow_bash  = ["cargo", "git status", "ls"]
+deny_bash   = ["sudo", "rm -rf"]
 ```
 
-bash のルールはコマンドを `&&` `||` `;` `|` `&`・改行で分割し、各部分に**単語境界の前方一致**で適用する
-(`cargo` は `cargo build` に一致、`cargofoo` には不一致。末尾の `*` は無視されるので `cargo *` とも書ける):
+Bash rules split the command at `&&` `||` `;` `|` `&` and newlines, then match
+each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
+`cargofoo`; a trailing `*` as in `cargo *` is accepted and ignored):
 
-- `deny_bash`: どこか 1 箇所でも一致したら自動拒否(**`--yolo` でも拒否される**)
-- `allow_bash`: **全ての**部分が一致した場合のみ承認なしで実行。コマンド置換 (`` ` `` や `$(`) を含む場合は自動実行しない
-- どちらにも該当しなければ通常どおり y/n の承認プロンプト
+- `deny_bash`: if any segment matches, the call is auto-denied — **even with
+  `--yolo`**
+- `allow_bash`: the call auto-runs only if **every** segment matches; commands
+  containing command substitution (`` ` `` or `$(`) never auto-run
+- anything else falls back to the normal y/n approval prompt
 
-## 構成
+## Layout
 
 ```
 src/
-  main.rs      — エントリポイント (+ --smoke ヘッドレスデバッグモード)
-  config.rs    — CLI 引数・プロバイダ設定
-  app.rs       — アプリ状態とイベントループ
-  ui.rs        — ratatui 描画 (会話ログ / 入力欄 / ステータスバー / 承認モーダル)
-  agent.rs     — rig Agent 構築とストリーミングワーカー
-  approval.rs  — AgentHook による破壊的ツールの承認ゲート
-  tools/       — 組み込みツール実装
+  main.rs      — entry point (+ --smoke headless debug mode)
+  config.rs    — CLI args, config file, approval rules
+  app.rs       — application state and event loop
+  ui.rs        — ratatui rendering (transcript / input / status bar / approval modal)
+  agent.rs     — rig agent construction and the streaming worker
+  approval.rs  — approval gate for destructive tools (rig AgentHook)
+  tools/       — built-in tool implementations
 ```

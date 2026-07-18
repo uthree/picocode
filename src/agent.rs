@@ -141,6 +141,10 @@ async fn worker<M>(
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             WorkerCmd::Clear => history.clear(),
+            WorkerCmd::TakeHistory(tx) => {
+                let _ = tx.send(history.clone());
+            }
+            WorkerCmd::SeedHistory(h) => history = h,
             WorkerCmd::Prompt(prompt) => {
                 run_once(&agent, &mut history, prompt, &event_tx, &cfg).await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;

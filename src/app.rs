@@ -27,6 +27,7 @@ pub const LOGO: &str = r"            ███                                  
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
+    ("/model", "List models or switch: /model <name>"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -86,13 +87,19 @@ pub struct App {
     /// Total output tokens across the session.
     pub out_tokens: u64,
     pub model_label: String,
+    /// Active config; provider/model/base_url track the current /model choice.
+    cfg: Config,
+    /// Event channel handed to newly spawned workers on model switch.
+    event_tx: mpsc::Sender<AgentEvent>,
+    /// Command channel of the current worker (replaced on model switch).
+    cmd_tx: mpsc::Sender<WorkerCmd>,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
 }
 
 impl App {
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(cfg: &Config, event_tx: mpsc::Sender<AgentEvent>, cmd_tx: mpsc::Sender<WorkerCmd>) -> Self {
         let mut app = Self {
             entries: Vec::new(),
             input: String::new(),
@@ -110,6 +117,9 @@ impl App {
             ctx_tokens: 0,
             out_tokens: 0,
             model_label: cfg.model_label(),
+            cfg: cfg.clone(),
+            event_tx,
+            cmd_tx,
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -123,6 +133,10 @@ impl App {
             let names: Vec<&str> = cfg.instructions.iter().map(|(n, _)| n.as_str()).collect();
             app.push(EntryKind::Notice, format!("Instructions: {}", names.join(", ")));
         }
+        if cfg.models.len() > 1 {
+            let names: Vec<&str> = cfg.models.iter().map(|m| m.name.as_str()).collect();
+            app.push(EntryKind::Notice, format!("Models: {} — /model <name> to switch", names.join(", ")));
+        }
         if cfg.yolo {
             app.push(EntryKind::Notice, "--yolo: skipping all tool approvals".to_string());
         }
@@ -133,7 +147,6 @@ impl App {
         mut self,
         mut terminal: DefaultTerminal,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
-        cmd_tx: mpsc::Sender<WorkerCmd>,
     ) -> anyhow::Result<()> {
         let mut term_rx = spawn_input_thread();
         let mut tick = tokio::time::interval(Duration::from_millis(120));
@@ -141,7 +154,7 @@ impl App {
         loop {
             terminal.draw(|f| crate::ui::draw(f, &mut self))?;
             tokio::select! {
-                Some(ev) = term_rx.recv() => self.handle_terminal_event(ev, &cmd_tx).await,
+                Some(ev) = term_rx.recv() => self.handle_terminal_event(ev).await,
                 Some(ev) = agent_rx.recv() => self.handle_agent_event(ev),
                 _ = tick.tick(), if self.running > 0 => {
                     self.spinner = self.spinner.wrapping_add(1);
@@ -169,10 +182,10 @@ impl App {
 
     // ----- terminal events -------------------------------------------------
 
-    async fn handle_terminal_event(&mut self, ev: Event, cmd_tx: &mpsc::Sender<WorkerCmd>) {
+    async fn handle_terminal_event(&mut self, ev: Event) {
         match ev {
             Event::Key(key) if key.kind != KeyEventKind::Release => {
-                self.handle_key(key, cmd_tx).await;
+                self.handle_key(key).await;
             }
             Event::Paste(text) => {
                 let text = text.replace(['\r', '\n'], " ");
@@ -182,7 +195,7 @@ impl App {
         }
     }
 
-    async fn handle_key(&mut self, key: KeyEvent, cmd_tx: &mpsc::Sender<WorkerCmd>) {
+    async fn handle_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
             self.should_quit = true;
@@ -204,7 +217,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Enter => self.submit(cmd_tx).await,
+            KeyCode::Enter => self.submit().await,
             KeyCode::Tab | KeyCode::BackTab => self.complete(key.code == KeyCode::BackTab),
             KeyCode::Up | KeyCode::Down => self.move_completion(key.code == KeyCode::Up),
             KeyCode::Char(c) if !ctrl => {
@@ -236,7 +249,7 @@ impl App {
         }
     }
 
-    async fn submit(&mut self, cmd_tx: &mpsc::Sender<WorkerCmd>) {
+    async fn submit(&mut self) {
         let text = self.input.trim().to_string();
         if text.is_empty() {
             return;
@@ -254,13 +267,13 @@ impl App {
                 self.reasoning_open = false;
                 self.follow = true;
                 self.top_line = 0;
-                let _ = cmd_tx.send(WorkerCmd::Clear).await;
+                let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
                 self.push(EntryKind::Logo, LOGO.to_string());
                 self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
             "/compact" => {
                 self.close_blocks();
-                if cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
+                if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
                     self.running += 1;
                     self.follow = true;
                     self.push(EntryKind::Notice, "Compacting conversation…".to_string());
@@ -268,13 +281,18 @@ impl App {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
             }
+            "/model" => self.list_models(),
+            _ if text.starts_with("/model ") => {
+                let name = text["/model ".len()..].trim().to_string();
+                self.switch_model(&name).await;
+            }
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
             _ => {
                 self.close_blocks();
                 self.push(EntryKind::User, text.clone());
-                if cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
+                if self.cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
                     self.running += 1;
                     self.follow = true;
                 } else {
@@ -282,6 +300,81 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `/model` with no argument: list the configured model entries.
+    fn list_models(&mut self) {
+        if self.cfg.models.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                format!(
+                    "No [[models]] entries in picocode.toml — using {}",
+                    self.model_label
+                ),
+            );
+            return;
+        }
+        let mut out = String::from("Models (/model <name> to switch):");
+        for m in &self.cfg.models {
+            let marker = if self.cfg.active_model.as_deref() == Some(&m.name) { "▸" } else { " " };
+            out.push_str(&format!("\n{marker} {} — {}", m.name, m.label()));
+            if let Some(url) = &m.base_url {
+                out.push_str(&format!(" @ {url}"));
+            }
+        }
+        self.push(EntryKind::Notice, out);
+    }
+
+    /// `/model <name>`: spawn a worker for the named entry and carry the
+    /// conversation history over to it.
+    async fn switch_model(&mut self, name: &str) {
+        if self.running > 0 {
+            self.push(EntryKind::Error, "Cannot switch models while a turn is running".to_string());
+            return;
+        }
+        let Some(entry) = self.cfg.models.iter().find(|m| m.name == name).cloned() else {
+            let names: Vec<&str> = self.cfg.models.iter().map(|m| m.name.as_str()).collect();
+            let hint = if names.is_empty() {
+                "no [[models]] entries are configured".to_string()
+            } else {
+                format!("available: {}", names.join(", "))
+            };
+            self.push(EntryKind::Error, format!("Unknown model `{name}` — {hint}"));
+            return;
+        };
+        if self.cfg.active_model.as_deref() == Some(name) {
+            self.push(EntryKind::Notice, format!("Already using {name} ({})", entry.label()));
+            return;
+        }
+
+        let mut new_cfg = self.cfg.clone();
+        new_cfg.provider = entry.provider;
+        new_cfg.model = entry.model.clone();
+        new_cfg.base_url = entry.base_url.clone();
+        new_cfg.active_model = Some(entry.name.clone());
+
+        // Spawn first so a failure (e.g. missing API key) leaves the current
+        // worker untouched.
+        let new_tx = match crate::agent::spawn(&new_cfg, self.event_tx.clone()) {
+            Ok(tx) => tx,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("Failed to switch to `{name}`: {e:#}"));
+                return;
+            }
+        };
+
+        // Carry the conversation over to the new worker.
+        let (htx, hrx) = oneshot::channel();
+        if self.cmd_tx.send(WorkerCmd::TakeHistory(htx)).await.is_ok()
+            && let Ok(history) = hrx.await
+        {
+            let _ = new_tx.send(WorkerCmd::SeedHistory(history)).await;
+        }
+
+        self.cmd_tx = new_tx; // dropping the old sender shuts the old worker down
+        self.cfg = new_cfg;
+        self.model_label = self.cfg.model_label();
+        self.push(EntryKind::Notice, format!("Model switched to {name} ({})", self.model_label));
     }
 
     /// Slash-command candidates for the completion popup. Uses the locked

@@ -15,6 +15,14 @@ pub enum Provider {
     Openai,
 }
 
+pub fn provider_name(p: Provider) -> &'static str {
+    match p {
+        Provider::Ollama => "ollama",
+        Provider::Anthropic => "anthropic",
+        Provider::Openai => "openai",
+    }
+}
+
 /// picocode — a minimal TUI coding agent.
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -53,13 +61,56 @@ pub struct Args {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileConfig {
-    provider: Option<Provider>,
-    model: Option<String>,
-    base_url: Option<String>,
+    /// Name of the `[[models]]` entry to use at startup (default: the first).
+    default_model: Option<String>,
+    /// Named model entries, switchable at runtime with `/model <name>`.
+    models: Option<Vec<ModelEntry>>,
     /// Instruction files loaded into the system prompt when present.
     instructions: Option<Vec<String>>,
     #[serde(default)]
     approval: ApprovalRules,
+}
+
+/// One switchable `[[models]]` entry in the config file.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelEntry {
+    pub name: String,
+    pub provider: Provider,
+    pub model: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl ModelEntry {
+    pub fn label(&self) -> String {
+        format!("{}/{}", provider_name(self.provider), self.model)
+    }
+}
+
+fn validate_models(models: &[ModelEntry], default: Option<&str>) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for m in models {
+        if m.name.is_empty() || m.name.contains(char::is_whitespace) {
+            anyhow::bail!("invalid model entry name `{}` (must be non-empty, no spaces)", m.name);
+        }
+        if !seen.insert(m.name.as_str()) {
+            anyhow::bail!("duplicate model entry name `{}` in config", m.name);
+        }
+    }
+    if let Some(d) = default
+        && !models.iter().any(|m| m.name == d)
+    {
+        anyhow::bail!("default_model `{d}` does not match any [[models]] entry");
+    }
+    Ok(())
+}
+
+fn pick_entry<'a>(models: &'a [ModelEntry], default: Option<&str>) -> Option<&'a ModelEntry> {
+    match default {
+        Some(d) => models.iter().find(|m| m.name == d),
+        None => models.first(),
+    }
 }
 
 /// Auto-approval / auto-denial rules for tool calls.
@@ -208,9 +259,8 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
     approval.allow_bash.extend(project.approval.allow_bash);
     approval.deny_bash.extend(project.approval.deny_bash);
     FileConfig {
-        provider: project.provider.or(global.provider),
-        model: project.model.or(global.model),
-        base_url: project.base_url.or(global.base_url),
+        default_model: project.default_model.or(global.default_model),
+        models: project.models.or(global.models),
         instructions: project.instructions.or(global.instructions),
         approval,
     }
@@ -240,8 +290,12 @@ fn load_instructions(root: &Path, files: &[String]) -> Vec<(String, String)> {
 pub struct Config {
     pub provider: Provider,
     pub model: String,
-    /// Provider API base URL override (CLI > config file > env var > default).
+    /// Provider API base URL override (overrides the *_BASE_URL env vars).
     pub base_url: Option<String>,
+    /// Named model entries available to `/model`.
+    pub models: Vec<ModelEntry>,
+    /// Name of the active `[[models]]` entry (None for CLI/ad-hoc selection).
+    pub active_model: Option<String>,
     pub yolo: bool,
     pub max_turns: usize,
     /// Working directory the tools operate in.
@@ -275,16 +329,33 @@ impl Config {
         }
         let file = merge(global.unwrap_or_default(), project.unwrap_or_default());
 
-        let provider = args.provider.or(file.provider).unwrap_or(Provider::Ollama);
-        let base_url = args.base_url.or(file.base_url);
-        let model = args.model.or(file.model).unwrap_or_else(|| {
-            match provider {
-                Provider::Ollama => "qwen3:4b",
-                Provider::Anthropic => "claude-opus-4-8",
-                Provider::Openai => "gpt-4o",
+        let models = file.models.unwrap_or_default();
+        validate_models(&models, file.default_model.as_deref())?;
+
+        // CLI flags select an ad-hoc model and take precedence over the
+        // config file's [[models]]; the entries stay available to /model.
+        let cli_selection = args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
+        let (provider, model, base_url, active_model) = match pick_entry(&models, file.default_model.as_deref()) {
+            Some(entry) if !cli_selection => (
+                entry.provider,
+                entry.model.clone(),
+                entry.base_url.clone(),
+                Some(entry.name.clone()),
+            ),
+            _ => {
+                let provider = args.provider.unwrap_or(Provider::Ollama);
+                let model = args.model.unwrap_or_else(|| {
+                    match provider {
+                        Provider::Ollama => "qwen3:4b",
+                        Provider::Anthropic => "claude-opus-4-8",
+                        Provider::Openai => "gpt-4o",
+                    }
+                    .to_string()
+                });
+                (provider, model, args.base_url, None)
             }
-            .to_string()
-        });
+        };
+
         let instruction_names = file.instructions.unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
         let instructions = load_instructions(&root, &instruction_names);
 
@@ -292,6 +363,8 @@ impl Config {
             provider,
             model,
             base_url,
+            models,
+            active_model,
             yolo: args.yolo,
             max_turns: args.max_turns,
             root,
@@ -302,12 +375,7 @@ impl Config {
     }
 
     pub fn model_label(&self) -> String {
-        let provider = match self.provider {
-            Provider::Ollama => "ollama",
-            Provider::Anthropic => "anthropic",
-            Provider::Openai => "openai",
-        };
-        format!("{provider}/{}", self.model)
+        format!("{}/{}", provider_name(self.provider), self.model)
     }
 }
 
@@ -394,8 +462,11 @@ mod tests {
     fn config_files_parse_and_merge() {
         let global: FileConfig = toml::from_str(
             r#"
+            default_model = "global"
+            [[models]]
+            name = "global"
+            provider = "ollama"
             model = "qwen3:8b"
-            base_url = "http://global:1234"
             [approval]
             allow_bash = ["ls"]
             "#,
@@ -403,8 +474,16 @@ mod tests {
         .unwrap();
         let project: FileConfig = toml::from_str(
             r#"
-            model = "qwen3:4b"
             instructions = ["AGENTS.md", "STYLE.md"]
+            [[models]]
+            name = "local"
+            provider = "ollama"
+            model = "qwen3:4b"
+            [[models]]
+            name = "vllm"
+            provider = "openai"
+            model = "qwen3:8b"
+            base_url = "http://host:8000/v1"
             [approval]
             allow_bash = ["cargo"]
             deny_bash = ["sudo"]
@@ -412,17 +491,54 @@ mod tests {
         )
         .unwrap();
         let merged = merge(global, project);
-        assert_eq!(merged.model.as_deref(), Some("qwen3:4b"));
-        assert_eq!(merged.base_url.as_deref(), Some("http://global:1234"));
+        // Project [[models]] replace the global list wholesale.
+        let models = merged.models.unwrap();
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[1].base_url.as_deref(), Some("http://host:8000/v1"));
+        assert_eq!(merged.default_model.as_deref(), Some("global"));
         assert_eq!(merged.approval.allow_bash, vec!["ls", "cargo"]);
         assert_eq!(merged.approval.deny_bash, vec!["sudo"]);
         assert_eq!(merged.instructions.unwrap(), vec!["AGENTS.md", "STYLE.md"]);
     }
 
     #[test]
+    fn model_entry_validation_and_pick() {
+        let models: Vec<ModelEntry> = toml::from_str::<FileConfig>(
+            r#"
+            [[models]]
+            name = "a"
+            provider = "ollama"
+            model = "m1"
+            [[models]]
+            name = "b"
+            provider = "openai"
+            model = "m2"
+            "#,
+        )
+        .unwrap()
+        .models
+        .unwrap();
+
+        assert!(validate_models(&models, Some("b")).is_ok());
+        assert!(validate_models(&models, Some("nope")).is_err());
+        assert_eq!(pick_entry(&models, Some("b")).unwrap().name, "b");
+        assert_eq!(pick_entry(&models, None).unwrap().name, "a");
+
+        let mut dup = models.clone();
+        dup.push(models[0].clone());
+        assert!(validate_models(&dup, None).is_err());
+
+        let mut spaced = models.clone();
+        spaced[0].name = "has space".into();
+        assert!(validate_models(&spaced, None).is_err());
+    }
+
+    #[test]
     fn unknown_config_keys_are_rejected() {
         assert!(toml::from_str::<FileConfig>("allow_bash = []").is_err());
         assert!(toml::from_str::<FileConfig>("[approval]\nallowbash = []").is_err());
+        // The pre-[[models]] top-level keys are no longer accepted.
+        assert!(toml::from_str::<FileConfig>("model = \"qwen3:4b\"").is_err());
     }
 
     #[test]

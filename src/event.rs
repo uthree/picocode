@@ -1,5 +1,6 @@
 //! Channel message types shared between the TUI (App) and the agent worker.
 
+use rig::completion::Message;
 use tokio::sync::oneshot;
 
 /// Events sent from the agent worker / approval hook to the TUI.
@@ -37,4 +38,8 @@ pub enum WorkerCmd {
     Clear,
     /// Summarize the history and replace it with the summary.
     Compact,
+    /// Send a copy of the history back (used when switching models).
+    TakeHistory(oneshot::Sender<Vec<Message>>),
+    /// Replace the history (seeds a freshly spawned worker on model switch).
+    SeedHistory(Vec<Message>),
 }
