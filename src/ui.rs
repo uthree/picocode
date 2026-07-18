@@ -1,7 +1,7 @@
 //! ratatui rendering: transcript, input box, status bar, approval modal.
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
@@ -288,18 +288,11 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         crate::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
         crate::config::Mode::Edit => Style::new().fg(Color::Yellow),
     };
-    let mut spans = vec![
+    let mut left = vec![
         Span::raw(" "),
-        indicator,
-        Span::raw("  "),
-        Span::styled(app.model_label.clone(), Style::new().fg(Color::Magenta)),
-        Span::raw("  "),
         Span::styled(format!("[{}]", mode.label()), mode_style),
         Span::raw("  "),
-        Span::styled(
-            format!("ctx {} · out {}", app.ctx_tokens, app.out_tokens),
-            Style::new().fg(Color::DarkGray),
-        ),
+        indicator,
         Span::raw("  "),
         Span::styled(
             "PgUp/PgDn scroll · Ctrl+T thinking",
@@ -307,18 +300,34 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ),
     ];
     if app.running > 0 {
-        spans.push(Span::styled(
+        left.push(Span::styled(
             " · Esc stop",
             Style::new().fg(Color::DarkGray),
         ));
     }
     if !app.follow {
-        spans.push(Span::styled(
+        left.push(Span::styled(
             "  ⇡ scrolled (PgDn to bottom)",
             Style::new().fg(Color::Yellow),
         ));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    let right = Line::from(vec![
+        Span::styled(app.model_label.clone(), Style::new().fg(Color::Magenta)),
+        Span::raw("  "),
+        Span::styled(
+            format!("ctx {} · out {}", app.ctx_tokens, app.out_tokens),
+            Style::new().fg(Color::DarkGray),
+        ),
+        Span::raw(" "),
+    ]);
+    let right_width = (right.width() as u16).min(area.width);
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
+    f.render_widget(Paragraph::new(Line::from(left)), left_area);
+    f.render_widget(
+        Paragraph::new(right).alignment(Alignment::Right),
+        right_area,
+    );
 }
 
 // ----- session picker ------------------------------------------------------
