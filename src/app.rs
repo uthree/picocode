@@ -71,9 +71,9 @@ impl App {
             assistant_open: false,
             reasoning_open: false,
         };
-        app.push(EntryKind::Notice, format!("picocode — {} (作業ディレクトリ: {})", app.model_label, cfg.root.display()));
+        app.push(EntryKind::Notice, format!("picocode — {} (cwd: {})", app.model_label, cfg.root.display()));
         if cfg.yolo {
-            app.push(EntryKind::Notice, "--yolo: ツール実行の承認を全てスキップします".to_string());
+            app.push(EntryKind::Notice, "--yolo: skipping all tool approvals".to_string());
         }
         app
     }
@@ -178,7 +178,7 @@ impl App {
                 self.assistant_open = false;
                 self.reasoning_open = false;
                 let _ = cmd_tx.send(WorkerCmd::Clear).await;
-                self.push(EntryKind::Notice, "会話履歴をクリアしました".to_string());
+                self.push(EntryKind::Notice, "Conversation history cleared".to_string());
             }
             _ => {
                 self.close_blocks();
@@ -187,7 +187,7 @@ impl App {
                     self.running += 1;
                     self.scroll = 0;
                 } else {
-                    self.push(EntryKind::Error, "エージェントが停止しています".to_string());
+                    self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
             }
         }
@@ -195,7 +195,7 @@ impl App {
 
     fn resolve_approval(&mut self, approve: bool) {
         if let Some(p) = self.pending.take() {
-            let label = if approve { "✔ 承認" } else { "✘ 拒否" };
+            let label = if approve { "✔ approved" } else { "✘ denied" };
             self.push(EntryKind::Notice, format!("{label}: {}", p.name));
             let _ = p.respond.send(approve);
         }
@@ -318,7 +318,7 @@ fn clamp_lines(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         let mut out = lines[..max].join("\n");
-        out.push_str(&format!("\n… (+{} 行)", lines.len() - max));
+        out.push_str(&format!("\n… (+{} lines)", lines.len() - max));
         out
     }
 }

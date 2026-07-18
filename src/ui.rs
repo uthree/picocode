@@ -132,7 +132,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
     if app.input.is_empty() {
         let hint = Paragraph::new(Span::styled(
-            "メッセージを入力 (Enter 送信 · /clear · /quit)",
+            "Type a message (Enter to send · /clear · /quit)",
             Style::new().fg(Color::DarkGray),
         ))
         .block(block);
@@ -166,11 +166,11 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let indicator = if app.running > 0 {
         Span::styled(
-            format!("{} 実行中", SPINNER[app.spinner % SPINNER.len()]),
+            format!("{} running", SPINNER[app.spinner % SPINNER.len()]),
             Style::new().fg(Color::Green),
         )
     } else {
-        Span::styled("● 待機", Style::new().fg(Color::DarkGray))
+        Span::styled("● idle", Style::new().fg(Color::DarkGray))
     };
     let line = Line::from(vec![
         Span::raw(" "),
@@ -183,7 +183,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::DarkGray),
         ),
         Span::raw("  "),
-        Span::styled("PgUp/PgDn スクロール", Style::new().fg(Color::DarkGray)),
+        Span::styled("PgUp/PgDn scroll", Style::new().fg(Color::DarkGray)),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -208,7 +208,7 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     let inner_width = width.saturating_sub(4) as usize;
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
-            format!("ツール: {}", pending.name),
+            format!("Tool: {}", pending.name),
             Style::new().fg(Color::Yellow).bold(),
         )),
         Line::default(),
@@ -226,13 +226,13 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("[y]", Style::new().fg(Color::Green).bold()),
-        Span::raw(" 実行を許可   "),
+        Span::raw(" approve   "),
         Span::styled("[n]", Style::new().fg(Color::Red).bold()),
-        Span::raw(" 拒否"),
+        Span::raw(" deny"),
     ]));
 
     let block = Block::bordered()
-        .title(" ツール実行の承認 ")
+        .title(" Tool approval ")
         .border_style(Style::new().fg(Color::Yellow));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);
