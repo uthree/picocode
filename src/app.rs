@@ -31,7 +31,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
     ("/model", "List models or switch: /model <name>"),
-    ("/resume", "List sessions or resume: /resume <n>"),
+    ("/resume", "Pick a saved session to resume"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -61,6 +61,12 @@ pub struct PendingApproval {
     pub name: String,
     pub args: String,
     respond: oneshot::Sender<bool>,
+}
+
+/// State of the `/resume` selection dialog.
+pub struct SessionPicker {
+    pub sessions: Vec<session::SessionSummary>,
+    pub selected: usize,
 }
 
 pub struct App {
@@ -102,8 +108,8 @@ pub struct App {
     session_id: String,
     /// Where sessions are stored (None disables persistence, e.g. no $HOME).
     sessions_dir: Option<PathBuf>,
-    /// Session ids as numbered in the last `/resume` listing.
-    resume_ids: Vec<String>,
+    /// Open `/resume` dialog, if any (captures the arrow/Enter keys).
+    pub session_picker: Option<SessionPicker>,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
@@ -137,7 +143,7 @@ impl App {
             cmd_tx,
             session_id: session::new_id(),
             sessions_dir: session::sessions_dir(&cfg.root),
-            resume_ids: Vec::new(),
+            session_picker: None,
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -263,6 +269,23 @@ impl App {
             return;
         }
 
+        // The /resume dialog captures navigation keys while open.
+        if let Some(picker) = &mut self.session_picker {
+            let count = picker.sessions.len();
+            match key.code {
+                KeyCode::Up => picker.selected = (picker.selected + count - 1) % count,
+                KeyCode::Down => picker.selected = (picker.selected + 1) % count,
+                KeyCode::Enter => {
+                    let id = picker.sessions[picker.selected].id.clone();
+                    self.session_picker = None;
+                    self.resume_session(&id).await;
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.session_picker = None,
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Enter => self.submit().await,
             KeyCode::Tab | KeyCode::BackTab => self.complete(key.code == KeyCode::BackTab),
@@ -338,10 +361,10 @@ impl App {
                 let name = text["/model ".len()..].trim().to_string();
                 self.switch_model(&name).await;
             }
-            "/resume" => self.list_sessions(),
+            "/resume" => self.open_session_picker(),
             _ if text.starts_with("/resume ") => {
-                let arg = text["/resume ".len()..].trim().to_string();
-                self.resume_session(&arg).await;
+                let id = text["/resume ".len()..].trim().to_string();
+                self.resume_session(&id).await;
             }
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
@@ -490,47 +513,8 @@ impl App {
         );
     }
 
-    /// `/resume` with no argument: list this project's saved sessions.
-    fn list_sessions(&mut self) {
-        let Some(dir) = self.sessions_dir.clone() else {
-            self.push(
-                EntryKind::Error,
-                "Session storage is unavailable (no $HOME)".to_string(),
-            );
-            return;
-        };
-        let sessions = session::list(&dir);
-        if sessions.is_empty() {
-            self.push(
-                EntryKind::Notice,
-                "No saved sessions for this project yet".to_string(),
-            );
-            return;
-        }
-        let mut out = String::from("Sessions (/resume <n> to resume):");
-        self.resume_ids.clear();
-        for (i, s) in sessions.iter().enumerate() {
-            let marker = if s.id == self.session_id { "▸" } else { " " };
-            let snippet = if s.snippet.is_empty() {
-                "(no prompt)".to_string()
-            } else {
-                format!("\"{}\"", s.snippet)
-            };
-            out.push_str(&format!(
-                "\n{marker} {}. {} · {} msgs · {} · {snippet}",
-                i + 1,
-                session::age(s.modified),
-                s.messages,
-                s.model,
-            ));
-            self.resume_ids.push(s.id.clone());
-        }
-        self.push(EntryKind::Notice, out);
-    }
-
-    /// `/resume <n|id>`: load a saved session, seed the worker with its
-    /// history, and restore the transcript.
-    async fn resume_session(&mut self, arg: &str) {
+    /// `/resume` with no argument: open the session-selection dialog.
+    fn open_session_picker(&mut self) {
         if self.running > 0 {
             self.push(
                 EntryKind::Error,
@@ -545,33 +529,47 @@ impl App {
             );
             return;
         };
+        // Resuming the current session would be a no-op, so it isn't offered.
+        let sessions: Vec<_> = session::list(&dir)
+            .into_iter()
+            .filter(|s| s.id != self.session_id)
+            .collect();
+        if sessions.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                "No saved sessions for this project yet".to_string(),
+            );
+            return;
+        }
+        self.session_picker = Some(SessionPicker {
+            sessions,
+            selected: 0,
+        });
+    }
 
-        // A small number picks from the last `/resume` listing (fetched fresh
-        // if the user skipped it); anything else is a raw session id.
-        let id = match arg.parse::<usize>() {
-            Ok(n) if n >= 1 => {
-                if self.resume_ids.is_empty() {
-                    self.resume_ids = session::list(&dir).into_iter().map(|s| s.id).collect();
-                }
-                match self.resume_ids.get(n - 1) {
-                    Some(id) => id.clone(),
-                    None => {
-                        self.push(
-                            EntryKind::Error,
-                            format!("No session {n} — run /resume to see the list"),
-                        );
-                        return;
-                    }
-                }
-            }
-            _ => arg.to_string(),
+    /// Resume a session by id (picked in the dialog or given to `/resume <id>`):
+    /// seed the worker with its history and restore the transcript.
+    async fn resume_session(&mut self, id: &str) {
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot resume while a turn is running".to_string(),
+            );
+            return;
+        }
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(
+                EntryKind::Error,
+                "Session storage is unavailable (no $HOME)".to_string(),
+            );
+            return;
         };
         if id == self.session_id {
             self.push(EntryKind::Notice, "That is the current session".to_string());
             return;
         }
 
-        let saved = match session::load(&dir, &id) {
+        let saved = match session::load(&dir, id) {
             Ok(s) => s,
             Err(e) => {
                 self.push(EntryKind::Error, format!("Failed to resume: {e:#}"));
@@ -603,7 +601,7 @@ impl App {
             ),
         );
         self.entries.extend(saved.entries);
-        self.session_id = id;
+        self.session_id = id.to_string();
     }
 
     /// Snapshot the conversation to disk. Runs in the background after each

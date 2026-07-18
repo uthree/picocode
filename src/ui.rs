@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, EntryKind, PendingApproval};
+use crate::app::{App, EntryKind, PendingApproval, SessionPicker};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -23,11 +23,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
 
-    if app.pending.is_none() {
+    if app.pending.is_none() && app.session_picker.is_none() {
         let matches = app.completions();
         if !matches.is_empty() {
             draw_completions(f, app, &matches, input);
         }
+    }
+    if let Some(picker) = &app.session_picker {
+        draw_session_picker(f, picker);
     }
     if let Some(pending) = &app.pending {
         draw_approval(f, pending);
@@ -245,7 +248,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         ))
         .block(block);
         f.render_widget(hint, area);
-        if app.pending.is_none() {
+        if app.pending.is_none() && app.session_picker.is_none() {
             f.set_cursor_position(Position::new(area.x + 1, area.y + 1));
         }
         return;
@@ -264,7 +267,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let cursor_x = cursor_width(start, app.cursor);
 
     f.render_widget(Paragraph::new(visible).block(block), area);
-    if app.pending.is_none() {
+    if app.pending.is_none() && app.session_picker.is_none() {
         f.set_cursor_position(Position::new(area.x + 1 + cursor_x as u16, area.y + 1));
     }
 }
@@ -303,6 +306,68 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+// ----- session picker ------------------------------------------------------
+
+fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
+    let screen = f.area();
+    let width = screen.width.saturating_sub(6).clamp(30, 90);
+    // rows + borders + hint line, capped to the screen.
+    let height = (picker.sessions.len() as u16 + 3)
+        .min(screen.height.saturating_sub(4))
+        .max(5);
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(width)) / 2,
+        y: screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    let inner_width = width.saturating_sub(2) as usize;
+    let visible = height.saturating_sub(3) as usize;
+    // Keep the selection inside the window when the list is long.
+    let offset = (picker.selected + 1).saturating_sub(visible);
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, s) in picker
+        .sessions
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible)
+    {
+        let snippet = if s.snippet.is_empty() {
+            "(no prompt)".to_string()
+        } else {
+            format!("\"{}\"", s.snippet)
+        };
+        let text = format!(
+            " {} · {} msgs · {} · {snippet}",
+            crate::session::age(s.modified),
+            s.messages,
+            s.model,
+        );
+        let text: String = text.chars().take(inner_width).collect();
+        lines.push(if i == picker.selected {
+            Line::from(Span::styled(
+                format!("{text:<inner_width$}"),
+                Style::new().fg(Color::Black).bg(Color::Cyan),
+            ))
+        } else {
+            Line::from(Span::raw(text))
+        });
+    }
+    lines.push(Line::from(Span::styled(
+        " ↑↓ select · Enter resume · Esc cancel",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let block = Block::bordered()
+        .title(" Resume session ")
+        .border_style(Style::new().fg(Color::Cyan));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 // ----- approval modal ------------------------------------------------------

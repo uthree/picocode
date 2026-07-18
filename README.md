@@ -64,7 +64,7 @@ Keys inside the TUI:
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
 | `/model` | List models; `/model <name>` switches (history carries over) |
 | `/compact` | Compact the conversation into a summary |
-| `/resume` | List saved sessions; `/resume <n>` (or an id) restores one |
+| `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |
 
@@ -73,9 +73,10 @@ Keys inside the TUI:
 Every conversation is saved automatically after each completed turn to
 `$XDG_DATA_HOME/picocode/sessions/<project>/<id>.json` (default
 `~/.local/share/…`), including both the model history and the rendered
-transcript. `/resume` lists this project's sessions newest-first; `/resume <n>`
-restores the selected one into the current model and continues writing to the
-same log. Empty conversations are never written.
+transcript. `/resume` opens a dialog listing this project's sessions
+newest-first — pick one with `↑`/`↓` and `Enter`. The session is restored into
+the current model and keeps writing to the same log. Empty conversations are
+never written.
 
 ## Configuration
 
