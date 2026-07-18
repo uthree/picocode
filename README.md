@@ -15,6 +15,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   `edit_file` / `bash` / `web_search` / `web_fetch`
 - **Approval flow**: destructive operations (bash, file writes) ask for y/n
   confirmation; reads run automatically; configurable allow/deny rules
+- **Permission modes**: `Shift+Tab` cycles read-only (default — every write
+  asks) and edit (file writes run freely; commands follow the config rules)
 - **Multi-turn**: keeps conversation history and tool results across turns
 - **Context compaction**: `/compact` replaces the history with an LLM-written
   summary to free context
@@ -58,7 +60,8 @@ Keys inside the TUI:
 | Key | Action |
 |---|---|
 | `Enter` | Send |
-| `Tab` / `Shift+Tab` | Command completion (popup appears on `/`; repeat to cycle) |
+| `Tab` | Command completion (popup appears on `/`; repeat to cycle) |
+| `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
 | `↑` / `↓` | Select a completion candidate |
 | `y` / `n` | Approve / deny a tool call |
 | `Esc` | Stop the generation in progress |
@@ -70,6 +73,19 @@ Keys inside the TUI:
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |
+
+## Permission modes
+
+`Shift+Tab` cycles the permission mode, shown in the status bar:
+
+| Mode | Behavior |
+|---|---|
+| `read-only` (default) | Read tools run freely; **every** write or command asks for confirmation, even if allow-listed |
+| `edit` | `write_file` / `edit_file` run without asking; `bash` and other tools follow the `[approval]` config rules |
+
+Deny rules and `--yolo` take precedence over the mode. Full precedence:
+deny rules > `--yolo` > mode > allow rules > ask. A switch takes effect
+immediately, including for later tool calls of a turn already running.
 
 ## Sessions
 

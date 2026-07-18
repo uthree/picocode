@@ -266,7 +266,12 @@ async fn run_once<M>(
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
 {
-    let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.yolo);
+    let hook = ApprovalHook::new(
+        event_tx.clone(),
+        cfg.approval.clone(),
+        cfg.yolo,
+        cfg.mode.clone(),
+    );
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
         .max_turns(cfg.max_turns)
@@ -390,7 +395,7 @@ fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApprovalRules, Provider, SearchConfig, SearchProvider};
+    use crate::config::{ApprovalRules, Mode, ModeHandle, Provider, SearchConfig, SearchProvider};
     use std::path::PathBuf;
 
     fn test_cfg() -> Config {
@@ -404,6 +409,7 @@ mod tests {
             max_turns: 50,
             root: PathBuf::from("/tmp/proj"),
             approval: ApprovalRules::default(),
+            mode: ModeHandle::new(Mode::ReadOnly),
             search: SearchConfig {
                 provider: SearchProvider::Duckduckgo,
                 base_url: None,

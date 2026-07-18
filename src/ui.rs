@@ -283,11 +283,18 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Span::styled("● idle", Style::new().fg(Color::DarkGray))
     };
+    let mode = app.mode();
+    let mode_style = match mode {
+        crate::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
+        crate::config::Mode::Edit => Style::new().fg(Color::Yellow),
+    };
     let mut spans = vec![
         Span::raw(" "),
         indicator,
         Span::raw("  "),
         Span::styled(app.model_label.clone(), Style::new().fg(Color::Magenta)),
+        Span::raw("  "),
+        Span::styled(format!("[{}]", mode.label()), mode_style),
         Span::raw("  "),
         Span::styled(
             format!("ctx {} · out {}", app.ctx_tokens, app.out_tokens),

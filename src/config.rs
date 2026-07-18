@@ -181,6 +181,62 @@ fn resolve_search(
     })
 }
 
+// ----- permission modes ------------------------------------------------------
+
+/// Permission mode, cycled with Shift+Tab in the TUI. Deny rules and --yolo
+/// take precedence over the mode; see [`ApprovalRules::decide`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// Reads run freely; every write or command asks, even if allow-listed.
+    #[default]
+    ReadOnly,
+    /// File writes run freely; commands and other tools follow the config
+    /// allow/deny rules.
+    Edit,
+}
+
+impl Mode {
+    /// Cycle order for Shift+Tab. Future modes only need a variant, an entry
+    /// here, a label, and their branch in `ApprovalRules::decide`.
+    pub const ALL: &[Mode] = &[Mode::ReadOnly, Mode::Edit];
+
+    pub fn next(self) -> Mode {
+        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::ReadOnly => "read-only",
+            Mode::Edit => "edit",
+        }
+    }
+}
+
+/// Shared, atomically updatable mode: the TUI switches it while the approval
+/// hook (running in the worker task) reads it per tool call, so a switch
+/// takes effect immediately, even mid-turn.
+#[derive(Clone, Debug)]
+pub struct ModeHandle(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl ModeHandle {
+    pub fn new(mode: Mode) -> Self {
+        let handle = Self(Default::default());
+        handle.set(mode);
+        handle
+    }
+
+    pub fn get(&self) -> Mode {
+        let i = self.0.load(std::sync::atomic::Ordering::Relaxed) as usize;
+        *Mode::ALL.get(i).unwrap_or(&Mode::ReadOnly)
+    }
+
+    pub fn set(&self, mode: Mode) {
+        let i = Mode::ALL.iter().position(|m| *m == mode).unwrap_or(0);
+        self.0.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Auto-approval / auto-denial rules for tool calls.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,10 +269,12 @@ pub enum Decision {
 impl ApprovalRules {
     /// Decide what to do with a tool call. `bash_command` is the command string
     /// when the call is the bash tool, `destructive` whether the tool requires
-    /// approval by default. Precedence: deny rules > --yolo > allow rules > ask.
+    /// approval by default.
+    /// Precedence: deny rules > --yolo > mode > allow rules > ask.
     pub fn decide(
         &self,
         yolo: bool,
+        mode: Mode,
         tool: &str,
         bash_command: Option<&str>,
         destructive: bool,
@@ -225,18 +283,33 @@ impl ApprovalRules {
         if in_list(&self.deny_tools) {
             return Decision::Deny(deny_reason(tool, "deny_tools"));
         }
-
-        if let Some(cmd) = bash_command {
-            let segments = split_segments(cmd);
-            if segments
+        let segments = bash_command.map(split_segments);
+        if let Some(segments) = &segments
+            && segments
                 .iter()
                 .any(|seg| self.deny_bash.iter().any(|p| pattern_matches(p, seg)))
-            {
-                return Decision::Deny(deny_reason(tool, "deny_bash"));
-            }
-            if yolo || in_list(&self.allow_tools) {
-                return Decision::Allow;
-            }
+        {
+            return Decision::Deny(deny_reason(tool, "deny_bash"));
+        }
+
+        if !destructive {
+            return Decision::Allow;
+        }
+        if yolo {
+            return Decision::Allow;
+        }
+        // Read-only (the default) confirms every destructive call, allow
+        // rules notwithstanding.
+        if mode == Mode::ReadOnly {
+            return Decision::Ask;
+        }
+
+        // Edit mode: file writes are permitted outright; commands and other
+        // tools follow the config allow rules.
+        if crate::tools::WRITE_TOOLS.contains(&tool) || in_list(&self.allow_tools) {
+            return Decision::Allow;
+        }
+        if let (Some(cmd), Some(segments)) = (bash_command, &segments) {
             // Command substitution can smuggle arbitrary commands past a
             // prefix whitelist, so it never auto-runs.
             let has_substitution = cmd.contains("$(") || cmd.contains('`');
@@ -248,21 +321,8 @@ impl ApprovalRules {
             {
                 return Decision::Allow;
             }
-            return if destructive {
-                Decision::Ask
-            } else {
-                Decision::Allow
-            };
         }
-
-        if yolo || in_list(&self.allow_tools) {
-            return Decision::Allow;
-        }
-        if destructive {
-            Decision::Ask
-        } else {
-            Decision::Allow
-        }
+        Decision::Ask
     }
 }
 
@@ -389,6 +449,8 @@ pub struct Config {
     /// Working directory the tools operate in.
     pub root: PathBuf,
     pub approval: ApprovalRules,
+    /// Current permission mode, shared with the approval hook.
+    pub mode: ModeHandle,
     pub search: SearchConfig,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
@@ -465,6 +527,7 @@ impl Config {
             max_turns: args.max_turns,
             root,
             approval: file.approval,
+            mode: ModeHandle::new(Mode::default()),
             search,
             system_prompt: file.system_prompt,
             instructions,
@@ -522,7 +585,7 @@ mod tests {
     fn deny_tools_wins_over_everything() {
         let r = rules(&["web_fetch"], &["web_fetch"], &[], &[]);
         assert!(matches!(
-            r.decide(true, "web_fetch", None, false),
+            r.decide(true, Mode::Edit, "web_fetch", None, false),
             Decision::Deny(_)
         ));
     }
@@ -531,7 +594,7 @@ mod tests {
     fn deny_bash_wins_over_yolo_and_allow() {
         let r = rules(&[], &[], &["rm"], &["rm"]);
         assert!(matches!(
-            r.decide(true, "bash", Some("echo hi && rm -rf x"), true),
+            r.decide(true, Mode::Edit, "bash", Some("echo hi && rm -rf x"), true),
             Decision::Deny(_)
         ));
     }
@@ -540,11 +603,23 @@ mod tests {
     fn allow_bash_requires_every_segment_to_match() {
         let r = rules(&[], &[], &["cargo", "ls"], &[]);
         assert_eq!(
-            r.decide(false, "bash", Some("cargo build && ls -la"), true),
+            r.decide(
+                false,
+                Mode::Edit,
+                "bash",
+                Some("cargo build && ls -la"),
+                true
+            ),
             Decision::Allow
         );
         assert_eq!(
-            r.decide(false, "bash", Some("cargo build && curl x"), true),
+            r.decide(
+                false,
+                Mode::Edit,
+                "bash",
+                Some("cargo build && curl x"),
+                true
+            ),
             Decision::Ask
         );
     }
@@ -553,27 +628,98 @@ mod tests {
     fn command_substitution_never_auto_runs() {
         let r = rules(&[], &[], &["echo"], &[]);
         assert_eq!(
-            r.decide(false, "bash", Some("echo $(rm -rf /)"), true),
+            r.decide(false, Mode::Edit, "bash", Some("echo $(rm -rf /)"), true),
             Decision::Ask
         );
         assert_eq!(
-            r.decide(false, "bash", Some("echo `date`"), true),
+            r.decide(false, Mode::Edit, "bash", Some("echo `date`"), true),
             Decision::Ask
         );
     }
 
     #[test]
     fn allow_tools_skips_prompt_for_destructive_tool() {
-        let r = rules(&["write_file"], &[], &[], &[]);
-        assert_eq!(r.decide(false, "write_file", None, true), Decision::Allow);
-        assert_eq!(r.decide(false, "edit_file", None, true), Decision::Ask);
+        let r = rules(&["bash"], &[], &[], &[]);
+        assert_eq!(
+            r.decide(false, Mode::Edit, "bash", Some("rm -rf x"), true),
+            Decision::Allow
+        );
+        let none = ApprovalRules::default();
+        assert_eq!(
+            none.decide(false, Mode::Edit, "bash", Some("rm -rf x"), true),
+            Decision::Ask
+        );
     }
 
     #[test]
     fn read_only_tools_run_without_rules() {
         let r = ApprovalRules::default();
-        assert_eq!(r.decide(false, "read_file", None, false), Decision::Allow);
-        assert_eq!(r.decide(false, "bash", Some("ls"), true), Decision::Ask);
+        assert_eq!(
+            r.decide(false, Mode::Edit, "read_file", None, false),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(false, Mode::Edit, "bash", Some("ls"), true),
+            Decision::Ask
+        );
+    }
+
+    #[test]
+    fn read_only_mode_always_asks_for_destructive() {
+        // Allow rules are ignored: every write or command still asks.
+        let r = rules(&["write_file"], &[], &["cargo"], &[]);
+        assert_eq!(
+            r.decide(false, Mode::ReadOnly, "write_file", None, true),
+            Decision::Ask
+        );
+        assert_eq!(
+            r.decide(false, Mode::ReadOnly, "bash", Some("cargo build"), true),
+            Decision::Ask
+        );
+        // Reads still run, --yolo still skips, deny still wins.
+        assert_eq!(
+            r.decide(false, Mode::ReadOnly, "read_file", None, false),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(true, Mode::ReadOnly, "write_file", None, true),
+            Decision::Allow
+        );
+        let d = rules(&[], &["write_file"], &[], &[]);
+        assert!(matches!(
+            d.decide(false, Mode::ReadOnly, "write_file", None, true),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn edit_mode_allows_file_writes_but_not_bash() {
+        let r = ApprovalRules::default();
+        assert_eq!(
+            r.decide(false, Mode::Edit, "write_file", None, true),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(false, Mode::Edit, "edit_file", None, true),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(false, Mode::Edit, "bash", Some("ls"), true),
+            Decision::Ask
+        );
+    }
+
+    #[test]
+    fn modes_cycle_and_share_state() {
+        assert_eq!(Mode::default(), Mode::ReadOnly);
+        assert_eq!(Mode::ReadOnly.next(), Mode::Edit);
+        assert_eq!(Mode::Edit.next(), Mode::ReadOnly);
+        assert_eq!(Mode::ReadOnly.label(), "read-only");
+
+        let handle = ModeHandle::new(Mode::ReadOnly);
+        let clone = handle.clone();
+        handle.set(handle.get().next());
+        assert_eq!(clone.get(), Mode::Edit);
     }
 
     #[test]

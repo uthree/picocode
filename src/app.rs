@@ -167,6 +167,10 @@ impl App {
                 format!("Config: {}", cfg.config_files.join(", ")),
             );
         }
+        app.push(
+            EntryKind::Notice,
+            format!("Mode: {} — Shift+Tab to switch", cfg.mode.get().label()),
+        );
         if cfg.system_prompt.is_some() {
             app.push(
                 EntryKind::Notice,
@@ -292,7 +296,16 @@ impl App {
 
         match key.code {
             KeyCode::Enter => self.submit().await,
-            KeyCode::Tab | KeyCode::BackTab => self.complete(key.code == KeyCode::BackTab),
+            KeyCode::Tab => self.complete(false),
+            // Shift+Tab cycles the completion popup while it's open, and the
+            // permission mode otherwise.
+            KeyCode::BackTab => {
+                if self.completions().is_empty() {
+                    self.cycle_mode();
+                } else {
+                    self.complete(true);
+                }
+            }
             KeyCode::Up | KeyCode::Down => self.move_completion(key.code == KeyCode::Up),
             KeyCode::Char(c) if !ctrl => {
                 self.insert_char(c);
@@ -715,6 +728,17 @@ impl App {
     fn reset_completion(&mut self) {
         self.comp_selected = 0;
         self.comp_prefix = None;
+    }
+
+    /// Shift+Tab: cycle the permission mode. Takes effect immediately, even
+    /// for tool calls later in the turn currently running.
+    fn cycle_mode(&mut self) {
+        self.cfg.mode.set(self.cfg.mode.get().next());
+    }
+
+    /// Current permission mode, for the status bar.
+    pub fn mode(&self) -> crate::config::Mode {
+        self.cfg.mode.get()
     }
 
     /// Scroll the transcript. The view is anchored to a fixed top line while

@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 /// Tool names that require user approval before running.
 pub const DESTRUCTIVE_TOOLS: &[&str] = &[Bash::NAME, WriteFile::NAME, EditFile::NAME];
 
+/// Tools that only write files (auto-approved in edit mode).
+pub const WRITE_TOOLS: &[&str] = &[WriteFile::NAME, EditFile::NAME];
+
 use rig::tool::Tool as _;
 
 /// Common error type for all tools. The message is fed back to the model.

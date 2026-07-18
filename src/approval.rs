@@ -11,7 +11,7 @@ use rig::completion::CompletionModel;
 use rig::tool::Tool;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::{ApprovalRules, Decision};
+use crate::config::{ApprovalRules, Decision, ModeHandle};
 use crate::event::AgentEvent;
 use crate::tools::{Bash, DESTRUCTIVE_TOOLS};
 
@@ -19,11 +19,22 @@ pub struct ApprovalHook {
     tx: mpsc::Sender<AgentEvent>,
     rules: ApprovalRules,
     yolo: bool,
+    mode: ModeHandle,
 }
 
 impl ApprovalHook {
-    pub fn new(tx: mpsc::Sender<AgentEvent>, rules: ApprovalRules, yolo: bool) -> Self {
-        Self { tx, rules, yolo }
+    pub fn new(
+        tx: mpsc::Sender<AgentEvent>,
+        rules: ApprovalRules,
+        yolo: bool,
+        mode: ModeHandle,
+    ) -> Self {
+        Self {
+            tx,
+            rules,
+            yolo,
+            mode,
+        }
     }
 }
 
@@ -51,10 +62,13 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
         };
         let command = bash_command(tool_name, args);
         let destructive = DESTRUCTIVE_TOOLS.contains(&tool_name);
-        match self
-            .rules
-            .decide(self.yolo, tool_name, command.as_deref(), destructive)
-        {
+        match self.rules.decide(
+            self.yolo,
+            self.mode.get(),
+            tool_name,
+            command.as_deref(),
+            destructive,
+        ) {
             Decision::Allow => return Flow::Continue,
             Decision::Deny(reason) => return Flow::Skip { reason },
             Decision::Ask => {}
