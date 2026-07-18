@@ -378,10 +378,130 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
 
 // ----- approval modal ------------------------------------------------------
 
+/// One logical (pre-wrap) line of the approval dialog body.
+struct BodyLine {
+    text: String,
+    style: Style,
+}
+
+impl BodyLine {
+    fn new(text: impl Into<String>, style: Style) -> Self {
+        Self {
+            text: text.into(),
+            style,
+        }
+    }
+
+    fn plain(text: impl Into<String>) -> Self {
+        Self::new(text, Style::new())
+    }
+}
+
+/// Render tool arguments as something a human can review at a glance:
+/// bash as the command line, edit_file as a diff, write_file as path plus
+/// content. Unknown tools fall back to `key: value` lines instead of JSON.
+fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(args) else {
+        return vec![BodyLine::plain(args)];
+    };
+    let get = |k: &str| value.get(k).and_then(|v| v.as_str());
+
+    if name == "bash"
+        && let Some(cmd) = get("command")
+    {
+        return cmd
+            .lines()
+            .enumerate()
+            .map(|(i, l)| BodyLine::plain(format!("{}{l}", if i == 0 { "$ " } else { "  " })))
+            .collect();
+    }
+    if name == "write_file"
+        && let Some(path) = get("path")
+    {
+        let mut out = vec![BodyLine::new(format!("path: {path}"), Style::new().bold())];
+        if let Some(content) = get("content") {
+            out.push(BodyLine::new(
+                format!("content ({} lines):", content.lines().count().max(1)),
+                Style::new().fg(Color::DarkGray),
+            ));
+            out.extend(
+                content
+                    .lines()
+                    .map(|l| BodyLine::new(l, Style::new().fg(Color::Gray))),
+            );
+        }
+        return out;
+    }
+    if name == "edit_file"
+        && let Some(path) = get("path")
+    {
+        let mut out = vec![BodyLine::new(format!("path: {path}"), Style::new().bold())];
+        for l in get("old_string").unwrap_or_default().lines() {
+            out.push(BodyLine::new(format!("- {l}"), Style::new().fg(Color::Red)));
+        }
+        for l in get("new_string").unwrap_or_default().lines() {
+            out.push(BodyLine::new(
+                format!("+ {l}"),
+                Style::new().fg(Color::Green),
+            ));
+        }
+        return out;
+    }
+
+    // Generic: one `key: value` per line; string values verbatim (multiline
+    // values continue indented), everything else as compact JSON.
+    if let Some(map) = value.as_object() {
+        let mut out = Vec::new();
+        for (k, v) in map {
+            let text = match v.as_str() {
+                Some(s) => s.to_string(),
+                None => v.to_string(),
+            };
+            let mut rest = text.lines();
+            out.push(BodyLine::plain(format!(
+                "{k}: {}",
+                rest.next().unwrap_or_default()
+            )));
+            for l in rest {
+                out.push(BodyLine::plain(format!("   {l}")));
+            }
+        }
+        if out.is_empty() {
+            out.push(BodyLine::plain("(no arguments)"));
+        }
+        return out;
+    }
+    vec![BodyLine::plain(value.to_string())]
+}
+
 fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     let screen = f.area();
-    let width = screen.width.saturating_sub(6).clamp(20, 72);
-    let height = screen.height.saturating_sub(4).clamp(7, 14);
+    let width = screen.width.saturating_sub(6).clamp(20, 80);
+    let inner_width = width.saturating_sub(4) as usize;
+
+    // Wrap the body first so the dialog can size itself to the content.
+    let mut body: Vec<Line> = Vec::new();
+    for bl in approval_body(&pending.name, &pending.args) {
+        let style = bl.style;
+        push_wrapped(&mut body, &bl.text, inner_width, |_, s| {
+            Line::from(Span::styled(s, style))
+        });
+    }
+
+    // Chrome rows: borders (2) + title + blank + blank + [y]/[n] = 6. The
+    // body budget accounts for all of them so the key hints always fit.
+    let max_height = screen.height.saturating_sub(4).clamp(7, 20);
+    let height = (body.len() as u16 + 6).clamp(7, max_height);
+    let budget = height.saturating_sub(6) as usize;
+    if body.len() > budget {
+        let hidden = body.len() + 1 - budget;
+        body.truncate(budget.saturating_sub(1));
+        body.push(Line::from(Span::styled(
+            format!("… (+{hidden} more lines)"),
+            Style::new().fg(Color::DarkGray),
+        )));
+    }
+
     let area = Rect {
         x: screen.x + (screen.width.saturating_sub(width)) / 2,
         y: screen.y + (screen.height.saturating_sub(height)) / 2,
@@ -389,11 +509,6 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         height,
     };
 
-    let args_pretty = serde_json::from_str::<serde_json::Value>(&pending.args)
-        .and_then(|v| serde_json::to_string_pretty(&v))
-        .unwrap_or_else(|_| pending.args.clone());
-
-    let inner_width = width.saturating_sub(4) as usize;
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
             format!("Tool: {}", pending.name),
@@ -401,18 +516,6 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         )),
         Line::default(),
     ];
-    let body_budget = height.saturating_sub(5) as usize;
-    let mut body: Vec<Line> = Vec::new();
-    push_wrapped(&mut body, &args_pretty, inner_width, |_, s| {
-        Line::from(Span::styled(s, Style::new().fg(Color::Gray)))
-    });
-    if body.len() > body_budget {
-        body.truncate(body_budget.saturating_sub(1));
-        body.push(Line::from(Span::styled(
-            "…",
-            Style::new().fg(Color::DarkGray),
-        )));
-    }
     lines.extend(body);
     lines.push(Line::default());
     lines.push(Line::from(vec![
@@ -427,4 +530,61 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         .border_style(Style::new().fg(Color::Yellow));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn texts(name: &str, args: &str) -> Vec<String> {
+        approval_body(name, args)
+            .into_iter()
+            .map(|b| b.text)
+            .collect()
+    }
+
+    #[test]
+    fn bash_args_render_as_a_command_line() {
+        assert_eq!(
+            texts("bash", r#"{"command":"cargo build"}"#),
+            vec!["$ cargo build"]
+        );
+        assert_eq!(
+            texts("bash", "{\"command\":\"first\\nsecond\"}"),
+            vec!["$ first", "  second"]
+        );
+    }
+
+    #[test]
+    fn edit_file_renders_a_diff() {
+        let args = r#"{"path":"src/a.rs","old_string":"old","new_string":"new1\nnew2"}"#;
+        assert_eq!(
+            texts("edit_file", args),
+            vec!["path: src/a.rs", "- old", "+ new1", "+ new2"]
+        );
+    }
+
+    #[test]
+    fn write_file_shows_path_and_content() {
+        let args = r#"{"path":"a.txt","content":"hello\nworld"}"#;
+        let t = texts("write_file", args);
+        assert_eq!(t[0], "path: a.txt");
+        assert_eq!(t[1], "content (2 lines):");
+        assert_eq!(&t[2..], ["hello", "world"]);
+    }
+
+    #[test]
+    fn generic_tools_render_key_value_lines() {
+        assert_eq!(
+            texts("web_fetch", r#"{"url":"https://example.com"}"#),
+            vec!["url: https://example.com"]
+        );
+        assert_eq!(texts("mystery", r#"{"n":3}"#), vec!["n: 3"]);
+        assert_eq!(texts("mystery", "{}"), vec!["(no arguments)"]);
+    }
+
+    #[test]
+    fn invalid_json_falls_back_to_raw_text() {
+        assert_eq!(texts("bash", "not json"), vec!["not json"]);
+    }
 }
