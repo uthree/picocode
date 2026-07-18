@@ -18,8 +18,9 @@ ignore = "0.4"
 textwrap = "0.16"
 unicode-width = "0.2"
 html2text = "0.17"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "charset"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "charset", "query"] }
 toml = "0.9"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

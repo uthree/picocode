@@ -11,8 +11,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage in the status bar. Model reasoning is collapsed by
   default (`Ctrl+T` to expand)
-- **7 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
-  `edit_file` / `bash` / `web_fetch`
+- **8 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
+  `edit_file` / `bash` / `web_search` / `web_fetch`
 - **Approval flow**: destructive operations (bash, file writes) ask for y/n
   confirmation; reads run automatically; configurable allow/deny rules
 - **Multi-turn**: keeps conversation history and tool results across turns
@@ -24,6 +24,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   the output is shown and recorded into the model's context
 - **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
   prompt automatically
+- **Web search**: pluggable providers — DuckDuckGo (default, no key), a
+  self-hosted SearXNG instance, or the Brave Search API
 
 ## Setup (local LLM)
 
@@ -120,6 +122,13 @@ allow_tools = ["write_file"]      # tools that run without a prompt
 deny_tools  = ["web_fetch"]       # tools that are always denied (wins over --yolo)
 allow_bash  = ["cargo", "git status", "ls"]
 deny_bash   = ["sudo", "rm -rf"]
+
+[search]
+provider = "duckduckgo"           # default; no API key needed
+max_results = 5
+# provider = "searxng"            # self-hosted metasearch
+# base_url = "http://localhost:8888"   # required; enable `format: json` server-side
+# provider = "brave"              # Brave Search API; needs BRAVE_API_KEY
 ```
 
 Bash rules split the command at `&&` `||` `;` `|` `&` and newlines, then match

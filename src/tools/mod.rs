@@ -6,6 +6,7 @@ mod fetch;
 mod grep;
 mod list;
 mod read;
+mod search;
 mod write;
 
 pub use bash::{Bash, BashArgs};
@@ -14,6 +15,7 @@ pub use fetch::WebFetch;
 pub use grep::Grep;
 pub use list::ListFiles;
 pub use read::ReadFile;
+pub use search::WebSearch;
 pub use write::WriteFile;
 
 use std::path::{Path, PathBuf};

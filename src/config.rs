@@ -72,6 +72,8 @@ struct FileConfig {
     system_prompt: Option<String>,
     #[serde(default)]
     approval: ApprovalRules,
+    #[serde(default)]
+    search: SearchFileConfig,
 }
 
 /// One switchable `[[models]]` entry in the config file.
@@ -117,6 +119,66 @@ fn pick_entry<'a>(models: &'a [ModelEntry], default: Option<&str>) -> Option<&'a
         Some(d) => models.iter().find(|m| m.name == d),
         None => models.first(),
     }
+}
+
+// ----- web search -----------------------------------------------------------
+
+/// Web search backends selectable in the `[search]` config section.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchProvider {
+    /// DuckDuckGo's HTML endpoint. No API key needed (default).
+    #[default]
+    Duckduckgo,
+    /// A SearXNG instance; requires `base_url` (and `format: json` enabled
+    /// server-side).
+    Searxng,
+    /// Brave Search API; requires the `BRAVE_API_KEY` environment variable.
+    Brave,
+}
+
+/// `[search]` section of the config file.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchFileConfig {
+    provider: Option<SearchProvider>,
+    /// Overrides the provider's endpoint (required for searxng).
+    base_url: Option<String>,
+    max_results: Option<usize>,
+}
+
+/// Search settings after defaults and validation.
+#[derive(Clone, Debug)]
+pub struct SearchConfig {
+    pub provider: SearchProvider,
+    pub base_url: Option<String>,
+    pub max_results: usize,
+    /// API key for providers that need one (brave).
+    pub api_key: Option<String>,
+}
+
+fn resolve_search(
+    file: SearchFileConfig,
+    brave_key: Option<String>,
+) -> anyhow::Result<SearchConfig> {
+    let provider = file.provider.unwrap_or_default();
+    if provider == SearchProvider::Searxng && file.base_url.is_none() {
+        anyhow::bail!("[search] provider \"searxng\" requires base_url in the config");
+    }
+    let api_key = match provider {
+        SearchProvider::Brave => Some(brave_key.ok_or_else(|| {
+            anyhow::anyhow!(
+                "[search] provider \"brave\" requires the BRAVE_API_KEY environment variable"
+            )
+        })?),
+        _ => None,
+    };
+    Ok(SearchConfig {
+        provider,
+        base_url: file.base_url,
+        max_results: file.max_results.unwrap_or(5).clamp(1, 20),
+        api_key,
+    })
 }
 
 /// Auto-approval / auto-denial rules for tool calls.
@@ -284,6 +346,11 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         instructions: project.instructions.or(global.instructions),
         system_prompt: project.system_prompt.or(global.system_prompt),
         approval,
+        search: SearchFileConfig {
+            provider: project.search.provider.or(global.search.provider),
+            base_url: project.search.base_url.or(global.search.base_url),
+            max_results: project.search.max_results.or(global.search.max_results),
+        },
     }
 }
 
@@ -322,6 +389,7 @@ pub struct Config {
     /// Working directory the tools operate in.
     pub root: PathBuf,
     pub approval: ApprovalRules,
+    pub search: SearchConfig,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Instruction files that were found: (file name, content).
@@ -385,6 +453,7 @@ impl Config {
             .instructions
             .unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
         let instructions = load_instructions(&root, &instruction_names);
+        let search = resolve_search(file.search, std::env::var("BRAVE_API_KEY").ok())?;
 
         Ok(Self {
             provider,
@@ -396,6 +465,7 @@ impl Config {
             max_turns: args.max_turns,
             root,
             approval: file.approval,
+            search,
             system_prompt: file.system_prompt,
             instructions,
             config_files,
@@ -552,6 +622,51 @@ mod tests {
             merged.system_prompt.as_deref(),
             Some("You are a project bot in {root}.")
         );
+    }
+
+    #[test]
+    fn search_section_parses_merges_and_validates() {
+        let global: FileConfig = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            max_results = 3
+            "#,
+        )
+        .unwrap();
+        let project: FileConfig = toml::from_str(
+            r#"
+            [search]
+            provider = "searxng"
+            base_url = "http://localhost:8888"
+            "#,
+        )
+        .unwrap();
+        let merged = merge(global, project);
+        assert_eq!(merged.search.provider, Some(SearchProvider::Searxng));
+        assert_eq!(merged.search.max_results, Some(3));
+
+        let resolved = resolve_search(merged.search, None).unwrap();
+        assert_eq!(resolved.provider, SearchProvider::Searxng);
+        assert_eq!(resolved.base_url.as_deref(), Some("http://localhost:8888"));
+        assert_eq!(resolved.max_results, 3);
+
+        // Defaults: duckduckgo, 5 results.
+        let default = resolve_search(SearchFileConfig::default(), None).unwrap();
+        assert_eq!(default.provider, SearchProvider::Duckduckgo);
+        assert_eq!(default.max_results, 5);
+
+        // searxng without base_url is a config error.
+        let bad: FileConfig = toml::from_str("[search]\nprovider = \"searxng\"").unwrap();
+        assert!(resolve_search(bad.search, None).is_err());
+
+        // brave requires an API key from the environment.
+        let brave: FileConfig = toml::from_str("[search]\nprovider = \"brave\"").unwrap();
+        assert!(resolve_search(brave.search.clone(), None).is_err());
+        let ok = resolve_search(brave.search, Some("k".into())).unwrap();
+        assert_eq!(ok.api_key.as_deref(), Some("k"));
+
+        assert!(toml::from_str::<FileConfig>("[search]\nproviderr = \"x\"").is_err());
     }
 
     #[test]

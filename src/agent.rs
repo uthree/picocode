@@ -43,6 +43,7 @@ pub fn spawn(
                 .tool(tools::EditFile::new(root.clone()))
                 .tool(tools::Bash::new(root))
                 .tool(tools::WebFetch::new())
+                .tool(tools::WebSearch::new(cfg.search.clone()))
                 .max_tokens(8192)
                 .build();
             // A second, tool-less agent used by /compact: it only ever needs
@@ -113,7 +114,8 @@ fn default_system_prompt(cfg: &Config) -> String {
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
          \n\
-         Available tools: read_file, list_files, grep, write_file, edit_file, bash, web_fetch.\n\
+         Available tools: read_file, list_files, grep, write_file, edit_file, bash, \
+         web_search, web_fetch.\n\
          \n\
          Workflow:\n\
          1. Explore first: use list_files and grep to locate relevant files, and read_file \
@@ -124,7 +126,8 @@ fn default_system_prompt(cfg: &Config) -> String {
          \n\
          Rules:\n\
          - Use the tools instead of guessing about the project.\n\
-         - Use web_fetch to read a URL the user shares or online documentation you need.\n\
+         - Use web_search to look things up on the web, and web_fetch to read a URL the \
+         user shares or a search result you want in full.\n\
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display()
@@ -350,7 +353,7 @@ fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApprovalRules, Provider};
+    use crate::config::{ApprovalRules, Provider, SearchConfig, SearchProvider};
     use std::path::PathBuf;
 
     fn test_cfg() -> Config {
@@ -364,6 +367,12 @@ mod tests {
             max_turns: 50,
             root: PathBuf::from("/tmp/proj"),
             approval: ApprovalRules::default(),
+            search: SearchConfig {
+                provider: SearchProvider::Duckduckgo,
+                base_url: None,
+                max_results: 5,
+                api_key: None,
+            },
             system_prompt: None,
             instructions: Vec::new(),
             config_files: Vec::new(),
