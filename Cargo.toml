@@ -1,0 +1,22 @@
+[package]
+name = "picocode"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rig = "0.40"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "fs", "time"] }
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+anyhow = "1"
+thiserror = "2"
+regex = "1"
+ignore = "0.4"
+textwrap = "0.16"
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
