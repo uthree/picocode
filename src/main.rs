@@ -61,6 +61,7 @@ async fn run_smoke(
             AgentEvent::Compacted { messages, summary } => {
                 println!("\n[compacted] {messages} messages\n{summary}");
             }
+            AgentEvent::ShellOutput { output } => println!("[shell]\n{output}"),
             AgentEvent::Error(e) => println!("\n[error] {e}"),
             AgentEvent::TurnComplete => break,
         }

@@ -141,6 +141,12 @@ async fn worker<M>(
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             WorkerCmd::Clear => history.clear(),
+            WorkerCmd::ShellRecord { command, output } => {
+                history.push(Message::user(format!(
+                    "I ran this shell command myself in the working directory:\n\
+                     $ {command}\n\nOutput:\n{output}"
+                )));
+            }
             WorkerCmd::TakeHistory(tx) => {
                 let _ = tx.send(history.clone());
             }

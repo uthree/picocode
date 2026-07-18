@@ -8,7 +8,7 @@ mod list;
 mod read;
 mod write;
 
-pub use bash::Bash;
+pub use bash::{Bash, BashArgs};
 pub use edit::EditFile;
 pub use fetch::WebFetch;
 pub use grep::Grep;

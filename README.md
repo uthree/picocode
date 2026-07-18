@@ -20,6 +20,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   summary to free context
 - **Model switching**: define a model roster in the config file and switch at
   runtime with `/model <name>` — the conversation carries over
+- **Direct shell**: prefix the input with `!` to run a shell command yourself;
+  the output is shown and recorded into the model's context
 - **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
   prompt automatically
 
@@ -59,6 +61,7 @@ Keys inside the TUI:
 | `y` / `n` | Approve / deny a tool call |
 | `PgUp` / `PgDn` | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
+| `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
 | `/model` | List models; `/model <name>` switches (history carries over) |
 | `/compact` | Compact the conversation into a summary |
 | `/clear` | Clear conversation history |

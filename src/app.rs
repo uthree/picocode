@@ -289,6 +289,7 @@ impl App {
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
+            _ if text.starts_with('!') => self.run_shell(text),
             _ => {
                 self.close_blocks();
                 self.push(EntryKind::User, text.clone());
@@ -300,6 +301,40 @@ impl App {
                 }
             }
         }
+    }
+
+    /// `!<command>`: run a shell command directly (no model, no approval —
+    /// the user typed it). The output is shown and recorded in the model's
+    /// history so it can be referred to in the next prompt.
+    fn run_shell(&mut self, text: String) {
+        let command = text[1..].trim().to_string();
+        if command.is_empty() {
+            self.push(EntryKind::Error, "Empty shell command".to_string());
+            return;
+        }
+        self.close_blocks();
+        self.push(EntryKind::User, text);
+        self.running += 1;
+        self.follow = true;
+
+        let root = self.cfg.root.clone();
+        let event_tx = self.event_tx.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        tokio::spawn(async move {
+            use rig::tool::Tool;
+            let output = match crate::tools::Bash::new(root)
+                .call(crate::tools::BashArgs { command: command.clone() })
+                .await
+            {
+                Ok(out) => out,
+                Err(e) => format!("error: {e}"),
+            };
+            let _ = cmd_tx
+                .send(WorkerCmd::ShellRecord { command, output: output.clone() })
+                .await;
+            let _ = event_tx.send(AgentEvent::ShellOutput { output }).await;
+            let _ = event_tx.send(AgentEvent::TurnComplete).await;
+        });
     }
 
     /// `/model` with no argument: list the configured model entries.
@@ -504,6 +539,10 @@ impl App {
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
                 self.out_tokens += output;
+            }
+            AgentEvent::ShellOutput { output } => {
+                self.close_blocks();
+                self.push(EntryKind::ToolOut, output);
             }
             AgentEvent::Compacted { messages, summary } => {
                 if messages == 0 {

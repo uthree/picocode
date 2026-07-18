@@ -13,7 +13,7 @@ const MAX_OUTPUT_BYTES: usize = 20_000;
 
 #[derive(Deserialize)]
 pub struct BashArgs {
-    command: String,
+    pub command: String,
 }
 
 pub struct Bash {

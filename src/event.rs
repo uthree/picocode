@@ -24,6 +24,8 @@ pub enum AgentEvent {
     /// The conversation history was compacted into a summary.
     /// `messages == 0` means there was nothing to compact.
     Compacted { messages: usize, summary: String },
+    /// Output of a user-typed `!` shell command.
+    ShellOutput { output: String },
     /// The current run finished (successfully or not).
     TurnComplete,
     /// An error occurred during the run.
@@ -38,6 +40,9 @@ pub enum WorkerCmd {
     Clear,
     /// Summarize the history and replace it with the summary.
     Compact,
+    /// Record a user-run `!` shell command and its output in the history so
+    /// the model has it as context.
+    ShellRecord { command: String, output: String },
     /// Send a copy of the history back (used when switching models).
     TakeHistory(oneshot::Sender<Vec<Message>>),
     /// Replace the history (seeds a freshly spawned worker on model switch).
