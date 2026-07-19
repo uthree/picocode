@@ -196,16 +196,27 @@ pub enum Mode {
     /// Writes and commands are auto-denied: the model investigates with the
     /// read-only tools and presents a plan instead of acting.
     Plan,
+    /// Everything runs without confirmation (deny rules still apply). Meant
+    /// for isolated environments (containers); only reachable via the
+    /// explicit /bypass command, never via Shift+Tab.
+    Bypass,
 }
 
 impl Mode {
-    /// Cycle order for Shift+Tab. Future modes only need a variant, an entry
-    /// here, a label, and their branch in `ApprovalRules::decide`.
-    pub const ALL: &[Mode] = &[Mode::ReadOnly, Mode::Edit, Mode::Plan];
+    /// Every mode, in `ModeHandle` storage order.
+    pub const ALL: &[Mode] = &[Mode::ReadOnly, Mode::Edit, Mode::Plan, Mode::Bypass];
+
+    /// Shift+Tab cycle. Bypass is deliberately excluded: it can only be
+    /// entered with /bypass, and Shift+Tab from it returns to read-only.
+    /// Future modes need a variant, an ALL entry, an entry here (unless
+    /// command-only), a label, and their branch in `ApprovalRules::decide`.
+    pub const CYCLE: &[Mode] = &[Mode::ReadOnly, Mode::Edit, Mode::Plan];
 
     pub fn next(self) -> Mode {
-        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+        match Self::CYCLE.iter().position(|m| *m == self) {
+            Some(i) => Self::CYCLE[(i + 1) % Self::CYCLE.len()],
+            None => Self::CYCLE[0],
+        }
     }
 
     pub fn label(self) -> &'static str {
@@ -213,6 +224,7 @@ impl Mode {
             Mode::ReadOnly => "read-only",
             Mode::Edit => "edit",
             Mode::Plan => "plan",
+            Mode::Bypass => "bypass",
         }
     }
 }
@@ -299,7 +311,8 @@ impl ApprovalRules {
         if !destructive {
             return Decision::Allow;
         }
-        if yolo {
+        // --yolo and bypass mode run everything (deny rules already checked).
+        if yolo || mode == Mode::Bypass {
             return Decision::Allow;
         }
         // Plan mode: destructive calls are auto-denied (with a reason that
@@ -731,11 +744,41 @@ mod tests {
         assert_eq!(Mode::Edit.next(), Mode::Plan);
         assert_eq!(Mode::Plan.next(), Mode::ReadOnly);
         assert_eq!(Mode::ReadOnly.label(), "read-only");
+        // Bypass is not in the Shift+Tab cycle: never entered by next(),
+        // and leaving it lands on read-only.
+        assert!(!Mode::CYCLE.contains(&Mode::Bypass));
+        assert_eq!(Mode::Bypass.next(), Mode::ReadOnly);
 
         let handle = ModeHandle::new(Mode::ReadOnly);
         let clone = handle.clone();
         handle.set(handle.get().next());
         assert_eq!(clone.get(), Mode::Edit);
+        // The handle can still store bypass (set via the /bypass command).
+        handle.set(Mode::Bypass);
+        assert_eq!(clone.get(), Mode::Bypass);
+    }
+
+    #[test]
+    fn bypass_mode_allows_everything_except_deny_rules() {
+        let r = ApprovalRules::default();
+        assert_eq!(
+            r.decide(false, Mode::Bypass, "write_file", None, true),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(false, Mode::Bypass, "bash", Some("rm -rf build"), true),
+            Decision::Allow
+        );
+        // Deny rules still win, exactly as they do over --yolo.
+        let d = rules(&[], &["web_fetch"], &[], &["sudo"]);
+        assert!(matches!(
+            d.decide(false, Mode::Bypass, "web_fetch", None, true),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            d.decide(false, Mode::Bypass, "bash", Some("sudo ls"), true),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]

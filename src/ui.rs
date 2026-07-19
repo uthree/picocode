@@ -183,6 +183,15 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     Line::from(Span::styled(format!("· {s}"), Style::new().fg(Color::Blue)))
                 });
             }
+            EntryKind::Warning => {
+                push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |i, s| {
+                    let prefix = if i == 0 { "⚠ " } else { "  " };
+                    Line::from(Span::styled(
+                        format!("{prefix}{s}"),
+                        Style::new().fg(Color::Yellow).bold(),
+                    ))
+                });
+            }
             EntryKind::Summary => {
                 lines.push(Line::default());
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
@@ -290,6 +299,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         crate::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
         crate::config::Mode::Edit => Style::new().fg(Color::Yellow),
         crate::config::Mode::Plan => Style::new().fg(Color::Blue),
+        crate::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
     };
     let mut left = vec![
         Span::raw(" "),

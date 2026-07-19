@@ -34,6 +34,13 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/compact", "Summarize history to free context"),
     ("/model", "List models or switch: /model <name>"),
     ("/resume", "Pick a saved session to resume"),
+    ("/read-only", "Mode: reads only, every write asks"),
+    ("/edit", "Mode: file writes run freely"),
+    ("/plan", "Mode: investigate and plan, writes blocked"),
+    (
+        "/bypass",
+        "Mode: run EVERYTHING unconfirmed (isolated envs)",
+    ),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -46,6 +53,8 @@ pub enum EntryKind {
     Tool,
     ToolOut,
     Notice,
+    /// A prominent warning (e.g. entering bypass mode).
+    Warning,
     /// The conversation summary produced by /compact.
     Summary,
     Error,
@@ -408,6 +417,10 @@ impl App {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
             }
+            "/read-only" => self.set_mode(crate::config::Mode::ReadOnly),
+            "/edit" => self.set_mode(crate::config::Mode::Edit),
+            "/plan" => self.set_mode(crate::config::Mode::Plan),
+            "/bypass" => self.set_mode(crate::config::Mode::Bypass),
             "/model" => self.list_models(),
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
@@ -764,6 +777,23 @@ impl App {
 
     /// Shift+Tab: cycle the permission mode. Takes effect immediately, even
     /// for tool calls later in the turn currently running.
+    /// Explicit mode switch via the /read-only, /edit, /plan and /bypass
+    /// commands. Bypass is only reachable this way and comes with a warning.
+    fn set_mode(&mut self, mode: crate::config::Mode) {
+        self.cfg.mode.set(mode);
+        if mode == crate::config::Mode::Bypass {
+            self.push(
+                EntryKind::Warning,
+                "bypass mode: EVERY tool call now runs without confirmation (deny rules \
+                 still apply). Meant for isolated environments such as containers. \
+                 Shift+Tab or /read-only to leave."
+                    .to_string(),
+            );
+        } else {
+            self.push(EntryKind::Notice, format!("Mode: {}", mode.label()));
+        }
+    }
+
     fn cycle_mode(&mut self) {
         self.cfg.mode.set(self.cfg.mode.get().next());
     }

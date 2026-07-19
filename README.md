@@ -74,6 +74,7 @@ Keys inside the TUI:
 | `Ctrl+T` | Expand / collapse model reasoning |
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
 | `/model` | List models; `/model <name>` switches (history carries over) |
+| `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly (see below) |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
@@ -85,13 +86,15 @@ on macOS ones).
 
 ## Permission modes
 
-`Shift+Tab` cycles the permission mode, shown in the status bar:
+`Shift+Tab` cycles the permission mode, shown in the status bar; `/read-only`,
+`/edit`, `/plan` and `/bypass` switch to a specific mode directly:
 
 | Mode | Behavior |
 |---|---|
 | `read-only` (default) | Read tools run freely; **every** write or command asks for confirmation, even if allow-listed |
 | `edit` | `write_file` / `edit_file` run without asking; `bash` and other tools follow the `[approval]` config rules |
 | `plan` | Writes and commands are **auto-denied**: the model investigates with the read tools, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn; declining sends it back to planning |
+| `bypass` | **Everything runs without confirmation** (deny rules still apply). Meant for isolated environments such as containers. Not in the `Shift+Tab` cycle — only the explicit `/bypass` command enters it, with a warning; `Shift+Tab` leaves it for `read-only` |
 
 Deny rules and `--yolo` take precedence over the mode. Full precedence:
 deny rules > `--yolo` > mode > allow rules > ask. A switch takes effect
