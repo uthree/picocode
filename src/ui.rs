@@ -322,39 +322,13 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         crate::config::Mode::Plan => Style::new().fg(Color::Blue),
         crate::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
     };
-    // Context-window usage gauge, colored by pressure.
-    const GAUGE_CELLS: usize = 8;
-    let ratio = app.context_ratio();
-    let filled = (ratio.min(1.0) * GAUGE_CELLS as f64).round() as usize;
-    let gauge_color = if ratio >= 0.85 {
-        Color::Red
-    } else if ratio >= 0.6 {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
-
     let mut left = vec![
         Span::raw(" "),
         Span::styled(format!("[{}]", mode.label()), mode_style),
         Span::raw("  "),
-        Span::styled("▰".repeat(filled), Style::new().fg(gauge_color)),
-        Span::styled(
-            "▱".repeat(GAUGE_CELLS - filled),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            format!(" {:>3}%", (ratio * 100.0).round().min(999.0) as u64),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::raw("  "),
         indicator,
     ];
     if app.running > 0 {
-        left.push(Span::styled(
-            format!("  ↑ {} ↓ {}", app.ctx_tokens, app.turn_out + app.delta_est),
-            Style::new().fg(Color::DarkGray),
-        ));
         left.push(Span::styled("  Esc stop", Style::new().fg(Color::DarkGray)));
     }
     if !app.follow {
@@ -363,17 +337,50 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::Yellow),
         ));
     }
-    let right = Line::from(vec![
+
+    // Context-window usage: a flat tqdm-style bar (eighth-block resolution),
+    // colored by pressure.
+    const GAUGE_CELLS: usize = 10;
+    const PARTIALS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let ratio = app.context_ratio();
+    let eighths = (ratio.min(1.0) * (GAUGE_CELLS * 8) as f64).round() as usize;
+    let (full, rem) = (eighths / 8, eighths % 8);
+    let bar = format!("{}{}", "█".repeat(full), PARTIALS[rem]);
+    let rest = " ".repeat(GAUGE_CELLS - full - usize::from(rem > 0));
+    let gauge_color = if ratio >= 0.85 {
+        Color::Red
+    } else if ratio >= 0.6 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    let dim = Style::new().fg(Color::DarkGray);
+
+    // Right block: [↑ prefill ↓ decode while running] gauge % model.
+    let mut right = vec![
         // Leading gap so a truncated left side never touches the right block.
         Span::raw(" "),
-        Span::styled(app.model_label.clone(), Style::new().fg(Color::Magenta)),
-        Span::raw("  "),
-        Span::styled(
-            format!("ctx {} · out {}", app.ctx_tokens, app.out_tokens),
-            Style::new().fg(Color::DarkGray),
-        ),
-        Span::raw(" "),
-    ]);
+    ];
+    if app.running > 0 {
+        right.push(Span::styled(
+            format!("↑ {} ↓ {}  ", app.ctx_tokens, app.turn_out + app.delta_est),
+            dim,
+        ));
+    }
+    right.push(Span::styled(bar, Style::new().fg(gauge_color)));
+    right.push(Span::styled(rest, dim));
+    right.push(Span::styled("▏", dim));
+    right.push(Span::styled(
+        format!("{:>3}%", (ratio * 100.0).round().min(999.0) as u64),
+        dim,
+    ));
+    right.push(Span::raw("  "));
+    right.push(Span::styled(
+        app.model_label.clone(),
+        Style::new().fg(Color::Magenta),
+    ));
+    right.push(Span::raw(" "));
+    let right = Line::from(right);
     let right_width = (right.width() as u16).min(area.width);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);

@@ -9,10 +9,10 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 ## Features
 
 - **TUI chat**: streaming output, scrolling that stays put while the model is
-  generating, token usage in the status bar — a context-window gauge
-  (green/yellow/red by pressure) plus a live `↑ prefill ↓ decode` counter
-  while generating. Model reasoning is collapsed by default (`Ctrl+T` to
-  expand)
+  generating, token usage on the right of the status bar — a flat
+  tqdm-style context-window gauge (green/yellow/red by pressure) plus a live
+  `↑ prefill ↓ decode` counter while generating. Model reasoning is collapsed
+  by default (`Ctrl+T` to expand)
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted

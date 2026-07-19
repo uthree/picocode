@@ -124,8 +124,6 @@ pub struct App {
     pub question: Option<PendingQuestion>,
     /// Context size (input tokens) of the latest completion request.
     pub ctx_tokens: u64,
-    /// Total output tokens across the session.
-    pub out_tokens: u64,
     /// Output tokens reported for the turn in progress.
     pub turn_out: u64,
     /// Streamed deltas since the last usage report — a live estimate of
@@ -174,7 +172,6 @@ impl App {
             pending: None,
             question: None,
             ctx_tokens: 0,
-            out_tokens: 0,
             turn_out: 0,
             delta_est: 0,
             model_label: cfg.model_label(),
@@ -927,7 +924,6 @@ impl App {
             }
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
-                self.out_tokens += output;
                 // Snap the live estimate to the reported figure.
                 self.turn_out += output;
                 self.delta_est = 0;
