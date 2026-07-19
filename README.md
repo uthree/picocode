@@ -38,11 +38,12 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **Multi-turn**: keeps conversation history and tool results across turns
 - **Context compaction**: `/compact` replaces the history with an LLM-written
   summary to free context
-- **Model switching**: define a model roster in the config file and switch at
-  runtime with `/model <name>` — the conversation carries over. `/model` also
-  asks the provider which models it actually serves (Ollama `/api/tags`,
-  OpenAI-compatible `/v1/models`, Anthropic `/v1/models`) and any of those can
-  be switched to directly, no config entry needed
+- **Model switching**: `/model` opens a selection dialog listing the
+  configured `[[models]]` entries plus the models the provider actually
+  serves (Ollama `/api/tags`, OpenAI-compatible `/v1/models`, Anthropic
+  `/v1/models`) — pick with `↑`/`↓` and `Enter`; no config entry needed for
+  served models and the conversation carries over. `/model <name>` switches
+  directly
 - **Direct shell**: prefix the input with `!` to run a shell command yourself;
   the output is shown and recorded into the model's context
 - **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
@@ -93,7 +94,7 @@ Keys inside the TUI:
 | `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
-| `/model` | List configured models and the ones the provider serves; `/model <name>` switches (history carries over) |
+| `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly (see below) |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |

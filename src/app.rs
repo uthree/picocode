@@ -33,7 +33,7 @@ pub const LOGO: &str = r"            ███                                  
 pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
-    ("/model", "List models or switch: /model <name>"),
+    ("/model", "Pick a model (dialog) or switch: /model <name>"),
     ("/resume", "Pick a saved session to resume"),
     ("/read-only", "Mode: reads only, every write asks"),
     ("/edit", "Mode: file writes run freely"),
@@ -84,6 +84,23 @@ pub struct PendingApproval {
 /// State of the `/resume` selection dialog.
 pub struct SessionPicker {
     pub sessions: Vec<session::SessionSummary>,
+    pub selected: usize,
+}
+
+/// One row in the `/model` selection dialog.
+pub struct ModelChoice {
+    /// Name accepted by the model switch: a config entry name, or a model id
+    /// the provider reported serving.
+    pub name: String,
+    /// Display detail: the entry's label (and URL), or the provider name for
+    /// served ids.
+    pub detail: String,
+    pub active: bool,
+}
+
+/// State of the `/model` selection dialog.
+pub struct ModelPicker {
+    pub items: Vec<ModelChoice>,
     pub selected: usize,
 }
 
@@ -150,6 +167,8 @@ pub struct App {
     sessions_dir: Option<PathBuf>,
     /// Open `/resume` dialog, if any (captures the arrow/Enter keys).
     pub session_picker: Option<SessionPicker>,
+    /// Open `/model` dialog, if any (captures the arrow/Enter keys).
+    pub model_picker: Option<ModelPicker>,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
@@ -190,6 +209,7 @@ impl App {
             session_id: session::new_id(),
             sessions_dir: session::sessions_dir(&cfg.root),
             session_picker: None,
+            model_picker: None,
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -239,9 +259,9 @@ impl App {
                 "--yolo: skipping all tool approvals".to_string(),
             );
         }
-        // Fetch the provider's model list in the background so `/model <name>`
-        // can offer and validate provider models right away.
-        app.refresh_models(false);
+        // Fetch the provider's model list in the background so `/model` can
+        // offer and validate provider models right away.
+        app.refresh_models();
         app
     }
 
@@ -341,6 +361,23 @@ impl App {
                 KeyCode::Down => q.selected = (q.selected + 1) % count,
                 KeyCode::Enter => self.resolve_question(true),
                 KeyCode::Esc => self.resolve_question(false),
+                _ => {}
+            }
+            return;
+        }
+
+        // The /model dialog captures navigation keys while open.
+        if let Some(picker) = &mut self.model_picker {
+            let count = picker.items.len();
+            match key.code {
+                KeyCode::Up if count > 0 => picker.selected = (picker.selected + count - 1) % count,
+                KeyCode::Down if count > 0 => picker.selected = (picker.selected + 1) % count,
+                KeyCode::Enter if count > 0 => {
+                    let name = picker.items[picker.selected].name.clone();
+                    self.model_picker = None;
+                    self.switch_model(&name).await;
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.model_picker = None,
                 _ => {}
             }
             return;
@@ -498,7 +535,7 @@ impl App {
             "/edit" => self.set_mode(crate::config::Mode::Edit),
             "/plan" => self.set_mode(crate::config::Mode::Plan),
             "/bypass" => self.set_mode(crate::config::Mode::Bypass),
-            "/model" => self.list_models(),
+            "/model" => self.open_model_picker(),
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
                 self.switch_model(&name).await;
@@ -571,10 +608,9 @@ impl App {
     }
 
     /// Ask the provider for its model list in the background; the answer
-    /// arrives as a `ModelList` event. `announce` shows the outcome in the
-    /// transcript (used by `/model`); a silent refresh only updates the
-    /// switch candidates.
-    fn refresh_models(&self, announce: bool) {
+    /// arrives as a `ModelList` event, which updates the switch candidates
+    /// and an open `/model` dialog.
+    fn refresh_models(&self) {
         let provider = self.cfg.provider;
         let base = self.cfg.base_url.clone();
         let label = format!(
@@ -587,43 +623,54 @@ impl App {
             let result = crate::models::fetch(provider, base.as_deref())
                 .await
                 .map_err(|e| format!("{e:#}"));
-            let _ = event_tx
-                .send(AgentEvent::ModelList {
-                    label,
-                    announce,
-                    result,
-                })
-                .await;
+            let _ = event_tx.send(AgentEvent::ModelList { label, result }).await;
         });
     }
 
-    /// `/model` with no argument: list the configured model entries and query
-    /// the provider for the models it serves.
-    fn list_models(&mut self) {
-        if self.cfg.models.is_empty() {
+    /// `/model` with no argument: open the model-selection dialog with the
+    /// configured entries plus the provider's served models, and refresh the
+    /// latter in the background.
+    fn open_model_picker(&mut self) {
+        if self.running > 0 {
             self.push(
-                EntryKind::Notice,
-                format!(
-                    "No [[models]] entries in picocode.toml — using {}",
-                    self.model_label
-                ),
+                EntryKind::Error,
+                "Cannot switch models while a turn is running".to_string(),
             );
-        } else {
-            let mut out = String::from("Models (/model <name> to switch):");
-            for m in &self.cfg.models {
-                let marker = if self.cfg.active_model.as_deref() == Some(&m.name) {
-                    "▸"
-                } else {
-                    " "
-                };
-                out.push_str(&format!("\n{marker} {} — {}", m.name, m.label()));
-                if let Some(url) = &m.base_url {
-                    out.push_str(&format!(" @ {url}"));
-                }
-            }
-            self.push(EntryKind::Notice, out);
+            return;
         }
-        self.refresh_models(true);
+        let items = self.model_choices();
+        let selected = items.iter().position(|c| c.active).unwrap_or(0);
+        self.model_picker = Some(ModelPicker { items, selected });
+        self.refresh_models();
+    }
+
+    /// Rows for the `/model` dialog: configured entries first, then the
+    /// models the provider reported serving (minus ones an entry already
+    /// covers).
+    fn model_choices(&self) -> Vec<ModelChoice> {
+        model_choices(
+            &self.cfg.models,
+            self.cfg.active_model.as_deref(),
+            self.cfg.provider,
+            self.cfg.base_url.as_deref(),
+            &self.cfg.model,
+            &self.available_models,
+        )
+    }
+
+    /// Rebuild the open `/model` dialog after a fresh provider list arrived,
+    /// keeping the selection on the same item where possible.
+    fn rebuild_model_picker(&mut self) {
+        let Some(picker) = &self.model_picker else {
+            return;
+        };
+        let keep = picker.items.get(picker.selected).map(|c| c.name.clone());
+        let items = self.model_choices();
+        let selected = keep
+            .and_then(|k| items.iter().position(|c| c.name == k))
+            .or_else(|| items.iter().position(|c| c.active))
+            .unwrap_or(0);
+        self.model_picker = Some(ModelPicker { items, selected });
     }
 
     /// `/model <name>`: spawn a worker for the named entry — or for a model
@@ -721,7 +768,7 @@ impl App {
         );
         if endpoint_changed {
             self.available_models.clear();
-            self.refresh_models(false);
+            self.refresh_models();
         }
     }
 
@@ -1062,29 +1109,18 @@ impl App {
                 self.turn_out += output;
                 self.delta_est = 0;
             }
-            AgentEvent::ModelList {
-                label,
-                announce,
-                result,
-            } => match result {
+            AgentEvent::ModelList { label, result } => match result {
                 Ok(names) => {
-                    if announce {
-                        if names.is_empty() {
-                            self.push(EntryKind::Notice, format!("No models reported by {label}"));
-                        } else {
-                            self.push(
-                                EntryKind::Notice,
-                                format!(
-                                    "Available on {label} (/model <name> to use):\n{}",
-                                    names.join(", ")
-                                ),
-                            );
-                        }
-                    }
                     self.available_models = names;
+                    self.rebuild_model_picker();
                 }
                 Err(e) => {
-                    if announce {
+                    // Background refreshes fail silently; surface the error
+                    // when a /model dialog is waiting on the list.
+                    if let Some(picker) = &self.model_picker {
+                        if picker.items.is_empty() {
+                            self.model_picker = None;
+                        }
                         self.push(
                             EntryKind::Error,
                             format!("Could not list models on {label}: {e}"),
@@ -1293,6 +1329,47 @@ pub fn line_col(text: &str, cursor: usize) -> (usize, usize) {
     (row, col)
 }
 
+/// Rows for the `/model` dialog: the configured `[[models]]` entries first,
+/// then the models the provider reported serving, skipping ids an entry
+/// already covers (same name, or same model on the same endpoint).
+fn model_choices(
+    models: &[crate::config::ModelEntry],
+    active_model: Option<&str>,
+    provider: crate::config::Provider,
+    base_url: Option<&str>,
+    current_model: &str,
+    available: &[String],
+) -> Vec<ModelChoice> {
+    let mut items: Vec<ModelChoice> = models
+        .iter()
+        .map(|m| {
+            let mut detail = m.label();
+            if let Some(url) = &m.base_url {
+                detail.push_str(&format!(" @ {url}"));
+            }
+            ModelChoice {
+                name: m.name.clone(),
+                detail,
+                active: active_model == Some(m.name.as_str()),
+            }
+        })
+        .collect();
+    for id in available {
+        let covered = models.iter().any(|m| {
+            m.name == *id
+                || (m.model == *id && m.provider == provider && m.base_url.as_deref() == base_url)
+        });
+        if !covered {
+            items.push(ModelChoice {
+                name: id.clone(),
+                detail: crate::config::provider_name(provider).to_string(),
+                active: active_model.is_none() && current_model == id,
+            });
+        }
+    }
+    items
+}
+
 /// Char cursor for a (row, column) position, clamping the column to the
 /// line's length (used by Up/Down in the input box).
 pub fn cursor_at(text: &str, row: usize, col: usize) -> usize {
@@ -1330,6 +1407,56 @@ mod tests {
         assert_eq!(cursor_at(text, 2, 0), 13);
         // A row past the end lands at the end of the text.
         assert_eq!(cursor_at(text, 9, 0), text.chars().count());
+    }
+
+    #[test]
+    fn model_choices_merge_config_and_served_models() {
+        use crate::config::{ModelEntry, Provider};
+        let models = vec![
+            ModelEntry {
+                name: "local".into(),
+                provider: Provider::Ollama,
+                model: "qwen3:4b".into(),
+                base_url: None,
+                context_window: None,
+            },
+            ModelEntry {
+                name: "vllm".into(),
+                provider: Provider::Openai,
+                model: "qwen3:8b".into(),
+                base_url: Some("http://host:8000/v1".into()),
+                context_window: None,
+            },
+        ];
+        let available = vec!["qwen3:0.6b".into(), "qwen3:4b".into()];
+        let items = model_choices(
+            &models,
+            Some("local"),
+            Provider::Ollama,
+            None,
+            "qwen3:4b",
+            &available,
+        );
+        // Config entries first; qwen3:4b is covered by `local` on the same
+        // endpoint, so only qwen3:0.6b is appended.
+        let names: Vec<&str> = items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["local", "vllm", "qwen3:0.6b"]);
+        assert!(items[0].active);
+        assert!(!items[2].active);
+        assert_eq!(items[1].detail, "openai/qwen3:8b @ http://host:8000/v1");
+        assert_eq!(items[2].detail, "ollama");
+
+        // Ad-hoc selection: no active entry, the current model id is marked.
+        let items = model_choices(
+            &models,
+            None,
+            Provider::Ollama,
+            None,
+            "qwen3:0.6b",
+            &available,
+        );
+        assert!(items.iter().any(|c| c.name == "qwen3:0.6b" && c.active));
+        assert!(items.iter().all(|c| c.name != "local" || !c.active));
     }
 
     #[test]

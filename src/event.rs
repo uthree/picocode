@@ -30,12 +30,11 @@ pub enum AgentEvent {
     },
     /// Token usage for one completion request within the run.
     Usage { input: u64, output: u64 },
-    /// Result of asking the provider which models it serves (`/model`).
-    /// `label` names the queried endpoint; `announce` shows the outcome in
-    /// the transcript (a silent refresh only updates the switch candidates).
+    /// Result of asking the provider which models it serves. Updates the
+    /// `/model` switch candidates and the dialog when open; `label` names
+    /// the queried endpoint (for error reporting).
     ModelList {
         label: String,
-        announce: bool,
         result: Result<Vec<String>, String>,
     },
     /// The conversation history was compacted into a summary.

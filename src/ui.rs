@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, EntryKind, PendingApproval, PendingQuestion, SessionPicker};
+use crate::app::{App, EntryKind, ModelPicker, PendingApproval, PendingQuestion, SessionPicker};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -25,7 +25,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
 
-    if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
+    if app.pending.is_none()
+        && app.session_picker.is_none()
+        && app.model_picker.is_none()
+        && app.question.is_none()
+    {
         let matches = app.completions();
         if !matches.is_empty() {
             draw_completions(f, app, &matches, input);
@@ -33,6 +37,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(picker) = &app.session_picker {
         draw_session_picker(f, picker);
+    }
+    if let Some(picker) = &app.model_picker {
+        draw_model_picker(f, picker);
     }
     if let Some(q) = &app.question {
         draw_question(f, q);
@@ -275,8 +282,10 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::new().fg(Color::DarkGray));
     let inner_width = area.width.saturating_sub(2) as usize;
     let inner_height = (area.height.saturating_sub(2) as usize).max(1);
-    let dialog_open =
-        app.pending.is_some() || app.session_picker.is_some() || app.question.is_some();
+    let dialog_open = app.pending.is_some()
+        || app.session_picker.is_some()
+        || app.model_picker.is_some()
+        || app.question.is_some();
 
     if app.input.is_empty() {
         let hint = Paragraph::new(Span::styled(
@@ -476,6 +485,61 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
 
     let block = Block::bordered()
         .title(" Resume session ")
+        .border_style(Style::new().fg(Color::Cyan));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ----- model picker --------------------------------------------------------
+
+fn draw_model_picker(f: &mut Frame, picker: &ModelPicker) {
+    let screen = f.area();
+    let width = screen.width.saturating_sub(6).clamp(30, 70);
+    // rows + borders + hint line, capped to the screen.
+    let height = (picker.items.len().max(1) as u16 + 3)
+        .min(screen.height.saturating_sub(4))
+        .max(5);
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(width)) / 2,
+        y: screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    let inner_width = width.saturating_sub(2) as usize;
+    let visible = height.saturating_sub(3) as usize;
+    // Keep the selection inside the window when the list is long.
+    let offset = (picker.selected + 1).saturating_sub(visible);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if picker.items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " fetching the provider's model list…",
+            Style::new().fg(Color::DarkGray),
+        )));
+    }
+    for (i, item) in picker.items.iter().enumerate().skip(offset).take(visible) {
+        let marker = if item.active { "▸" } else { " " };
+        let text = format!("{marker} {} — {}", item.name, item.detail);
+        let text: String = text.chars().take(inner_width).collect();
+        lines.push(if i == picker.selected {
+            Line::from(Span::styled(
+                format!("{text:<inner_width$}"),
+                Style::new().fg(Color::Black).bg(Color::Cyan),
+            ))
+        } else if item.active {
+            Line::from(Span::styled(text, Style::new().fg(Color::Cyan)))
+        } else {
+            Line::from(Span::raw(text))
+        });
+    }
+    lines.push(Line::from(Span::styled(
+        " ↑↓ select · Enter switch · Esc cancel",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let block = Block::bordered()
+        .title(" Select model ")
         .border_style(Style::new().fg(Color::Cyan));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);
