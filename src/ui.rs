@@ -243,7 +243,7 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 for raw in entry.text.lines() {
                     lines.push(Line::from(Span::styled(
                         raw.to_string(),
-                        Style::new().fg(Color::Cyan),
+                        Style::new().fg(Color::White),
                     )));
                 }
                 lines.push(Line::default());
