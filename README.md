@@ -11,6 +11,11 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage in the status bar. Model reasoning is collapsed by
   default (`Ctrl+T` to expand)
+- **Syntax highlighting**: fenced code blocks in replies are highlighted
+  (via syntect, language taken from the ```` ```lang ```` tag)
+- **Diffs**: `edit_file` shows a colored line diff (and `write_file` its added
+  lines) both in the approval dialog and in the transcript, so changes are
+  visible even in modes that skip the confirmation
 - **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
   `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
   `submit_plan`
@@ -181,5 +186,6 @@ src/
   ui.rs        — ratatui rendering (transcript / input / status bar / approval modal)
   agent.rs     — rig agent construction and the streaming worker
   approval.rs  — approval gate for destructive tools (rig AgentHook)
+  highlight.rs — syntax highlighting (syntect) and line diffs (similar)
   tools/       — built-in tool implementations
 ```

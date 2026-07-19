@@ -135,7 +135,7 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
             EntryKind::Assistant => {
                 lines.push(Line::default());
-                push_wrapped(&mut lines, &entry.text, width, |_, s| Line::from(s));
+                push_assistant(&mut lines, &entry.text, width);
             }
             EntryKind::Reasoning => {
                 lines.push(Line::default());
@@ -177,6 +177,16 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                         Style::new().fg(Color::DarkGray),
                     ))
                 });
+            }
+            EntryKind::Diff => {
+                // Style each diff line by its "+ "/"- "/context prefix;
+                // wrapped continuations keep the line's color.
+                for raw in entry.text.split('\n') {
+                    let style = crate::highlight::diff_style(raw);
+                    push_wrapped(&mut lines, raw, width.saturating_sub(2), |_, s| {
+                        Line::from(Span::styled(format!("  {s}"), style))
+                    });
+                }
             }
             EntryKind::Notice => {
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
@@ -221,6 +231,53 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+/// Assistant text: normal lines wrap as plain text; ``` fenced code blocks
+/// are syntax-highlighted (language from the fence tag) and indented.
+fn push_assistant(lines: &mut Vec<Line<'static>>, text: &str, width: usize) {
+    let mut plain: Vec<&str> = Vec::new();
+    let mut code: Vec<&str> = Vec::new();
+    let mut fence: Option<&str> = None;
+
+    for raw in text.split('\n') {
+        if let Some(tag) = raw.trim_start().strip_prefix("```") {
+            if fence.is_none() {
+                if !plain.is_empty() {
+                    push_wrapped(lines, &plain.join("\n"), width, |_, s| Line::from(s));
+                    plain.clear();
+                }
+                fence = Some(tag.trim());
+            } else {
+                push_code_block(lines, &code.join("\n"), fence.unwrap_or(""), width);
+                code.clear();
+                fence = None;
+            }
+            continue;
+        }
+        if fence.is_some() {
+            code.push(raw);
+        } else {
+            plain.push(raw);
+        }
+    }
+    if !plain.is_empty() {
+        push_wrapped(lines, &plain.join("\n"), width, |_, s| Line::from(s));
+    }
+    // A fence still open (mid-stream): render what has arrived so far.
+    if fence.is_some() {
+        push_code_block(lines, &code.join("\n"), fence.unwrap_or(""), width);
+    }
+}
+
+fn push_code_block(lines: &mut Vec<Line<'static>>, code: &str, token: &str, width: usize) {
+    for span_line in crate::highlight::highlight(code, token) {
+        for chunk in crate::highlight::wrap_spans(&span_line, width.saturating_sub(2)) {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(chunk.into_iter().map(|(style, s)| Span::styled(s, style)));
+            lines.push(Line::from(spans));
+        }
+    }
 }
 
 fn push_wrapped(
@@ -523,14 +580,11 @@ fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
         && let Some(path) = get("path")
     {
         let mut out = vec![BodyLine::new(format!("path: {path}"), Style::new().bold())];
-        for l in get("old_string").unwrap_or_default().lines() {
-            out.push(BodyLine::new(format!("- {l}"), Style::new().fg(Color::Red)));
-        }
-        for l in get("new_string").unwrap_or_default().lines() {
-            out.push(BodyLine::new(
-                format!("+ {l}"),
-                Style::new().fg(Color::Green),
-            ));
+        let old = get("old_string").unwrap_or_default();
+        let new = get("new_string").unwrap_or_default();
+        for l in crate::highlight::diff_lines(old, new) {
+            let style = crate::highlight::diff_style(&l);
+            out.push(BodyLine::new(l, style));
         }
         return out;
     }

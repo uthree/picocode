@@ -15,6 +15,7 @@ use crate::event::{AgentEvent, WorkerCmd};
 use crate::session;
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
+const DIFF_MAX_LINES: usize = 30;
 
 pub const LOGO: &str = r"            ███                                          █████
            ░░░                                          ░░███
@@ -52,6 +53,9 @@ pub enum EntryKind {
     Reasoning,
     Tool,
     ToolOut,
+    /// A colored line diff shown for file-writing tool calls ("+ "/"- "/"  "
+    /// prefixed lines).
+    Diff,
     Notice,
     /// A prominent warning (e.g. entering bypass mode).
     Warning,
@@ -863,8 +867,7 @@ impl App {
             }
             AgentEvent::ToolCall { name, args } => {
                 self.close_blocks();
-                let args = compact_one_line(&args, 200);
-                self.push(EntryKind::Tool, format!("{name} {args}"));
+                self.push_tool_call(&name, &args);
             }
             AgentEvent::ToolResult { output } => {
                 self.close_blocks();
@@ -954,6 +957,42 @@ impl App {
 
     fn push(&mut self, kind: EntryKind, text: String) {
         self.entries.push(Entry { kind, text });
+    }
+
+    /// Show a tool call: file-writing tools get a path headline plus a
+    /// colored diff; everything else keeps the compact JSON args line.
+    fn push_tool_call(&mut self, name: &str, args: &str) {
+        let parsed: Option<serde_json::Value> = serde_json::from_str(args).ok();
+        let get = |k: &str| {
+            parsed
+                .as_ref()
+                .and_then(|v| v.get(k))
+                .and_then(|v| v.as_str())
+        };
+        if name == "edit_file"
+            && let (Some(path), Some(old), Some(new)) =
+                (get("path"), get("old_string"), get("new_string"))
+        {
+            self.push(EntryKind::Tool, format!("{name} {path}"));
+            let diff = crate::highlight::diff_lines(old, new).join("\n");
+            self.push(EntryKind::Diff, clamp_lines(&diff, DIFF_MAX_LINES));
+            return;
+        }
+        if name == "write_file"
+            && let (Some(path), Some(content)) = (get("path"), get("content"))
+        {
+            self.push(EntryKind::Tool, format!("{name} {path}"));
+            let diff: Vec<String> = content.lines().map(|l| format!("+ {l}")).collect();
+            self.push(
+                EntryKind::Diff,
+                clamp_lines(&diff.join("\n"), DIFF_MAX_LINES),
+            );
+            return;
+        }
+        self.push(
+            EntryKind::Tool,
+            format!("{name} {}", compact_one_line(args, 200)),
+        );
     }
 
     fn append_to_last(&mut self, s: &str) {
