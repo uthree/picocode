@@ -332,6 +332,26 @@ impl ModeHandle {
     }
 }
 
+/// Shared, runtime-adjustable turn limit (tool-call rounds per prompt): the
+/// `/config` dialog changes it while the worker reads it per prompt, so a
+/// change applies from the next prompt on.
+#[derive(Clone, Debug)]
+pub struct TurnsHandle(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl TurnsHandle {
+    pub fn new(n: usize) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(n)))
+    }
+
+    pub fn get(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set(&self, n: usize) {
+        self.0.store(n, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// Shared, runtime-extensible approval rules: the approval dialog's
 /// "always allow" answer adds to them from the TUI while the approval hook
 /// (running in the worker task) reads them per tool call, so an addition
@@ -657,7 +677,9 @@ pub struct Config {
     /// Where the startup model came from, when worth mentioning
     /// ("last used", "first model served by Ollama").
     pub model_note: Option<String>,
-    pub max_turns: usize,
+    /// Turn limit per prompt, shared with the worker and adjustable at
+    /// runtime (`/config`).
+    pub max_turns: TurnsHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -753,7 +775,7 @@ impl Config {
             models,
             active_model,
             model_note,
-            max_turns: args.max_turns,
+            max_turns: TurnsHandle::new(args.max_turns),
             root,
             approval: RulesHandle::new(file.approval),
             mode: ModeHandle::new(if args.bypass {
@@ -822,6 +844,14 @@ mod tests {
             ["cargo test"]
         );
         assert!(bash_allow_patterns("").is_empty());
+    }
+
+    #[test]
+    fn turns_handle_shares_runtime_changes() {
+        let handle = TurnsHandle::new(50);
+        let worker_side = handle.clone();
+        handle.set(120);
+        assert_eq!(worker_side.get(), 120);
     }
 
     #[test]

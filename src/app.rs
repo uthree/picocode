@@ -47,6 +47,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Mode: run EVERYTHING unconfirmed (isolated envs)",
     ),
     ("/permissions", "Show the effective permission rules"),
+    ("/config", "Edit settings in a dialog"),
+    ("/settings", "Alias of /config"),
     ("/status", "Show model, token usage and session info"),
     ("/usage", "Alias of /status"),
     ("/quit", "Exit picocode"),
@@ -131,6 +133,16 @@ pub struct ModelPicker {
     pub selected: usize,
 }
 
+/// State of the `/config` settings dialog. The rows are fixed; the values
+/// are read live from the app so external changes (Shift+Tab, Ctrl+T) show
+/// up while the dialog is open.
+pub struct SettingsMenu {
+    pub selected: usize,
+}
+
+/// Number of rows in the `/config` dialog (mode, reasoning, max turns, model).
+pub const SETTINGS_ROWS: usize = 4;
+
 /// State of the `ask_user` / `submit_plan` option dialog.
 pub struct PendingQuestion {
     pub title: String,
@@ -201,6 +213,8 @@ pub struct App {
     pub session_picker: Option<SessionPicker>,
     /// Open `/model` dialog, if any (captures the arrow/Enter keys).
     pub model_picker: Option<ModelPicker>,
+    /// Open `/config` dialog, if any (captures the arrow/Enter keys).
+    pub settings: Option<SettingsMenu>,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
@@ -244,6 +258,7 @@ impl App {
             sessions_dir: session::sessions_dir(&cfg.root),
             session_picker: None,
             model_picker: None,
+            settings: None,
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -420,6 +435,26 @@ impl App {
                 KeyCode::Down => q.selected = (q.selected + 1) % count,
                 KeyCode::Enter => self.resolve_question(true),
                 KeyCode::Esc => self.resolve_question(false),
+                _ => {}
+            }
+            return;
+        }
+
+        // The /config dialog captures navigation keys while open.
+        if self.settings.is_some() {
+            match key.code {
+                KeyCode::Up => {
+                    let menu = self.settings.as_mut().unwrap();
+                    menu.selected = (menu.selected + SETTINGS_ROWS - 1) % SETTINGS_ROWS;
+                }
+                KeyCode::Down => {
+                    let menu = self.settings.as_mut().unwrap();
+                    menu.selected = (menu.selected + 1) % SETTINGS_ROWS;
+                }
+                KeyCode::Left => self.adjust_setting(-1),
+                KeyCode::Right => self.adjust_setting(1),
+                KeyCode::Enter | KeyCode::Char(' ') => self.activate_setting(),
+                KeyCode::Esc | KeyCode::Char('q') => self.settings = None,
                 _ => {}
             }
             return;
@@ -612,6 +647,7 @@ impl App {
                 }
             }
             "/permissions" => self.show_permissions(),
+            "/config" | "/settings" => self.settings = Some(SettingsMenu { selected: 0 }),
             "/status" | "/usage" => self.show_status(),
             "/read-only" => self.set_mode(crate::config::Mode::ReadOnly),
             "/edit" => self.set_mode(crate::config::Mode::Edit),
@@ -1111,6 +1147,63 @@ impl App {
                 self.cfg.root.display(),
             ),
         );
+    }
+
+    /// Rows of the `/config` dialog: (name, current value, key hint). Values
+    /// are rebuilt every frame so concurrent changes (Shift+Tab, Ctrl+T)
+    /// stay in sync while the dialog is open.
+    pub fn settings_rows(&self) -> [(&'static str, String, &'static str); SETTINGS_ROWS] {
+        [
+            ("mode", self.cfg.mode.get().label().to_string(), "← →"),
+            (
+                "reasoning",
+                if self.show_reasoning {
+                    "shown".to_string()
+                } else {
+                    "collapsed".to_string()
+                },
+                "← →",
+            ),
+            ("max turns", self.cfg.max_turns.get().to_string(), "← →"),
+            ("model", self.model_label.clone(), "Enter"),
+        ]
+    }
+
+    /// ←/→ on a `/config` row: change the value in place. Every change
+    /// applies immediately (max turns from the next prompt on).
+    fn adjust_setting(&mut self, delta: i64) {
+        let Some(menu) = &self.settings else { return };
+        match menu.selected {
+            // Same cycle as Shift+Tab; bypass stays /bypass-only, and
+            // adjusting away from it lands on read-only.
+            0 => {
+                let cycle = crate::config::Mode::CYCLE;
+                let next = match cycle.iter().position(|m| *m == self.cfg.mode.get()) {
+                    Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
+                    Some(i) => cycle[(i + 1) % cycle.len()],
+                    None => cycle[0],
+                };
+                self.cfg.mode.set(next);
+            }
+            1 => self.show_reasoning = !self.show_reasoning,
+            2 => {
+                let turns = self.cfg.max_turns.get() as i64 + delta * 10;
+                self.cfg.max_turns.set(turns.clamp(10, 200) as usize);
+            }
+            _ => {}
+        }
+    }
+
+    /// Enter/Space on a `/config` row: toggles act like →; the model row
+    /// closes the dialog and opens the `/model` picker.
+    fn activate_setting(&mut self) {
+        let Some(menu) = &self.settings else { return };
+        if menu.selected == SETTINGS_ROWS - 1 {
+            self.settings = None;
+            self.open_model_picker();
+        } else {
+            self.adjust_setting(1);
+        }
     }
 
     /// `/status` (alias `/usage`): one-shot overview of the model, token

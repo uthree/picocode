@@ -288,7 +288,7 @@ async fn run_once<M>(
     let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
-        .max_turns(cfg.max_turns)
+        .max_turns(cfg.max_turns.get())
         .add_hook(hook)
         .await;
 
@@ -422,7 +422,7 @@ mod tests {
             models: Vec::new(),
             active_model: None,
             model_note: None,
-            max_turns: 50,
+            max_turns: crate::config::TurnsHandle::new(50),
             root: PathBuf::from("/tmp/proj"),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),

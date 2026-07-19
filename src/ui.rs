@@ -9,6 +9,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, EntryKind, ModelPicker, PendingApproval, PendingQuestion, SessionPicker};
 
+/// Column width of the setting names in the `/config` dialog.
+const SETTING_NAME_COL: usize = 10;
+
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -28,6 +31,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.pending.is_none()
         && app.session_picker.is_none()
         && app.model_picker.is_none()
+        && app.settings.is_none()
         && app.question.is_none()
     {
         let matches = app.completions();
@@ -40,6 +44,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(picker) = &app.model_picker {
         draw_model_picker(f, picker);
+    }
+    if app.settings.is_some() {
+        draw_settings(f, app);
     }
     if let Some(q) = &app.question {
         draw_question(f, q);
@@ -291,6 +298,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let dialog_open = app.pending.is_some()
         || app.session_picker.is_some()
         || app.model_picker.is_some()
+        || app.settings.is_some()
         || app.question.is_some();
 
     if app.input.is_empty() {
@@ -546,6 +554,59 @@ fn draw_model_picker(f: &mut Frame, picker: &ModelPicker) {
 
     let block = Block::bordered()
         .title(" Select model ")
+        .border_style(Style::new().fg(Color::Cyan));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ----- settings dialog -----------------------------------------------------
+
+fn draw_settings(f: &mut Frame, app: &App) {
+    let Some(menu) = &app.settings else { return };
+    let rows = app.settings_rows();
+    let screen = f.area();
+    let width = screen.width.saturating_sub(6).clamp(30, 60);
+    // rows + borders + hint line.
+    let height = (rows.len() as u16 + 3).min(screen.height.saturating_sub(4));
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(width)) / 2,
+        y: screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+
+    let inner_width = width.saturating_sub(2) as usize;
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, (name, value, hint)) in rows.iter().enumerate() {
+        let value = if *hint == "← →" {
+            format!("‹ {value} ›")
+        } else {
+            value.clone()
+        };
+        let text = format!(" {name:<SETTING_NAME_COL$} {value}");
+        let text: String = text.chars().take(inner_width).collect();
+        lines.push(if i == menu.selected {
+            Line::from(Span::styled(
+                format!("{text:<inner_width$}"),
+                Style::new().fg(Color::Black).bg(Color::Cyan),
+            ))
+        } else {
+            Line::from(vec![
+                Span::styled(
+                    format!(" {name:<SETTING_NAME_COL$} "),
+                    Style::new().fg(Color::DarkGray),
+                ),
+                Span::raw(text.chars().skip(SETTING_NAME_COL + 2).collect::<String>()),
+            ])
+        });
+    }
+    lines.push(Line::from(Span::styled(
+        " ↑↓ select · ←→ change · Enter pick model · Esc close",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let block = Block::bordered()
+        .title(" Settings (this session) ")
         .border_style(Style::new().fg(Color::Cyan));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);
