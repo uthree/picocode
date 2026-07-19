@@ -53,7 +53,7 @@ impl Tool for ReadFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.root, &args.path);
+        let path = resolve(&self.root, &args.path)?;
         let content = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;

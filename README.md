@@ -34,12 +34,16 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   highlighting, picked from the file extension
 - **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
   `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
-  `submit_plan`
-- **Approval flow**: destructive operations (bash, file writes) ask for y/n
-  confirmation; reads run automatically; configurable allow/deny rules
-- **Permission modes**: `Shift+Tab` cycles read-only (default — every write
-  asks), edit (file writes run freely; commands follow the config rules), and
-  plan (writes blocked — the model explores and proposes a plan first)
+  `submit_plan`. File tools are confined to the project directory —
+  absolute paths and `..` escapes are rejected
+- **Approval flow**: anything that changes state or talks to the network
+  (bash, file writes, web search/fetch) asks for y/n confirmation by
+  default; local reads run automatically. Config rules are absolute in
+  every mode: deny always denies, allow always allows. `/permissions`
+  shows the effective rules
+- **Permission modes**: `Shift+Tab` cycles read-only (default — destructive
+  calls ask), edit (file writes run freely), and plan (bash and file writes
+  denied — the model explores and proposes a plan first)
 - **Multi-turn**: keeps conversation history and tool results across turns
 - **Context compaction**: `/compact` replaces the history with an LLM-written
   summary to free context
@@ -78,13 +82,15 @@ picocode --provider anthropic              # uses ANTHROPIC_API_KEY
 picocode --provider openai --model gpt-4o  # uses OPENAI_API_KEY
 picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b
                                            # OpenAI-compatible server (vLLM etc.)
-picocode --yolo                            # skip all approval prompts (dangerous)
+picocode --bypass                          # start in bypass mode (isolated envs)
 ```
 
-CLI flags select an ad-hoc model and take precedence over the config file's
-`[[models]]` entries. Base URL precedence: `--base-url` > config file >
-environment variables (`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` /
-`ANTHROPIC_BASE_URL`) > provider default.
+`--provider` / `--model` select an ad-hoc model and take precedence over the
+config file's `[[models]]` entries and the saved state. `--base-url` is not a
+selection — it only overrides the endpoint of whatever model is active. Base
+URL precedence: `--base-url` > config file > environment variables
+(`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL`) > provider
+default.
 
 The model a run starts with (or is switched to) is remembered per project in
 `$XDG_DATA_HOME/picocode/state/<project>.json` and restored on the next start;
@@ -109,6 +115,7 @@ Keys inside the TUI:
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
 | `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly (see below) |
+| `/permissions` | Show the current mode and the effective allow/deny rules |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
@@ -118,21 +125,30 @@ Mouse capture is enabled for wheel scrolling, so terminal-native text selection
 needs the usual bypass modifier held (`Shift` on most terminals, `Option`/`Fn`
 on macOS ones).
 
-## Permission modes
+## Permissions
+
+Tools fall into two classes. **Local reads** (`read_file`, `list_files`,
+`grep`) and the dialog tools always run. Everything that changes state or
+talks to the network (`bash`, `write_file`, `edit_file`, `web_search`,
+`web_fetch`) is **destructive** and asks for y/n confirmation by default.
+File tools only ever touch the project directory: absolute paths and `..`
+escaping the root are rejected (the model is pointed at `bash`, which asks).
+
+One precedence, in every mode: **deny rules > mode (plan/bypass) > allow
+rules > ask**. `/permissions` prints the effective rules at any time.
 
 `Shift+Tab` cycles the permission mode, shown in the status bar; `/read-only`,
 `/edit`, `/plan` and `/bypass` switch to a specific mode directly:
 
 | Mode | Behavior |
 |---|---|
-| `read-only` (default) | Read tools run freely; **every** write or command asks for confirmation, even if allow-listed |
-| `edit` | `write_file` / `edit_file` run without asking; `bash` and other tools follow the `[approval]` config rules |
-| `plan` | Writes and commands are **auto-denied**: the model investigates with the read tools, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn; declining sends it back to planning |
-| `bypass` | **Everything runs without confirmation** (deny rules still apply). Meant for isolated environments such as containers. Not in the `Shift+Tab` cycle — only the explicit `/bypass` command enters it, with a warning; `Shift+Tab` leaves it for `read-only` |
+| `read-only` (default) | Destructive calls ask, unless allow-listed |
+| `edit` | Like read-only, plus `write_file` / `edit_file` run without asking |
+| `plan` | `bash` and file writes are **denied** (even if allow-listed): the model investigates, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn. Web tools stay available under the usual ask/allow rules |
+| `bypass` | **Everything runs without confirmation** (deny rules still apply). Meant for isolated environments such as containers — the `--bypass` flag starts in it. Not in the `Shift+Tab` cycle — only `/bypass` or `--bypass` enter it, with a warning; `Shift+Tab` leaves it for `read-only` |
 
-Deny rules and `--yolo` take precedence over the mode. Full precedence:
-deny rules > `--yolo` > mode > allow rules > ask. A switch takes effect
-immediately, including for later tool calls of a turn already running.
+A mode switch takes effect immediately, including for later tool calls of a
+turn already running.
 
 ## Sessions
 
@@ -146,9 +162,12 @@ never written.
 
 ## Configuration
 
-picocode reads `picocode.toml` from the working directory, merged over the
-global `~/.config/picocode/config.toml` (project values win; approval lists are
-concatenated).
+picocode reads `picocode.toml` from the project root — the nearest ancestor
+of the current directory containing one, so starting from a subdirectory
+finds the same config, sessions and saved state — merged over the global
+`~/.config/picocode/config.toml`. Project values win; approval lists are
+concatenated; `[[models]]` and `default_model` travel together (a project
+that defines its own `[[models]]` starts from a clean slate).
 
 ```toml
 default_model = "local"    # [[models]] entry used at startup (default: first)
@@ -184,10 +203,10 @@ provider = "anthropic"
 model = "claude-opus-4-8"
 
 [approval]
-allow_tools = ["write_file"]      # tools that run without a prompt
-deny_tools  = ["web_fetch"]       # tools that are always denied (wins over --yolo)
+allow_tools = ["web_search"]      # destructive tools that never ask (any mode)
+deny_tools  = ["web_fetch"]       # tools that are always denied (any mode)
 allow_bash  = ["cargo", "git status", "ls"]
-deny_bash   = ["sudo", "rm -rf"]
+deny_bash   = ["sudo", "rm -rf"]  # always denied, even in bypass mode
 
 [search]
 provider = "duckduckgo"           # default; no API key needed
@@ -201,11 +220,15 @@ Bash rules split the command at `&&` `||` `;` `|` `&` and newlines, then match
 each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 `cargofoo`; a trailing `*` as in `cargo *` is accepted and ignored):
 
-- `deny_bash`: if any segment matches, the call is auto-denied — **even with
-  `--yolo`**
+- `deny_bash`: if any segment matches, the call is auto-denied — in **every**
+  mode, bypass included (`!` commands you type yourself are exempt)
 - `allow_bash`: the call auto-runs only if **every** segment matches; commands
-  containing command substitution (`` ` `` or `$(`) never auto-run
+  containing substitution (`` ` `` or `$(`) or output redirection (`>`) never
+  auto-run, and an environment-variable prefix (`FOO=1 cargo …`) doesn't
+  prefix-match, so it asks
 - anything else falls back to the normal y/n approval prompt
+- tool names in `allow_tools` / `deny_tools` are validated at startup, so a
+  typo is an error instead of a silently dead rule
 
 ## Layout
 

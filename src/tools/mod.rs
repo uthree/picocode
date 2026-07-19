@@ -24,13 +24,37 @@ pub use write::WriteFile;
 
 use std::path::{Path, PathBuf};
 
-/// Tool names that require user approval before running.
-pub const DESTRUCTIVE_TOOLS: &[&str] = &[Bash::NAME, WriteFile::NAME, EditFile::NAME];
-
-/// Tools that only write files (auto-approved in edit mode).
-pub const WRITE_TOOLS: &[&str] = &[WriteFile::NAME, EditFile::NAME];
-
 use rig::tool::Tool as _;
+
+/// Every built-in tool name; used to validate the `[approval]` config lists.
+pub const ALL_TOOLS: &[&str] = &[
+    ReadFile::NAME,
+    ListFiles::NAME,
+    Grep::NAME,
+    WriteFile::NAME,
+    EditFile::NAME,
+    Bash::NAME,
+    WebSearch::NAME,
+    WebFetch::NAME,
+    AskUser::NAME,
+    SubmitPlan::NAME,
+];
+
+/// Tools that need approval by default: everything that changes state or
+/// sends data off the machine. The rest (local reads, dialogs) always runs.
+pub const DESTRUCTIVE_TOOLS: &[&str] = &[
+    Bash::NAME,
+    WriteFile::NAME,
+    EditFile::NAME,
+    WebSearch::NAME,
+    WebFetch::NAME,
+];
+
+/// Tools that modify the local system; plan mode denies exactly these.
+pub const MUTATING_TOOLS: &[&str] = &[Bash::NAME, WriteFile::NAME, EditFile::NAME];
+
+/// Tools that only write project files (auto-approved in edit mode).
+pub const WRITE_TOOLS: &[&str] = &[WriteFile::NAME, EditFile::NAME];
 
 /// Common error type for all tools. The message is fed back to the model.
 #[derive(Debug, thiserror::Error)]
@@ -43,13 +67,35 @@ impl ToolError {
     }
 }
 
-/// Resolve a (possibly relative) path against the tool root.
-pub(crate) fn resolve(root: &Path, path: &str) -> PathBuf {
+/// Resolve a (possibly relative) path against the tool root and confine it
+/// to the root: `..` is applied lexically and the result must stay inside
+/// the working directory. File tools can never touch anything outside the
+/// project; the model is told to fall back to `bash` (which asks) instead.
+pub(crate) fn resolve(root: &Path, path: &str) -> Result<PathBuf, ToolError> {
     let p = Path::new(path);
-    if p.is_absolute() {
+    let joined = if p.is_absolute() {
         p.to_path_buf()
     } else {
         root.join(p)
+    };
+    let mut out = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    if out.starts_with(root) {
+        Ok(out)
+    } else {
+        Err(ToolError::new(format!(
+            "path `{path}` is outside the working directory ({}); file tools are \
+             confined to the project — use bash for anything outside it",
+            root.display()
+        )))
     }
 }
 
@@ -80,13 +126,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_relative_and_absolute() {
+    fn resolve_confines_paths_to_the_root() {
         let root = Path::new("/tmp/proj");
         assert_eq!(
-            resolve(root, "src/main.rs"),
+            resolve(root, "src/main.rs").unwrap(),
             PathBuf::from("/tmp/proj/src/main.rs")
         );
-        assert_eq!(resolve(root, "/etc/hosts"), PathBuf::from("/etc/hosts"));
+        // Absolute paths are fine as long as they stay inside the root…
+        assert_eq!(
+            resolve(root, "/tmp/proj/a.txt").unwrap(),
+            PathBuf::from("/tmp/proj/a.txt")
+        );
+        // …and `.`/`..` are applied lexically before the check.
+        assert_eq!(
+            resolve(root, "src/../a.txt").unwrap(),
+            PathBuf::from("/tmp/proj/a.txt")
+        );
+
+        // Anything escaping the root is rejected.
+        assert!(resolve(root, "/etc/hosts").is_err());
+        assert!(resolve(root, "../secrets").is_err());
+        assert!(resolve(root, "src/../../other").is_err());
+        let err = resolve(root, "/etc/hosts").unwrap_err().to_string();
+        assert!(err.contains("outside the working directory"));
     }
 
     #[test]

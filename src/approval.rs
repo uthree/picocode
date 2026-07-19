@@ -18,23 +18,12 @@ use crate::tools::{Bash, DESTRUCTIVE_TOOLS};
 pub struct ApprovalHook {
     tx: mpsc::Sender<AgentEvent>,
     rules: ApprovalRules,
-    yolo: bool,
     mode: ModeHandle,
 }
 
 impl ApprovalHook {
-    pub fn new(
-        tx: mpsc::Sender<AgentEvent>,
-        rules: ApprovalRules,
-        yolo: bool,
-        mode: ModeHandle,
-    ) -> Self {
-        Self {
-            tx,
-            rules,
-            yolo,
-            mode,
-        }
+    pub fn new(tx: mpsc::Sender<AgentEvent>, rules: ApprovalRules, mode: ModeHandle) -> Self {
+        Self { tx, rules, mode }
     }
 }
 
@@ -62,13 +51,10 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
         };
         let command = bash_command(tool_name, args);
         let destructive = DESTRUCTIVE_TOOLS.contains(&tool_name);
-        match self.rules.decide(
-            self.yolo,
-            self.mode.get(),
-            tool_name,
-            command.as_deref(),
-            destructive,
-        ) {
+        match self
+            .rules
+            .decide(self.mode.get(), tool_name, command.as_deref(), destructive)
+        {
             Decision::Allow => return Flow::Continue,
             Decision::Deny(reason) => return Flow::Skip { reason },
             Decision::Ask => {}

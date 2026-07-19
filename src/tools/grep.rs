@@ -54,7 +54,7 @@ impl Tool for Grep {
         let re = regex::Regex::new(&args.pattern)
             .map_err(|e| ToolError::new(format!("invalid regex: {e}")))?;
         let base = match &args.path {
-            Some(p) => resolve(&self.root, p),
+            Some(p) => resolve(&self.root, p)?,
             None => self.root.clone(),
         };
 

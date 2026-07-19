@@ -46,6 +46,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "/bypass",
         "Mode: run EVERYTHING unconfirmed (isolated envs)",
     ),
+    ("/permissions", "Show the effective permission rules"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -231,6 +232,9 @@ impl App {
                 cfg.root.display()
             ),
         );
+        if let Some(note) = &cfg.model_note {
+            app.push(EntryKind::Notice, format!("Model: {note}"));
+        }
         if !cfg.config_files.is_empty() {
             app.push(
                 EntryKind::Notice,
@@ -261,10 +265,12 @@ impl App {
                 format!("Models: {} — /model <name> to switch", names.join(", ")),
             );
         }
-        if cfg.yolo {
+        if cfg.mode.get() == crate::config::Mode::Bypass {
             app.push(
-                EntryKind::Notice,
-                "--yolo: skipping all tool approvals".to_string(),
+                EntryKind::Warning,
+                "bypass mode: EVERY tool call runs without confirmation (deny rules \
+                 still apply). Meant for isolated environments such as containers."
+                    .to_string(),
             );
         }
         // Fetch the provider's model list in the background so `/model` can
@@ -576,6 +582,7 @@ impl App {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
             }
+            "/permissions" => self.show_permissions(),
             "/read-only" => self.set_mode(crate::config::Mode::ReadOnly),
             "/edit" => self.set_mode(crate::config::Mode::Edit),
             "/plan" => self.set_mode(crate::config::Mode::Plan),
@@ -1034,6 +1041,46 @@ impl App {
 
     fn cycle_mode(&mut self) {
         self.cfg.mode.set(self.cfg.mode.get().next());
+    }
+
+    /// `/permissions`: show what the current mode and config rules do.
+    fn show_permissions(&mut self) {
+        use crate::config::Mode;
+        let mode = self.cfg.mode.get();
+        let mode_line = match mode {
+            Mode::ReadOnly => "destructive calls ask unless allow-listed",
+            Mode::Edit => "file writes run freely; other destructive calls ask unless allow-listed",
+            Mode::Plan => "bash and file writes are denied; web tools ask unless allow-listed",
+            Mode::Bypass => "EVERYTHING runs without confirmation (deny rules still apply)",
+        };
+        let rules = &self.cfg.approval;
+        let list = |xs: &[String]| {
+            if xs.is_empty() {
+                "(none)".to_string()
+            } else {
+                xs.join(", ")
+            }
+        };
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Permissions — precedence: deny > mode (plan/bypass) > allow > ask\n\
+                 mode         [{}] {mode_line}\n\
+                 deny_tools   {}\n\
+                 deny_bash    {}\n\
+                 allow_tools  {}\n\
+                 allow_bash   {}\n\
+                 Local reads (read_file, list_files, grep) always run; file tools are \
+                 confined to {}. Commands with $( ), backticks or > never auto-run. \
+                 `!` commands are typed by you and skip all rules.",
+                mode.label(),
+                list(&rules.deny_tools),
+                list(&rules.deny_bash),
+                list(&rules.allow_tools),
+                list(&rules.allow_bash),
+                self.cfg.root.display(),
+            ),
+        );
     }
 
     /// Current permission mode, for the status bar.

@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     let smoke = args.smoke.clone();
     let mut cfg = config::Config::from_args(args)?;
     if smoke.is_some() {
-        cfg.yolo = true;
+        cfg.mode.set(config::Mode::Bypass);
     }
     // No model configured anywhere: use the first model Ollama serves.
     if cfg.model.is_empty() {

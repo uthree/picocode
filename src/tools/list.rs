@@ -47,7 +47,7 @@ impl Tool for ListFiles {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let base = match &args.path {
-            Some(p) => resolve(&self.root, p),
+            Some(p) => resolve(&self.root, p)?,
             None => self.root.clone(),
         };
         if !base.is_dir() {

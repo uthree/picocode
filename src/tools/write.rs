@@ -46,7 +46,7 @@ impl Tool for WriteFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.root, &args.path);
+        let path = resolve(&self.root, &args.path)?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| {
                 ToolError::new(format!("failed to create {}: {e}", parent.display()))

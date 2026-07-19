@@ -285,12 +285,7 @@ async fn run_once<M>(
     } else {
         prompt
     };
-    let hook = ApprovalHook::new(
-        event_tx.clone(),
-        cfg.approval.clone(),
-        cfg.yolo,
-        cfg.mode.clone(),
-    );
+    let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
         .max_turns(cfg.max_turns)
@@ -424,7 +419,7 @@ mod tests {
             base_url: None,
             models: Vec::new(),
             active_model: None,
-            yolo: false,
+            model_note: None,
             max_turns: 50,
             root: PathBuf::from("/tmp/proj"),
             approval: ApprovalRules::default(),

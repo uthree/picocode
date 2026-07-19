@@ -49,16 +49,18 @@ pub struct Args {
     #[arg(long)]
     pub base_url: Option<String>,
 
-    /// Skip all tool-approval prompts (dangerous). Config deny rules still apply.
+    /// Start in bypass mode: every tool call runs without confirmation
+    /// (deny rules still apply). Meant for isolated environments such as
+    /// containers.
     #[arg(long)]
-    pub yolo: bool,
+    pub bypass: bool,
 
     /// Maximum model turns (tool-call rounds) per user prompt.
     #[arg(long, default_value_t = 50)]
     pub max_turns: usize,
 
     /// Headless mode for debugging: run one prompt without the TUI and print
-    /// events to stdout. Implies --yolo.
+    /// events to stdout. Implies bypass mode.
     #[arg(long, hide = true)]
     pub smoke: Option<String>,
 }
@@ -126,6 +128,20 @@ fn validate_models(models: &[ModelEntry], default: Option<&str>) -> anyhow::Resu
         && !models.iter().any(|m| m.name == d)
     {
         anyhow::bail!("default_model `{d}` does not match any [[models]] entry");
+    }
+    Ok(())
+}
+
+/// Reject typos in the `[approval]` tool lists early: an unknown name would
+/// otherwise be silently ineffective.
+fn validate_tool_lists(rules: &ApprovalRules) -> anyhow::Result<()> {
+    for name in rules.allow_tools.iter().chain(&rules.deny_tools) {
+        if !crate::tools::ALL_TOOLS.contains(&name.as_str()) {
+            anyhow::bail!(
+                "unknown tool `{name}` in [approval] (valid tools: {})",
+                crate::tools::ALL_TOOLS.join(", ")
+            );
+        }
     }
     Ok(())
 }
@@ -246,8 +262,8 @@ fn resolve_search(
 
 // ----- permission modes ------------------------------------------------------
 
-/// Permission mode, cycled with Shift+Tab in the TUI. Deny rules and --yolo
-/// take precedence over the mode; see [`ApprovalRules::decide`].
+/// Permission mode, cycled with Shift+Tab in the TUI. Deny rules take
+/// precedence over the mode; see [`ApprovalRules::decide`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     /// Reads run freely; every write or command asks, even if allow-listed.
@@ -261,7 +277,7 @@ pub enum Mode {
     Plan,
     /// Everything runs without confirmation (deny rules still apply). Meant
     /// for isolated environments (containers); only reachable via the
-    /// explicit /bypass command, never via Shift+Tab.
+    /// explicit /bypass command or the --bypass flag, never via Shift+Tab.
     Bypass,
 }
 
@@ -323,7 +339,7 @@ pub struct ApprovalRules {
     /// Tools that run without an approval prompt.
     #[serde(default)]
     pub allow_tools: Vec<String>,
-    /// Tools that are always denied (wins over everything, including --yolo).
+    /// Tools that are always denied (wins over everything, in every mode).
     #[serde(default)]
     pub deny_tools: Vec<String>,
     /// Bash command prefixes that run without an approval prompt.
@@ -346,13 +362,20 @@ pub enum Decision {
 }
 
 impl ApprovalRules {
-    /// Decide what to do with a tool call. `bash_command` is the command string
-    /// when the call is the bash tool, `destructive` whether the tool requires
-    /// approval by default.
-    /// Precedence: deny rules > --yolo > mode > allow rules > ask.
+    /// Decide what to do with a tool call. `bash_command` is the command
+    /// string when the call is the bash tool, `destructive` whether the tool
+    /// requires approval by default (state changes or network access).
+    ///
+    /// The rules are absolute and the mode fills in the default:
+    /// 1. deny rules always deny, in every mode;
+    /// 2. local read tools and dialogs always run;
+    /// 3. bypass mode runs everything else;
+    /// 4. plan mode denies the mutating tools (bash and file writes);
+    /// 5. allow rules always allow;
+    /// 6. edit mode additionally allows file writes (project-confined);
+    /// 7. whatever is left asks the user.
     pub fn decide(
         &self,
-        yolo: bool,
         mode: Mode,
         tool: &str,
         bash_command: Option<&str>,
@@ -374,13 +397,12 @@ impl ApprovalRules {
         if !destructive {
             return Decision::Allow;
         }
-        // --yolo and bypass mode run everything (deny rules already checked).
-        if yolo || mode == Mode::Bypass {
+        if mode == Mode::Bypass {
             return Decision::Allow;
         }
-        // Plan mode: destructive calls are auto-denied (with a reason that
-        // steers the model back to planning), allow rules notwithstanding.
-        if mode == Mode::Plan {
+        // Plan mode blocks anything that could change the system; web tools
+        // stay available for research under the usual allow/ask rules.
+        if mode == Mode::Plan && crate::tools::MUTATING_TOOLS.contains(&tool) {
             return Decision::Deny(
                 "picocode is in plan mode: writes and commands are blocked. Continue \
                  investigating with the read-only tools and present a concise \
@@ -389,22 +411,14 @@ impl ApprovalRules {
                     .to_string(),
             );
         }
-        // Read-only (the default) confirms every destructive call, allow
-        // rules notwithstanding.
-        if mode == Mode::ReadOnly {
-            return Decision::Ask;
-        }
-
-        // Edit mode: file writes are permitted outright; commands and other
-        // tools follow the config allow rules.
-        if crate::tools::WRITE_TOOLS.contains(&tool) || in_list(&self.allow_tools) {
+        if in_list(&self.allow_tools) {
             return Decision::Allow;
         }
         if let (Some(cmd), Some(segments)) = (bash_command, &segments) {
-            // Command substitution can smuggle arbitrary commands past a
-            // prefix whitelist, so it never auto-runs.
-            let has_substitution = cmd.contains("$(") || cmd.contains('`');
-            if !has_substitution
+            // Command substitution and output redirection can smuggle
+            // effects past a prefix whitelist, so they never auto-run.
+            let risky = cmd.contains("$(") || cmd.contains('`') || cmd.contains('>');
+            if !risky
                 && !segments.is_empty()
                 && segments
                     .iter()
@@ -412,6 +426,9 @@ impl ApprovalRules {
             {
                 return Decision::Allow;
             }
+        }
+        if mode == Mode::Edit && crate::tools::WRITE_TOOLS.contains(&tool) {
+            return Decision::Allow;
         }
         Decision::Ask
     }
@@ -446,7 +463,13 @@ fn split_segments(cmd: &str) -> Vec<String> {
     }
     out.push(cur);
     out.iter()
-        .map(|s| s.trim().trim_start_matches('(').trim_start().to_string())
+        .map(|s| {
+            s.trim()
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .trim()
+                .to_string()
+        })
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -491,9 +514,21 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
     approval.deny_tools.extend(project.approval.deny_tools);
     approval.allow_bash.extend(project.approval.allow_bash);
     approval.deny_bash.extend(project.approval.deny_bash);
+    // [[models]] and default_model travel together: a project defining its
+    // own roster starts from a clean slate (a global default_model can't
+    // point into it), while a project default_model alone picks from the
+    // global roster.
+    let (models, default_model) = if project.models.is_some() {
+        (project.models, project.default_model)
+    } else {
+        (
+            global.models,
+            project.default_model.or(global.default_model),
+        )
+    };
     FileConfig {
-        default_model: project.default_model.or(global.default_model),
-        models: project.models.or(global.models),
+        default_model,
+        models,
         instructions: project.instructions.or(global.instructions),
         system_prompt: project.system_prompt.or(global.system_prompt),
         approval,
@@ -535,7 +570,9 @@ pub struct Config {
     pub models: Vec<ModelEntry>,
     /// Name of the active `[[models]]` entry (None for CLI/ad-hoc selection).
     pub active_model: Option<String>,
-    pub yolo: bool,
+    /// Where the startup model came from, when worth mentioning
+    /// ("last used", "first model served by Ollama").
+    pub model_note: Option<String>,
     pub max_turns: usize,
     /// Working directory the tools operate in.
     pub root: PathBuf,
@@ -555,7 +592,15 @@ pub struct Config {
 
 impl Config {
     pub fn from_args(args: Args) -> anyhow::Result<Self> {
-        let root = std::env::current_dir()?;
+        // The project root is the nearest ancestor holding a picocode.toml,
+        // so starting from a subdirectory finds the same config, sessions
+        // and state; without one the current directory is the root.
+        let cwd = std::env::current_dir()?;
+        let root = cwd
+            .ancestors()
+            .find(|d| d.join("picocode.toml").is_file())
+            .map(Path::to_path_buf)
+            .unwrap_or(cwd);
 
         let mut config_files = Vec::new();
         let global = match global_config_path() {
@@ -577,22 +622,25 @@ impl Config {
 
         let models = file.models.unwrap_or_default();
         validate_models(&models, file.default_model.as_deref())?;
+        validate_tool_lists(&file.approval)?;
 
         // Startup model precedence: CLI flags > last-used state > config
         // default_model / first entry > empty (main() picks the first model
         // Ollama serves, or reports how to configure a provider).
-        let cli_selection =
-            args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
+        // --base-url is not a selection; it overrides the endpoint below.
+        let cli_selection = args.provider.is_some() || args.model.is_some();
         let state = if cli_selection {
             None
         } else {
             crate::state::state_path(&root).and_then(|p| crate::state::load(&p))
         };
+        let mut model_note = None;
         let (provider, model, base_url, active_model, context_window) = if cli_selection {
             let provider = args.provider.unwrap_or(Provider::Ollama);
             let model = args.model.unwrap_or_else(|| default_model_for(provider));
-            (provider, model, args.base_url, None, DEFAULT_CONTEXT_WINDOW)
+            (provider, model, None, None, DEFAULT_CONTEXT_WINDOW)
         } else if let Some(sel) = state.as_ref().and_then(|s| restore_selection(s, &models)) {
+            model_note = Some("last used".to_string());
             sel
         } else if let Some(entry) = pick_entry(&models, file.default_model.as_deref()) {
             entry_selection(entry)
@@ -605,6 +653,7 @@ impl Config {
                 DEFAULT_CONTEXT_WINDOW,
             )
         };
+        let base_url = args.base_url.or(base_url);
 
         let instruction_names = file
             .instructions
@@ -618,11 +667,15 @@ impl Config {
             base_url,
             models,
             active_model,
-            yolo: args.yolo,
+            model_note,
             max_turns: args.max_turns,
             root,
             approval: file.approval,
-            mode: ModeHandle::new(Mode::default()),
+            mode: ModeHandle::new(if args.bypass {
+                Mode::Bypass
+            } else {
+                Mode::default()
+            }),
             search,
             system_prompt: file.system_prompt,
             instructions,
@@ -662,7 +715,7 @@ mod tests {
             split_segments("cargo build && cargo test; ls | wc -l"),
             vec!["cargo build", "cargo test", "ls", "wc -l"]
         );
-        assert_eq!(split_segments("(cd /tmp && ls)"), vec!["cd /tmp", "ls)"]);
+        assert_eq!(split_segments("(cd /tmp && ls)"), vec!["cd /tmp", "ls"]);
         assert_eq!(split_segments("a\nb"), vec!["a", "b"]);
     }
 
@@ -678,129 +731,96 @@ mod tests {
     }
 
     #[test]
-    fn deny_tools_wins_over_everything() {
-        let r = rules(&["web_fetch"], &["web_fetch"], &[], &[]);
-        assert!(matches!(
-            r.decide(true, Mode::Edit, "web_fetch", None, false),
-            Decision::Deny(_)
-        ));
+    fn deny_rules_win_in_every_mode() {
+        let r = rules(&["web_fetch"], &["web_fetch"], &["rm"], &["rm"]);
+        for mode in Mode::ALL {
+            assert!(matches!(
+                r.decide(*mode, "web_fetch", None, true),
+                Decision::Deny(_)
+            ));
+            assert!(matches!(
+                r.decide(*mode, "bash", Some("echo hi && rm -rf x"), true),
+                Decision::Deny(_)
+            ));
+        }
     }
 
     #[test]
-    fn deny_bash_wins_over_yolo_and_allow() {
-        let r = rules(&[], &[], &["rm"], &["rm"]);
-        assert!(matches!(
-            r.decide(true, Mode::Edit, "bash", Some("echo hi && rm -rf x"), true),
-            Decision::Deny(_)
-        ));
-    }
-
-    #[test]
-    fn allow_bash_requires_every_segment_to_match() {
-        let r = rules(&[], &[], &["cargo", "ls"], &[]);
+    fn allow_rules_work_in_read_only_and_edit() {
+        // allow_tools and allow_bash always allow (outside plan's denials).
+        let r = rules(&["web_search"], &[], &["cargo", "ls"], &[]);
+        for mode in [Mode::ReadOnly, Mode::Edit] {
+            assert_eq!(r.decide(mode, "web_search", None, true), Decision::Allow);
+            assert_eq!(
+                r.decide(mode, "bash", Some("cargo build && ls -la"), true),
+                Decision::Allow
+            );
+        }
+        // A segment outside the list still asks.
         assert_eq!(
-            r.decide(
-                false,
-                Mode::Edit,
-                "bash",
-                Some("cargo build && ls -la"),
-                true
-            ),
-            Decision::Allow
-        );
-        assert_eq!(
-            r.decide(
-                false,
-                Mode::Edit,
-                "bash",
-                Some("cargo build && curl x"),
-                true
-            ),
+            r.decide(Mode::Edit, "bash", Some("cargo build && curl x"), true),
             Decision::Ask
         );
-    }
-
-    #[test]
-    fn command_substitution_never_auto_runs() {
-        let r = rules(&[], &[], &["echo"], &[]);
-        assert_eq!(
-            r.decide(false, Mode::Edit, "bash", Some("echo $(rm -rf /)"), true),
-            Decision::Ask
-        );
-        assert_eq!(
-            r.decide(false, Mode::Edit, "bash", Some("echo `date`"), true),
-            Decision::Ask
-        );
-    }
-
-    #[test]
-    fn allow_tools_skips_prompt_for_destructive_tool() {
-        let r = rules(&["bash"], &[], &[], &[]);
-        assert_eq!(
-            r.decide(false, Mode::Edit, "bash", Some("rm -rf x"), true),
-            Decision::Allow
-        );
+        // Unlisted destructive calls ask in both modes.
         let none = ApprovalRules::default();
         assert_eq!(
-            none.decide(false, Mode::Edit, "bash", Some("rm -rf x"), true),
+            none.decide(Mode::ReadOnly, "bash", Some("ls"), true),
+            Decision::Ask
+        );
+        assert_eq!(
+            none.decide(Mode::ReadOnly, "web_fetch", None, true),
             Decision::Ask
         );
     }
 
     #[test]
-    fn read_only_tools_run_without_rules() {
+    fn risky_shell_syntax_never_auto_runs() {
+        let r = rules(&[], &[], &["echo", "cargo"], &[]);
+        for cmd in [
+            "echo $(rm -rf /)",
+            "echo `date`",
+            "echo hi > ~/.zshrc",
+            "cargo build 2>err.txt",
+        ] {
+            assert_eq!(
+                r.decide(Mode::Edit, "bash", Some(cmd), true),
+                Decision::Ask,
+                "{cmd} must not auto-run"
+            );
+        }
+        // Env-var prefixes don't prefix-match either (PATH=… could hijack).
+        assert_eq!(
+            r.decide(Mode::Edit, "bash", Some("PATH=/evil cargo build"), true),
+            Decision::Ask
+        );
+    }
+
+    #[test]
+    fn local_reads_always_run() {
         let r = ApprovalRules::default();
-        assert_eq!(
-            r.decide(false, Mode::Edit, "read_file", None, false),
-            Decision::Allow
-        );
-        assert_eq!(
-            r.decide(false, Mode::Edit, "bash", Some("ls"), true),
-            Decision::Ask
-        );
-    }
-
-    #[test]
-    fn read_only_mode_always_asks_for_destructive() {
-        // Allow rules are ignored: every write or command still asks.
-        let r = rules(&["write_file"], &[], &["cargo"], &[]);
-        assert_eq!(
-            r.decide(false, Mode::ReadOnly, "write_file", None, true),
-            Decision::Ask
-        );
-        assert_eq!(
-            r.decide(false, Mode::ReadOnly, "bash", Some("cargo build"), true),
-            Decision::Ask
-        );
-        // Reads still run, --yolo still skips, deny still wins.
-        assert_eq!(
-            r.decide(false, Mode::ReadOnly, "read_file", None, false),
-            Decision::Allow
-        );
-        assert_eq!(
-            r.decide(true, Mode::ReadOnly, "write_file", None, true),
-            Decision::Allow
-        );
-        let d = rules(&[], &["write_file"], &[], &[]);
-        assert!(matches!(
-            d.decide(false, Mode::ReadOnly, "write_file", None, true),
-            Decision::Deny(_)
-        ));
+        for mode in Mode::ALL {
+            assert_eq!(r.decide(*mode, "read_file", None, false), Decision::Allow);
+        }
     }
 
     #[test]
     fn edit_mode_allows_file_writes_but_not_bash() {
         let r = ApprovalRules::default();
         assert_eq!(
-            r.decide(false, Mode::Edit, "write_file", None, true),
+            r.decide(Mode::Edit, "write_file", None, true),
             Decision::Allow
         );
         assert_eq!(
-            r.decide(false, Mode::Edit, "edit_file", None, true),
+            r.decide(Mode::Edit, "edit_file", None, true),
             Decision::Allow
         );
         assert_eq!(
-            r.decide(false, Mode::Edit, "bash", Some("ls"), true),
+            r.decide(Mode::Edit, "bash", Some("ls"), true),
+            Decision::Ask
+        );
+        // In read-only the same writes ask.
+        assert_eq!(
+            r.decide(Mode::ReadOnly, "write_file", None, true),
             Decision::Ask
         );
     }
@@ -851,44 +871,58 @@ mod tests {
     fn bypass_mode_allows_everything_except_deny_rules() {
         let r = ApprovalRules::default();
         assert_eq!(
-            r.decide(false, Mode::Bypass, "write_file", None, true),
+            r.decide(Mode::Bypass, "write_file", None, true),
             Decision::Allow
         );
         assert_eq!(
-            r.decide(false, Mode::Bypass, "bash", Some("rm -rf build"), true),
+            r.decide(Mode::Bypass, "bash", Some("rm -rf build"), true),
             Decision::Allow
         );
-        // Deny rules still win, exactly as they do over --yolo.
-        let d = rules(&[], &["web_fetch"], &[], &["sudo"]);
-        assert!(matches!(
-            d.decide(false, Mode::Bypass, "web_fetch", None, true),
-            Decision::Deny(_)
-        ));
-        assert!(matches!(
-            d.decide(false, Mode::Bypass, "bash", Some("sudo ls"), true),
-            Decision::Deny(_)
-        ));
+        assert_eq!(
+            r.decide(Mode::Bypass, "web_fetch", None, true),
+            Decision::Allow
+        );
     }
 
     #[test]
-    fn plan_mode_denies_destructive_but_not_reads() {
+    fn plan_mode_denies_mutations_but_not_research() {
         // Even allow-listed writes/commands are denied with a plan-mode reason.
         let r = rules(&["write_file"], &[], &["cargo"], &[]);
-        for (tool, cmd) in [("write_file", None), ("bash", Some("cargo build"))] {
-            match r.decide(false, Mode::Plan, tool, cmd, true) {
+        for (tool, cmd) in [
+            ("write_file", None),
+            ("edit_file", None),
+            ("bash", Some("cargo build")),
+        ] {
+            match r.decide(Mode::Plan, tool, cmd, true) {
                 Decision::Deny(reason) => assert!(reason.contains("plan mode")),
                 other => panic!("expected Deny, got {other:?}"),
             }
         }
-        // Reads still run, --yolo still overrides the mode.
+        // Reads still run; web research follows the usual allow/ask rules.
         assert_eq!(
-            r.decide(false, Mode::Plan, "read_file", None, false),
+            r.decide(Mode::Plan, "read_file", None, false),
             Decision::Allow
         );
+        assert_eq!(r.decide(Mode::Plan, "web_fetch", None, true), Decision::Ask);
+        let w = rules(&["web_search"], &[], &[], &[]);
         assert_eq!(
-            r.decide(true, Mode::Plan, "write_file", None, true),
+            r.decide(Mode::Plan, "web_search", None, true),
+            Decision::Ask
+        );
+        assert_eq!(
+            w.decide(Mode::Plan, "web_search", None, true),
             Decision::Allow
         );
+    }
+
+    #[test]
+    fn approval_tool_lists_reject_unknown_names() {
+        assert!(validate_tool_lists(&rules(&["web_search"], &["bash"], &[], &[])).is_ok());
+        let err = validate_tool_lists(&rules(&["web-fetch"], &[], &[], &[]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("web-fetch"));
+        assert!(err.contains("web_fetch"));
     }
 
     #[test]
@@ -925,11 +959,14 @@ mod tests {
         )
         .unwrap();
         let merged = merge(global, project);
-        // Project [[models]] replace the global list wholesale.
+        // Project [[models]] replace the global list wholesale, and take
+        // default_model with them: the global default (which points into the
+        // replaced roster) must not leak through.
         let models = merged.models.unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[1].base_url.as_deref(), Some("http://host:8000/v1"));
-        assert_eq!(merged.default_model.as_deref(), Some("global"));
+        assert_eq!(merged.default_model, None);
+        assert!(validate_models(&models, merged.default_model.as_deref()).is_ok());
         assert_eq!(merged.approval.allow_bash, vec!["ls", "cargo"]);
         assert_eq!(merged.approval.deny_bash, vec!["sudo"]);
         assert_eq!(merged.instructions.unwrap(), vec!["AGENTS.md", "STYLE.md"]);
@@ -937,6 +974,27 @@ mod tests {
             merged.system_prompt.as_deref(),
             Some("You are a project bot in {root}.")
         );
+    }
+
+    #[test]
+    fn project_default_model_alone_picks_from_global_roster() {
+        let global: FileConfig = toml::from_str(
+            r#"
+            [[models]]
+            name = "a"
+            provider = "ollama"
+            model = "m1"
+            [[models]]
+            name = "b"
+            provider = "ollama"
+            model = "m2"
+            "#,
+        )
+        .unwrap();
+        let project: FileConfig = toml::from_str(r#"default_model = "b""#).unwrap();
+        let merged = merge(global, project);
+        assert_eq!(merged.default_model.as_deref(), Some("b"));
+        assert_eq!(merged.models.unwrap().len(), 2);
     }
 
     #[test]
