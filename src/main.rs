@@ -34,18 +34,22 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let terminal = ratatui::init();
-    // Mouse capture enables wheel scrolling in the transcript. Terminal-native
-    // text selection still works with Shift (or Option on macOS) held.
+    // Mouse capture enables wheel scrolling in the transcript (terminal-native
+    // text selection still works with Shift, or Option on macOS, held);
+    // bracketed paste lets multi-line pastes arrive as one event instead of
+    // the newlines submitting early.
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
-        ratatui::crossterm::event::EnableMouseCapture
+        ratatui::crossterm::event::EnableMouseCapture,
+        ratatui::crossterm::event::EnableBracketedPaste
     );
     let result = app::App::new(&cfg, event_tx, cmd_tx, cancel_tx)
         .run(terminal, event_rx)
         .await;
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
-        ratatui::crossterm::event::DisableMouseCapture
+        ratatui::crossterm::event::DisableMouseCapture,
+        ratatui::crossterm::event::DisableBracketedPaste
     );
     ratatui::restore();
     result

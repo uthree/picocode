@@ -118,6 +118,9 @@ pub struct App {
     comp_prefix: Option<String>,
     /// Number of prompts submitted but not yet completed.
     pub running: usize,
+    /// True while a completion request is in flight but no tokens have
+    /// arrived yet — the status bar shows "waiting" instead of "running".
+    pub waiting: bool,
     pub spinner: usize,
     pub pending: Option<PendingApproval>,
     /// Open `ask_user` dialog, if any.
@@ -171,6 +174,7 @@ impl App {
             comp_selected: 0,
             comp_prefix: None,
             running: 0,
+            waiting: false,
             spinner: 0,
             pending: None,
             question: None,
@@ -286,8 +290,14 @@ impl App {
                 self.handle_key(key).await;
             }
             Event::Paste(text) => {
-                let text = text.replace(['\r', '\n'], " ");
+                // Keep pasted newlines; tabs become spaces so the cursor
+                // math (unicode widths) stays correct.
+                let text = text
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\t', "    ");
                 self.insert_str(&text);
+                self.reset_completion();
             }
             Event::Mouse(m) => match m.kind {
                 MouseEventKind::ScrollUp => self.scroll_by(-3),
@@ -354,7 +364,33 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Enter => self.submit().await,
+            // Alt+Enter (and Shift+Enter on terminals that report it) inserts
+            // a newline; Ctrl+J below covers legacy raw-mode terminals.
+            KeyCode::Enter
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+            {
+                self.insert_char('\n');
+                self.reset_completion();
+            }
+            KeyCode::Enter => {
+                // Backslash continuation: `\` + Enter becomes a newline —
+                // works on terminals that can't report modified Enter.
+                if self.cursor > 0 && self.input.chars().nth(self.cursor - 1) == Some('\\') {
+                    self.cursor -= 1;
+                    let i = self.byte_index();
+                    self.input.remove(i);
+                    self.insert_char('\n');
+                    self.reset_completion();
+                } else {
+                    self.submit().await;
+                }
+            }
+            KeyCode::Char('j') if ctrl => {
+                self.insert_char('\n');
+                self.reset_completion();
+            }
             KeyCode::Tab => self.complete(false),
             // Shift+Tab cycles the completion popup while it's open, and the
             // permission mode otherwise.
@@ -365,7 +401,16 @@ impl App {
                     self.complete(true);
                 }
             }
-            KeyCode::Up | KeyCode::Down => self.move_completion(key.code == KeyCode::Up),
+            // Arrows drive the completion popup when it's open; in a
+            // multi-line input they move the cursor between lines.
+            KeyCode::Up | KeyCode::Down => {
+                let up = key.code == KeyCode::Up;
+                if !self.completions().is_empty() {
+                    self.move_completion(up);
+                } else if self.input.contains('\n') {
+                    self.move_input_line(up);
+                }
+            }
             KeyCode::Char(c) if !ctrl => {
                 self.insert_char(c);
                 self.reset_completion();
@@ -407,6 +452,17 @@ impl App {
         self.cursor = 0;
         self.reset_completion();
 
+        // Commands are single-line; a multi-line message is always a prompt
+        // (or a multi-line `!` shell script).
+        if text.contains('\n') {
+            if text.starts_with('!') {
+                self.run_shell(text);
+            } else {
+                self.send_prompt(text).await;
+            }
+            return;
+        }
+
         match text.as_str() {
             "/quit" | "/q" | "/exit" => self.should_quit = true,
             "/clear" => {
@@ -429,6 +485,7 @@ impl App {
                 self.close_blocks();
                 if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
                     self.running += 1;
+                    self.waiting = true;
                     self.follow = true;
                     self.turn_out = 0;
                     self.delta_est = 0;
@@ -455,18 +512,22 @@ impl App {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
             _ if text.starts_with('!') => self.run_shell(text),
-            _ => {
-                self.close_blocks();
-                self.push(EntryKind::User, text.clone());
-                if self.cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
-                    self.running += 1;
-                    self.follow = true;
-                    self.turn_out = 0;
-                    self.delta_est = 0;
-                } else {
-                    self.push(EntryKind::Error, "The agent worker has stopped".to_string());
-                }
-            }
+            _ => self.send_prompt(text).await,
+        }
+    }
+
+    /// Send a user prompt to the agent worker.
+    async fn send_prompt(&mut self, text: String) {
+        self.close_blocks();
+        self.push(EntryKind::User, text.clone());
+        if self.cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
+            self.running += 1;
+            self.waiting = true;
+            self.follow = true;
+            self.turn_out = 0;
+            self.delta_est = 0;
+        } else {
+            self.push(EntryKind::Error, "The agent worker has stopped".to_string());
         }
     }
 
@@ -933,6 +994,7 @@ impl App {
     fn handle_agent_event(&mut self, ev: AgentEvent) {
         match ev {
             AgentEvent::TextDelta(s) => {
+                self.waiting = false;
                 self.delta_est += 1;
                 if !self.assistant_open {
                     self.close_blocks();
@@ -942,6 +1004,7 @@ impl App {
                 self.append_to_last(&s);
             }
             AgentEvent::ReasoningDelta(s) => {
+                self.waiting = false;
                 self.delta_est += 1;
                 if !self.reasoning_open {
                     self.close_blocks();
@@ -951,10 +1014,14 @@ impl App {
                 self.append_to_last(&s);
             }
             AgentEvent::ToolCall { name, args } => {
+                self.waiting = false;
                 self.close_blocks();
                 self.push_tool_call(&name, &args);
             }
             AgentEvent::ToolResult { output } => {
+                // The next completion request follows right after a tool
+                // result, so the run is back to waiting on the API.
+                self.waiting = true;
                 self.close_blocks();
                 let text = clamp_lines(output.trim_end(), TOOL_OUTPUT_MAX_LINES);
                 if !text.is_empty() {
@@ -966,6 +1033,8 @@ impl App {
                 args,
                 respond,
             } => {
+                // Waiting on the user now, not the API.
+                self.waiting = false;
                 self.pending = Some(PendingApproval {
                     name,
                     args,
@@ -978,6 +1047,7 @@ impl App {
                 options,
                 respond,
             } => {
+                self.waiting = false;
                 self.question = Some(PendingQuestion {
                     title,
                     question,
@@ -1027,6 +1097,7 @@ impl App {
                 self.push(EntryKind::ToolOut, output);
             }
             AgentEvent::Cancelled => {
+                self.waiting = false;
                 self.close_blocks();
                 // A cancelled stream drops the ask_user tool future, so an
                 // open dialog can no longer deliver its answer — close it.
@@ -1056,6 +1127,8 @@ impl App {
             }
             AgentEvent::TurnComplete => {
                 self.running = self.running.saturating_sub(1);
+                // A queued prompt starts processing right away.
+                self.waiting = self.running > 0;
                 self.close_blocks();
                 if self.running == 0 {
                     // Any dialog still open belongs to a dropped tool future.
@@ -1134,6 +1207,21 @@ impl App {
         self.reasoning_open = false;
     }
 
+    /// Up/Down in a multi-line input: move the cursor a line, keeping the
+    /// column where possible.
+    fn move_input_line(&mut self, up: bool) {
+        let (row, col) = line_col(&self.input, self.cursor);
+        let rows = self.input.split('\n').count();
+        let target = if up {
+            row.checked_sub(1)
+        } else {
+            (row + 1 < rows).then_some(row + 1)
+        };
+        if let Some(r) = target {
+            self.cursor = cursor_at(&self.input, r, col);
+        }
+    }
+
     fn insert_char(&mut self, c: char) {
         let i = self.byte_index();
         self.input.insert(i, c);
@@ -1187,5 +1275,69 @@ fn clamp_lines(s: &str, max: usize) -> String {
         let mut out = lines[..max].join("\n");
         out.push_str(&format!("\n… (+{} lines)", lines.len() - max));
         out
+    }
+}
+
+/// (row, column) of a char cursor within a multi-line string, in chars.
+pub fn line_col(text: &str, cursor: usize) -> (usize, usize) {
+    let mut row = 0;
+    let mut col = 0;
+    for c in text.chars().take(cursor) {
+        if c == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (row, col)
+}
+
+/// Char cursor for a (row, column) position, clamping the column to the
+/// line's length (used by Up/Down in the input box).
+pub fn cursor_at(text: &str, row: usize, col: usize) -> usize {
+    let mut cursor = 0;
+    for (i, line) in text.split('\n').enumerate() {
+        let len = line.chars().count();
+        if i == row {
+            return cursor + col.min(len);
+        }
+        cursor += len + 1;
+    }
+    text.chars().count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_col_tracks_newlines() {
+        assert_eq!(line_col("abc", 2), (0, 2));
+        assert_eq!(line_col("ab\ncd", 3), (1, 0));
+        assert_eq!(line_col("ab\ncd", 5), (1, 2));
+        assert_eq!(line_col("", 0), (0, 0));
+        // Multi-byte chars count as one column.
+        assert_eq!(line_col("あい\nう", 4), (1, 1));
+    }
+
+    #[test]
+    fn cursor_at_clamps_to_line_length() {
+        let text = "long line\nab\nmiddle";
+        assert_eq!(cursor_at(text, 0, 4), 4);
+        // Column clamped to the shorter line.
+        assert_eq!(cursor_at(text, 1, 7), 12);
+        assert_eq!(cursor_at(text, 2, 0), 13);
+        // A row past the end lands at the end of the text.
+        assert_eq!(cursor_at(text, 9, 0), text.chars().count());
+    }
+
+    #[test]
+    fn line_col_and_cursor_at_roundtrip() {
+        let text = "one\ntwo three\nよん";
+        for cursor in 0..=text.chars().count() {
+            let (row, col) = line_col(text, cursor);
+            assert_eq!(cursor_at(text, row, col), cursor);
+        }
     }
 }

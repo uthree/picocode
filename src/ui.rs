@@ -12,9 +12,11 @@ use crate::app::{App, EntryKind, PendingApproval, PendingQuestion, SessionPicker
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // The input box grows with the number of lines being written (up to 8).
+    let input_lines = app.input.split('\n').count().clamp(1, 8) as u16;
     let [transcript, input, status] = Layout::vertical([
         Constraint::Min(1),
-        Constraint::Length(3),
+        Constraint::Length(input_lines + 2),
         Constraint::Length(1),
     ])
     .areas(f.area());
@@ -272,35 +274,53 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         .title(" picocode ")
         .border_style(Style::new().fg(Color::DarkGray));
     let inner_width = area.width.saturating_sub(2) as usize;
+    let inner_height = (area.height.saturating_sub(2) as usize).max(1);
+    let dialog_open =
+        app.pending.is_some() || app.session_picker.is_some() || app.question.is_some();
 
     if app.input.is_empty() {
         let hint = Paragraph::new(Span::styled(
-            "Type a message (Enter to send · / commands · ! runs shell)",
+            "Type a message (Enter to send · \\⏎ newline · / commands · ! runs shell)",
             Style::new().fg(Color::DarkGray),
         ))
         .block(block);
         f.render_widget(hint, area);
-        if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
+        if !dialog_open {
             f.set_cursor_position(Position::new(area.x + 1, area.y + 1));
         }
         return;
     }
 
-    // Horizontal scroll: drop chars from the left until the cursor fits.
-    let chars: Vec<char> = app.input.chars().collect();
-    let mut start = 0usize;
-    let cursor_width = |from: usize, to: usize| -> usize {
-        chars[from..to].iter().map(|c| c.width().unwrap_or(0)).sum()
-    };
-    while cursor_width(start, app.cursor) >= inner_width.saturating_sub(1) {
-        start += 1;
+    let (cursor_row, cursor_col) = crate::app::line_col(&app.input, app.cursor);
+    let lines: Vec<&str> = app.input.split('\n').collect();
+    // Vertical window: keep the cursor's row visible (relevant only when
+    // there are more lines than the box's growth cap).
+    let top = cursor_row.saturating_sub(inner_height - 1);
+
+    let mut visible: Vec<Line> = Vec::new();
+    let mut cursor_pos = None;
+    for (i, line) in lines.iter().enumerate().skip(top).take(inner_height) {
+        if i == cursor_row {
+            // Horizontal scroll on the cursor's line: drop chars from the
+            // left until the cursor fits. Other lines are simply clipped.
+            let chars: Vec<char> = line.chars().collect();
+            let width = |from: usize, to: usize| -> usize {
+                chars[from..to].iter().map(|c| c.width().unwrap_or(0)).sum()
+            };
+            let mut start = 0usize;
+            while start < cursor_col && width(start, cursor_col) >= inner_width.saturating_sub(1) {
+                start += 1;
+            }
+            cursor_pos = Some((width(start, cursor_col), i - top));
+            visible.push(Line::raw(chars[start..].iter().collect::<String>()));
+        } else {
+            visible.push(Line::raw((*line).to_string()));
+        }
     }
-    let visible: String = chars[start..].iter().collect();
-    let cursor_x = cursor_width(start, app.cursor);
 
     f.render_widget(Paragraph::new(visible).block(block), area);
-    if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
-        f.set_cursor_position(Position::new(area.x + 1 + cursor_x as u16, area.y + 1));
+    if !dialog_open && let Some((x, y)) = cursor_pos {
+        f.set_cursor_position(Position::new(area.x + 1 + x as u16, area.y + 1 + y as u16));
     }
 }
 
@@ -308,10 +328,18 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let indicator = if app.running > 0 {
-        Span::styled(
-            format!("{} running", SPINNER[app.spinner % SPINNER.len()]),
-            Style::new().fg(Color::Green),
-        )
+        // Waiting for the API to start answering vs. tokens streaming in.
+        if app.waiting {
+            Span::styled(
+                format!("{} waiting", SPINNER[app.spinner % SPINNER.len()]),
+                Style::new().fg(Color::Yellow),
+            )
+        } else {
+            Span::styled(
+                format!("{} running", SPINNER[app.spinner % SPINNER.len()]),
+                Style::new().fg(Color::Green),
+            )
+        }
     } else {
         Span::styled("● idle", Style::new().fg(Color::DarkGray))
     };

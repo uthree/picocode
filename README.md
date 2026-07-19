@@ -11,8 +11,13 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage on the right of the status bar — a flat
   tqdm-style context-window gauge (green/yellow/red by pressure) plus a live
-  `↑ prefill ↓ decode` counter while generating. Model reasoning is collapsed
-  by default (`Ctrl+T` to expand)
+  `↑ prefill ↓ decode` counter while generating. The activity indicator
+  distinguishes *waiting* (request sent, no tokens yet) from *running*
+  (tokens streaming). Model reasoning is collapsed by default (`Ctrl+T` to
+  expand)
+- **Multi-line input**: `\` + `Enter` (also `Alt+Enter` or `Ctrl+J`) inserts a
+  newline and the input box grows with the text; pasted newlines are kept
+  (bracketed paste). `↑`/`↓` move between lines, plain `Enter` sends
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted
@@ -79,9 +84,10 @@ Keys inside the TUI:
 | Key | Action |
 |---|---|
 | `Enter` | Send |
+| `\` + `Enter` (or `Alt+Enter` / `Ctrl+J`) | Insert a newline (pasting multi-line text works too) |
 | `Tab` | Command completion (popup appears on `/`; repeat to cycle) |
 | `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
-| `↑` / `↓` | Select a completion candidate |
+| `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input |
 | `y` / `n` | Approve / deny a tool call |
 | `Esc` | Stop the generation in progress |
 | `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
