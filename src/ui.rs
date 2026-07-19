@@ -277,9 +277,15 @@ fn push_wrapped(
 // ----- input ---------------------------------------------------------------
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered()
-        .title(" picocode ")
-        .border_style(Style::new().fg(Color::DarkGray));
+    // A leading `!` means the input is a direct shell command; recolor the
+    // box so the mode is obvious while typing.
+    let shell = app.input.starts_with('!');
+    let (title, border) = if shell {
+        (" shell ", Style::new().fg(Color::Yellow))
+    } else {
+        (" picocode ", Style::new().fg(Color::DarkGray))
+    };
+    let block = Block::bordered().title(title).border_style(border);
     let inner_width = area.width.saturating_sub(2) as usize;
     let inner_height = (area.height.saturating_sub(2) as usize).max(1);
     let dialog_open = app.pending.is_some()

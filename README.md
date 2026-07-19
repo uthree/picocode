@@ -55,7 +55,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   directly. The last-used model is remembered per project and restored on
   the next start
 - **Direct shell**: prefix the input with `!` to run a shell command yourself;
-  the output is shown and recorded into the model's context
+  the input box turns yellow while typing one, and the output is shown and
+  recorded into the model's context
 - **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
   prompt automatically
 - **Web search**: pluggable providers — DuckDuckGo (default, no key), a
