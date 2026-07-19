@@ -8,65 +8,21 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 
 ## Features
 
-- **TUI chat**: streaming output, scrolling that stays put while the model is
-  generating, token usage on the right of the status bar — a flat
-  tqdm-style context-window gauge (green/yellow/red by pressure) plus a live
-  `↑ prefill ↓ decode` counter while generating. The activity indicator
-  distinguishes *waiting* (request sent, no tokens yet) from *running*
-  (tokens streaming). Model reasoning is collapsed by default (`Ctrl+T` to
-  expand)
-- **Multi-line input**: `\` + `Enter` (also `Alt+Enter` or `Ctrl+J`) inserts a
-  newline and the input box grows with the text; pasting multi-line text
-  inserts it as one block — via bracketed paste, or, on terminals without
-  it, by treating a burst of simultaneous keystrokes around an Enter as a
-  paste instead of a submission. Long pastes (6+ lines or 500+ chars)
-  collapse into a `[Pasted text #1 +N lines]` placeholder — deleted as one
-  unit, shown collapsed in the transcript, and expanded to the full text
-  for the model on send. `↑`/`↓` move between lines, plain `Enter` sends
-- **Markdown rendering**: replies are rendered — headings, bold/italic,
-  inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
-- **Syntax highlighting**: fenced code blocks in replies are highlighted
-  (via syntect, language taken from the ```` ```lang ```` tag)
-- **Diffs**: `edit_file` shows a line diff (and `write_file` its added lines)
-  both in the approval dialog and in the transcript, so changes are visible
-  even in modes that skip the confirmation. Additions/removals are marked by
-  the background color (delta-style) while the text keeps its syntax
-  highlighting, picked from the file extension
+- **TUI chat** with streaming output, markdown rendering, syntax-highlighted
+  code blocks and line diffs for file edits
 - **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
   `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
-  `submit_plan`. File tools are confined to the project directory —
-  absolute paths and `..` escapes are rejected
-- **Approval flow**: anything that changes state or talks to the network
-  (bash, file writes, web search/fetch) asks for confirmation by
-  default; local reads run automatically. Besides `y`/`n`, the dialog
-  offers `a` (always): approve *and* whitelist similar calls for the rest
-  of the session — the tool name, or for bash the command's program (+
-  subcommand) prefix, shown in the dialog before you press it. Config
-  rules are absolute in every mode: deny always denies, allow always
-  allows. `/permissions` shows the effective rules
-- **Permission modes**: `Shift+Tab` cycles read-only (default — destructive
-  calls ask), edit (file writes run freely), and plan (bash and file writes
-  denied — the model explores and proposes a plan first)
-- **Multi-turn**: keeps conversation history and tool results across turns
-- **Context compaction**: `/compact` replaces the history with an LLM-written
-  summary to free context
-- **Model switching**: `/model` opens a selection dialog listing the
-  configured `[[models]]` entries plus the models the provider actually
-  serves (Ollama `/api/tags`, OpenAI-compatible `/v1/models`, Anthropic
-  `/v1/models`) — pick with `↑`/`↓` and `Enter`; no config entry needed for
-  served models and the conversation carries over. `/model <name>` switches
-  directly. The last-used model is remembered per project and restored on
-  the next start
-- **Direct shell**: prefix the input with `!` to run a shell command yourself;
-  the input box turns yellow while typing one, and the output is shown and
-  recorded into the model's context
-- **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
-  prompt automatically
-- **Web search**: pluggable providers — DuckDuckGo (default, no key), a
-  self-hosted SearXNG instance, or the Brave Search API
-- **User questions**: the model can present concrete choices (`ask_user`); a
-  dialog opens — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the model
-  is told and proceeds on its own)
+  `submit_plan` — file tools are confined to the project directory
+- **Approval flow** for anything that changes state or talks to the network:
+  `y` / `n`, or `a` (always) to whitelist similar calls for the session
+- **Permission modes**: read-only / edit / plan / bypass (`Shift+Tab` cycles)
+- **Model switching** (`/model`, listing configured and provider-served
+  models), **context compaction** (`/compact`), **session autosave and
+  resume** (`/resume`), **settings dialog** (`/config`)
+- **Direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),
+  **pluggable web search** (DuckDuckGo / SearXNG / Brave)
+
+Key bindings, slash commands and display details: [docs/tui.md](docs/tui.md).
 
 ## Setup (local LLM)
 
@@ -102,35 +58,6 @@ CLI flags always win. With no flags, no saved state and no `[[models]]`
 entries, picocode asks the local Ollama server for its model list and uses
 the first one — if Ollama is unreachable or empty, it exits with instructions
 for setting up a provider instead.
-
-Keys inside the TUI:
-
-| Key | Action |
-|---|---|
-| `Enter` | Send |
-| `\` + `Enter` (or `Alt+Enter` / `Ctrl+J`) | Insert a newline (pasting multi-line text works too) |
-| `Tab` | Command completion (popup appears on `/`; repeat to cycle) |
-| `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
-| `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input |
-| `y` / `n` | Approve / deny a tool call |
-| `a` | Approve and don't ask again for similar calls this session (the dialog shows the allow rule it adds) |
-| `Esc` | Stop the generation in progress |
-| `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
-| `Ctrl+T` | Expand / collapse model reasoning |
-| `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
-| `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
-| `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly (see below) |
-| `/permissions` | Show the current mode and the effective allow/deny rules |
-| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display and max turns per prompt (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter` |
-| `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config |
-| `/compact` | Compact the conversation into a summary |
-| `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
-| `/clear` | Clear conversation history (a new session log starts) |
-| `/quit` (`Ctrl+C`) | Quit |
-
-Mouse capture is enabled for wheel scrolling, so terminal-native text selection
-needs the usual bypass modifier held (`Shift` on most terminals, `Option`/`Fn`
-on macOS ones).
 
 ## Permissions
 
@@ -169,9 +96,9 @@ turn already running.
 Every conversation is saved automatically after each completed turn to
 `$XDG_DATA_HOME/picocode/sessions/<project>/<id>.json` (default
 `~/.local/share/…`; on Windows the home is `%USERPROFILE%`), including both
-the model history and the rendered transcript. `/resume` opens a dialog listing this project's sessions
-newest-first — pick one with `↑`/`↓` and `Enter`. The session is restored into
-the current model and keeps writing to the same log. Empty conversations are
+the model history and the rendered transcript. `/resume` picks one from a
+dialog listing this project's sessions newest-first; it is restored into the
+current model and keeps writing to the same log. Empty conversations are
 never written.
 
 ## Configuration
