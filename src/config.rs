@@ -332,6 +332,56 @@ impl ModeHandle {
     }
 }
 
+/// Shared, runtime-extensible approval rules: the approval dialog's
+/// "always allow" answer adds to them from the TUI while the approval hook
+/// (running in the worker task) reads them per tool call, so an addition
+/// takes effect immediately and survives model switches.
+#[derive(Clone, Debug)]
+pub struct RulesHandle(std::sync::Arc<std::sync::RwLock<ApprovalRules>>);
+
+impl RulesHandle {
+    pub fn new(rules: ApprovalRules) -> Self {
+        Self(std::sync::Arc::new(std::sync::RwLock::new(rules)))
+    }
+
+    /// See [`ApprovalRules::decide`].
+    pub fn decide(
+        &self,
+        mode: Mode,
+        tool: &str,
+        bash_command: Option<&str>,
+        destructive: bool,
+    ) -> Decision {
+        self.0
+            .read()
+            .unwrap()
+            .decide(mode, tool, bash_command, destructive)
+    }
+
+    /// Copy of the current rules (for `/permissions`).
+    pub fn snapshot(&self) -> ApprovalRules {
+        self.0.read().unwrap().clone()
+    }
+
+    /// Add a tool to `allow_tools` for the rest of the session.
+    pub fn allow_tool(&self, tool: &str) {
+        let mut rules = self.0.write().unwrap();
+        if !rules.allow_tools.iter().any(|t| t == tool) {
+            rules.allow_tools.push(tool.to_string());
+        }
+    }
+
+    /// Add bash prefix patterns to `allow_bash` for the rest of the session.
+    pub fn allow_bash(&self, patterns: &[String]) {
+        let mut rules = self.0.write().unwrap();
+        for p in patterns {
+            if !rules.allow_bash.contains(p) {
+                rules.allow_bash.push(p.clone());
+            }
+        }
+    }
+}
+
 /// Auto-approval / auto-denial rules for tool calls.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -474,6 +524,33 @@ fn split_segments(cmd: &str) -> Vec<String> {
         .collect()
 }
 
+/// The `allow_bash` patterns an "always allow" answer adds for a command:
+/// each segment's program name, plus the subcommand word when there is one
+/// (`cargo build --release` → `cargo build`, `ls -la` → `ls`). The dialog
+/// shows the result, so the user sees exactly what gets whitelisted.
+pub fn bash_allow_patterns(cmd: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for seg in split_segments(cmd) {
+        let mut words = seg.split_whitespace();
+        let Some(first) = words.next() else { continue };
+        // A subcommand is a plain word (`build`, `status`), not a flag,
+        // number or path.
+        let sub = words.next().filter(|w| {
+            w.starts_with(|c: char| c.is_ascii_alphabetic())
+                && w.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        });
+        let pat = match sub {
+            Some(sub) => format!("{first} {sub}"),
+            None => first.to_string(),
+        };
+        if !out.contains(&pat) {
+            out.push(pat);
+        }
+    }
+    out
+}
+
 /// Word-boundary prefix match: pattern `cargo` matches `cargo build` but not
 /// `cargofoo`; `git status` matches `git status -s`. A trailing `*` in the
 /// pattern is tolerated (Claude-Code-style `cargo *`) and stripped.
@@ -583,7 +660,8 @@ pub struct Config {
     pub max_turns: usize,
     /// Working directory the tools operate in.
     pub root: PathBuf,
-    pub approval: ApprovalRules,
+    /// Approval rules, shared with the hook and extensible at runtime.
+    pub approval: RulesHandle,
     /// Current permission mode, shared with the approval hook.
     pub mode: ModeHandle,
     pub search: SearchConfig,
@@ -677,7 +755,7 @@ impl Config {
             model_note,
             max_turns: args.max_turns,
             root,
-            approval: file.approval,
+            approval: RulesHandle::new(file.approval),
             mode: ModeHandle::new(if args.bypass {
                 Mode::Bypass
             } else {
@@ -724,6 +802,57 @@ mod tests {
         );
         assert_eq!(split_segments("(cd /tmp && ls)"), vec!["cd /tmp", "ls"]);
         assert_eq!(split_segments("a\nb"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn always_allow_patterns_take_program_and_subcommand() {
+        assert_eq!(
+            bash_allow_patterns("cargo build --release"),
+            ["cargo build"]
+        );
+        assert_eq!(bash_allow_patterns("ls -la"), ["ls"]);
+        assert_eq!(
+            bash_allow_patterns("git status && git diff | head"),
+            ["git status", "git diff", "head"]
+        );
+        assert_eq!(bash_allow_patterns("python script.py"), ["python"]);
+        assert_eq!(bash_allow_patterns("sleep 2"), ["sleep"]);
+        assert_eq!(
+            bash_allow_patterns("cargo test && cargo test"),
+            ["cargo test"]
+        );
+        assert!(bash_allow_patterns("").is_empty());
+    }
+
+    #[test]
+    fn rules_handle_shares_runtime_additions() {
+        let handle = RulesHandle::new(ApprovalRules::default());
+        let hook_side = handle.clone();
+
+        let ask = handle.decide(Mode::ReadOnly, "bash", Some("cargo build"), true);
+        assert_eq!(ask, Decision::Ask);
+        handle.allow_bash(&["cargo build".to_string()]);
+        assert_eq!(
+            hook_side.decide(Mode::ReadOnly, "bash", Some("cargo build --release"), true),
+            Decision::Allow
+        );
+
+        assert_eq!(
+            hook_side.decide(Mode::ReadOnly, "web_search", None, true),
+            Decision::Ask
+        );
+        handle.allow_tool("web_search");
+        assert_eq!(
+            hook_side.decide(Mode::ReadOnly, "web_search", None, true),
+            Decision::Allow
+        );
+
+        // Duplicates are not stacked.
+        handle.allow_tool("web_search");
+        handle.allow_bash(&["cargo build".to_string()]);
+        let snap = hook_side.snapshot();
+        assert_eq!(snap.allow_tools, ["web_search"]);
+        assert_eq!(snap.allow_bash, ["cargo build"]);
     }
 
     #[test]

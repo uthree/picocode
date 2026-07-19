@@ -11,24 +11,24 @@ use rig::completion::CompletionModel;
 use rig::tool::Tool;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::config::{ApprovalRules, Decision, ModeHandle};
+use crate::config::{Decision, ModeHandle, RulesHandle};
 use crate::event::AgentEvent;
 use crate::tools::{Bash, DESTRUCTIVE_TOOLS};
 
 pub struct ApprovalHook {
     tx: mpsc::Sender<AgentEvent>,
-    rules: ApprovalRules,
+    rules: RulesHandle,
     mode: ModeHandle,
 }
 
 impl ApprovalHook {
-    pub fn new(tx: mpsc::Sender<AgentEvent>, rules: ApprovalRules, mode: ModeHandle) -> Self {
+    pub fn new(tx: mpsc::Sender<AgentEvent>, rules: RulesHandle, mode: ModeHandle) -> Self {
         Self { tx, rules, mode }
     }
 }
 
 /// Extract the `command` string from the bash tool's JSON args.
-fn bash_command(tool_name: &str, args: &str) -> Option<String> {
+pub(crate) fn bash_command(tool_name: &str, args: &str) -> Option<String> {
     if tool_name != Bash::NAME {
         return None;
     }

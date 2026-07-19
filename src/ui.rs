@@ -731,11 +731,12 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         }
     }
 
-    // Chrome rows: borders (2) + title + blank + blank + [y]/[n] = 6. The
-    // body budget accounts for all of them so the key hints always fit.
-    let max_height = screen.height.saturating_sub(4).clamp(7, 20);
-    let height = (body.len() as u16 + 6).clamp(7, max_height);
-    let budget = height.saturating_sub(6) as usize;
+    // Chrome rows: borders (2) + title + blank + blank + always-rule +
+    // [y]/[a]/[n] = 7. The body budget accounts for all of them so the key
+    // hints always fit.
+    let max_height = screen.height.saturating_sub(4).clamp(8, 21);
+    let height = (body.len() as u16 + 7).clamp(8, max_height);
+    let budget = height.saturating_sub(7) as usize;
     if body.len() > budget {
         let hidden = body.len() + 1 - budget;
         body.truncate(budget.saturating_sub(1));
@@ -761,9 +762,21 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     ];
     lines.extend(body);
     lines.push(Line::default());
+    // What "always" adds; truncated to the dialog width (no wrapping here).
+    let mut rule = format!("a = {} (this session)", pending.always.label());
+    if rule.chars().count() > inner_width {
+        rule = rule.chars().take(inner_width.saturating_sub(1)).collect();
+        rule.push('…');
+    }
+    lines.push(Line::from(Span::styled(
+        rule,
+        Style::new().fg(Color::DarkGray),
+    )));
     lines.push(Line::from(vec![
         Span::styled("[y]", Style::new().fg(Color::Green).bold()),
         Span::raw(" approve   "),
+        Span::styled("[a]", Style::new().fg(Color::Cyan).bold()),
+        Span::raw(" always   "),
         Span::styled("[n]", Style::new().fg(Color::Red).bold()),
         Span::raw(" deny"),
     ]));

@@ -85,7 +85,27 @@ pub struct Entry {
 pub struct PendingApproval {
     pub name: String,
     pub args: String,
+    /// What the `a` (always) answer whitelists.
+    pub always: AlwaysAllow,
     respond: oneshot::Sender<bool>,
+}
+
+/// The allow rule the approval dialog's "always" answer adds.
+pub enum AlwaysAllow {
+    /// Add the tool to `allow_tools`.
+    Tool(String),
+    /// Add these prefix patterns to `allow_bash`.
+    Bash(Vec<String>),
+}
+
+impl AlwaysAllow {
+    /// The addition, spelled as it would appear in picocode.toml.
+    pub fn label(&self) -> String {
+        match self {
+            AlwaysAllow::Tool(name) => format!("allow_tools += {name}"),
+            AlwaysAllow::Bash(patterns) => format!("allow_bash += {}", patterns.join(", ")),
+        }
+    }
 }
 
 /// State of the `/resume` selection dialog.
@@ -377,12 +397,13 @@ impl App {
             return;
         }
 
-        // Approval modal captures y/n while pending.
+        // Approval modal captures y/a/n while pending.
         if self.pending.is_some() {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                     self.resolve_approval(true)
                 }
+                KeyCode::Char('a') | KeyCode::Char('A') => self.resolve_approval_always(),
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.resolve_approval(false)
                 }
@@ -1062,7 +1083,7 @@ impl App {
             Mode::Plan => "bash and file writes are denied; web tools ask unless allow-listed",
             Mode::Bypass => "EVERYTHING runs without confirmation (deny rules still apply)",
         };
-        let rules = &self.cfg.approval;
+        let rules = self.cfg.approval.snapshot();
         let list = |xs: &[String]| {
             if xs.is_empty() {
                 "(none)".to_string()
@@ -1199,6 +1220,27 @@ impl App {
         }
     }
 
+    /// `a` in the approval dialog: approve the call and whitelist similar
+    /// ones for the rest of the session.
+    fn resolve_approval_always(&mut self) {
+        if let Some(p) = self.pending.take() {
+            match &p.always {
+                AlwaysAllow::Tool(name) => self.cfg.approval.allow_tool(name),
+                AlwaysAllow::Bash(patterns) => self.cfg.approval.allow_bash(patterns),
+            }
+            self.push(
+                EntryKind::Notice,
+                format!(
+                    "✔ approved: {} — {} for this session (put it in picocode.toml \
+                     [approval] to keep it)",
+                    p.name,
+                    p.always.label()
+                ),
+            );
+            let _ = p.respond.send(true);
+        }
+    }
+
     // ----- agent events ----------------------------------------------------
 
     fn handle_agent_event(&mut self, ev: AgentEvent) {
@@ -1245,9 +1287,23 @@ impl App {
             } => {
                 // Waiting on the user now, not the API.
                 self.waiting = false;
+                // What "always" would whitelist: the command's prefix
+                // patterns for bash, the tool name for everything else.
+                let always = match crate::approval::bash_command(&name, &args) {
+                    Some(cmd) => {
+                        let patterns = crate::config::bash_allow_patterns(&cmd);
+                        if patterns.is_empty() {
+                            AlwaysAllow::Tool(name.clone())
+                        } else {
+                            AlwaysAllow::Bash(patterns)
+                        }
+                    }
+                    None => AlwaysAllow::Tool(name.clone()),
+                };
                 self.pending = Some(PendingApproval {
                     name,
                     args,
+                    always,
                     respond,
                 });
             }

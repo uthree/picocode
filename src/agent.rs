@@ -409,7 +409,9 @@ fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ApprovalRules, Mode, ModeHandle, Provider, SearchConfig, SearchProvider};
+    use crate::config::{
+        ApprovalRules, Mode, ModeHandle, Provider, RulesHandle, SearchConfig, SearchProvider,
+    };
     use std::path::PathBuf;
 
     fn test_cfg() -> Config {
@@ -422,7 +424,7 @@ mod tests {
             model_note: None,
             max_turns: 50,
             root: PathBuf::from("/tmp/proj"),
-            approval: ApprovalRules::default(),
+            approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),
             search: SearchConfig {
                 provider: SearchProvider::Duckduckgo,

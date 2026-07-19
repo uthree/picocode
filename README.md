@@ -37,10 +37,13 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   `submit_plan`. File tools are confined to the project directory —
   absolute paths and `..` escapes are rejected
 - **Approval flow**: anything that changes state or talks to the network
-  (bash, file writes, web search/fetch) asks for y/n confirmation by
-  default; local reads run automatically. Config rules are absolute in
-  every mode: deny always denies, allow always allows. `/permissions`
-  shows the effective rules
+  (bash, file writes, web search/fetch) asks for confirmation by
+  default; local reads run automatically. Besides `y`/`n`, the dialog
+  offers `a` (always): approve *and* whitelist similar calls for the rest
+  of the session — the tool name, or for bash the command's program (+
+  subcommand) prefix, shown in the dialog before you press it. Config
+  rules are absolute in every mode: deny always denies, allow always
+  allows. `/permissions` shows the effective rules
 - **Permission modes**: `Shift+Tab` cycles read-only (default — destructive
   calls ask), edit (file writes run freely), and plan (bash and file writes
   denied — the model explores and proposes a plan first)
@@ -110,6 +113,7 @@ Keys inside the TUI:
 | `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
 | `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input |
 | `y` / `n` | Approve / deny a tool call |
+| `a` | Approve and don't ask again for similar calls this session (the dialog shows the allow rule it adds) |
 | `Esc` | Stop the generation in progress |
 | `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
@@ -138,6 +142,13 @@ escaping the root are rejected (the model is pointed at `bash`, which asks).
 
 One precedence, in every mode: **deny rules > mode (plan/bypass) > allow
 rules > ask**. `/permissions` prints the effective rules at any time.
+
+Allow rules come from the config file or from the approval dialog's `a`
+(always) answer, which adds one at runtime — the tool's name to
+`allow_tools`, or for bash the command's program (+ subcommand) prefix to
+`allow_bash` (`cargo build --release` adds `cargo build`; `ls -la` adds
+`ls`). Runtime additions last until picocode exits; copy them into
+`picocode.toml`'s `[approval]` section to make them permanent.
 
 `Shift+Tab` cycles the permission mode, shown in the status bar; `/read-only`,
 `/edit`, `/plan` and `/bypass` switch to a specific mode directly:
