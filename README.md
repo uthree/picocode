@@ -11,8 +11,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage in the status bar. Model reasoning is collapsed by
   default (`Ctrl+T` to expand)
-- **8 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
-  `edit_file` / `bash` / `web_search` / `web_fetch`
+- **9 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
+  `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user`
 - **Approval flow**: destructive operations (bash, file writes) ask for y/n
   confirmation; reads run automatically; configurable allow/deny rules
 - **Permission modes**: `Shift+Tab` cycles read-only (default — every write
@@ -28,6 +28,9 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   prompt automatically
 - **Web search**: pluggable providers — DuckDuckGo (default, no key), a
   self-hosted SearXNG instance, or the Brave Search API
+- **User questions**: the model can present concrete choices (`ask_user`); a
+  dialog opens — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the model
+  is told and proceeds on its own)
 
 ## Setup (local LLM)
 

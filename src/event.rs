@@ -19,6 +19,13 @@ pub enum AgentEvent {
         args: String,
         respond: oneshot::Sender<bool>,
     },
+    /// The model asked the user to pick one of several options (`ask_user`).
+    /// The answer is the selected index, or `None` if dismissed with Esc.
+    UserQuestion {
+        question: String,
+        options: Vec<String>,
+        respond: oneshot::Sender<Option<usize>>,
+    },
     /// Token usage for one completion request within the run.
     Usage { input: u64, output: u64 },
     /// The conversation history was compacted into a summary.

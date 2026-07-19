@@ -71,6 +71,14 @@ async fn run_smoke(
             AgentEvent::ApprovalRequest { respond, .. } => {
                 let _ = respond.send(true);
             }
+            AgentEvent::UserQuestion {
+                question,
+                options,
+                respond,
+            } => {
+                println!("\n[question] {question} {options:?} -> auto-picking the first");
+                let _ = respond.send(Some(0));
+            }
             AgentEvent::Usage { input, output } => println!("\n[usage] ctx={input} out={output}"),
             AgentEvent::Compacted { messages, summary } => {
                 println!("\n[compacted] {messages} messages\n{summary}");

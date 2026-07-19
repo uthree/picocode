@@ -46,6 +46,7 @@ pub fn spawn(
                 .tool(tools::Bash::new(root))
                 .tool(tools::WebFetch::new())
                 .tool(tools::WebSearch::new(cfg.search.clone()))
+                .tool(tools::AskUser::new(event_tx.clone()))
                 .max_tokens(8192)
                 .build();
             // A second, tool-less agent used by /compact: it only ever needs
@@ -117,7 +118,7 @@ fn default_system_prompt(cfg: &Config) -> String {
          Your working directory is: {root}\n\
          \n\
          Available tools: read_file, list_files, grep, write_file, edit_file, bash, \
-         web_search, web_fetch.\n\
+         web_search, web_fetch, ask_user.\n\
          \n\
          Workflow:\n\
          1. Explore first: use list_files and grep to locate relevant files, and read_file \
@@ -130,6 +131,8 @@ fn default_system_prompt(cfg: &Config) -> String {
          - Use the tools instead of guessing about the project.\n\
          - Use web_search to look things up on the web, and web_fetch to read a URL the \
          user shares or a search result you want in full.\n\
+         - When you need the user to decide between a few concrete alternatives, call \
+         ask_user with short options instead of asking in plain text.\n\
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display()

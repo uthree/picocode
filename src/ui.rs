@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, EntryKind, PendingApproval, SessionPicker};
+use crate::app::{App, EntryKind, PendingApproval, PendingQuestion, SessionPicker};
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -23,7 +23,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, app, input);
     draw_status(f, app, status);
 
-    if app.pending.is_none() && app.session_picker.is_none() {
+    if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
         let matches = app.completions();
         if !matches.is_empty() {
             draw_completions(f, app, &matches, input);
@@ -31,6 +31,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(picker) = &app.session_picker {
         draw_session_picker(f, picker);
+    }
+    if let Some(q) = &app.question {
+        draw_question(f, q);
     }
     if let Some(pending) = &app.pending {
         draw_approval(f, pending);
@@ -247,7 +250,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         ))
         .block(block);
         f.render_widget(hint, area);
-        if app.pending.is_none() && app.session_picker.is_none() {
+        if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
             f.set_cursor_position(Position::new(area.x + 1, area.y + 1));
         }
         return;
@@ -266,7 +269,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let cursor_x = cursor_width(start, app.cursor);
 
     f.render_widget(Paragraph::new(visible).block(block), area);
-    if app.pending.is_none() && app.session_picker.is_none() {
+    if app.pending.is_none() && app.session_picker.is_none() && app.question.is_none() {
         f.set_cursor_position(Position::new(area.x + 1 + cursor_x as u16, area.y + 1));
     }
 }
@@ -378,6 +381,59 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
 
     let block = Block::bordered()
         .title(" Resume session ")
+        .border_style(Style::new().fg(Color::Cyan));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ----- ask_user dialog -----------------------------------------------------
+
+fn draw_question(f: &mut Frame, q: &PendingQuestion) {
+    let screen = f.area();
+    let width = screen.width.saturating_sub(6).clamp(30, 70);
+    let inner_width = width.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    push_wrapped(
+        &mut lines,
+        &q.question,
+        inner_width.saturating_sub(2),
+        |_, s| Line::from(Span::styled(format!(" {s}"), Style::new().bold())),
+    );
+    lines.push(Line::default());
+
+    // Cap the dialog to the screen; window the options around the selection.
+    let max_height = screen.height.saturating_sub(4).max(6) as usize;
+    let budget = max_height
+        .saturating_sub(2) // borders
+        .saturating_sub(lines.len() + 1); // question + blank + hint
+    let visible = q.options.len().min(budget.max(1));
+    let offset = (q.selected + 1).saturating_sub(visible);
+    for (i, opt) in q.options.iter().enumerate().skip(offset).take(visible) {
+        let text: String = format!(" {opt}").chars().take(inner_width).collect();
+        lines.push(if i == q.selected {
+            Line::from(Span::styled(
+                format!("{text:<inner_width$}"),
+                Style::new().fg(Color::Black).bg(Color::Cyan),
+            ))
+        } else {
+            Line::from(Span::raw(text))
+        });
+    }
+    lines.push(Line::from(Span::styled(
+        " ↑↓ select · Enter answer · Esc dismiss",
+        Style::new().fg(Color::DarkGray),
+    )));
+
+    let height = (lines.len() as u16 + 2).min(max_height as u16);
+    let area = Rect {
+        x: screen.x + (screen.width.saturating_sub(width)) / 2,
+        y: screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    };
+    let block = Block::bordered()
+        .title(" Question ")
         .border_style(Style::new().fg(Color::Cyan));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);

@@ -71,6 +71,14 @@ pub struct SessionPicker {
     pub selected: usize,
 }
 
+/// State of the `ask_user` option dialog.
+pub struct PendingQuestion {
+    pub question: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+    respond: oneshot::Sender<Option<usize>>,
+}
+
 pub struct App {
     pub entries: Vec<Entry>,
     pub input: String,
@@ -95,6 +103,8 @@ pub struct App {
     pub running: usize,
     pub spinner: usize,
     pub pending: Option<PendingApproval>,
+    /// Open `ask_user` dialog, if any.
+    pub question: Option<PendingQuestion>,
     /// Context size (input tokens) of the latest completion request.
     pub ctx_tokens: u64,
     /// Total output tokens across the session.
@@ -140,6 +150,7 @@ impl App {
             running: 0,
             spinner: 0,
             pending: None,
+            question: None,
             ctx_tokens: 0,
             out_tokens: 0,
             model_label: cfg.model_label(),
@@ -279,6 +290,19 @@ impl App {
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.resolve_approval(false)
                 }
+                _ => {}
+            }
+            return;
+        }
+
+        // The ask_user dialog captures navigation keys while open.
+        if let Some(q) = &mut self.question {
+            let count = q.options.len();
+            match key.code {
+                KeyCode::Up => q.selected = (q.selected + count - 1) % count,
+                KeyCode::Down => q.selected = (q.selected + 1) % count,
+                KeyCode::Enter => self.resolve_question(true),
+                KeyCode::Esc => self.resolve_question(false),
                 _ => {}
             }
             return;
@@ -766,6 +790,14 @@ impl App {
         self.follow = new_top >= max_top;
     }
 
+    /// Close the ask_user dialog: `Some(selected)` on Enter, `None` on Esc.
+    /// The tool call turns the answer into the tool result for the model.
+    fn resolve_question(&mut self, accept: bool) {
+        if let Some(q) = self.question.take() {
+            let _ = q.respond.send(accept.then_some(q.selected));
+        }
+    }
+
     fn resolve_approval(&mut self, approve: bool) {
         if let Some(p) = self.pending.take() {
             let label = if approve {
@@ -821,6 +853,18 @@ impl App {
                     respond,
                 });
             }
+            AgentEvent::UserQuestion {
+                question,
+                options,
+                respond,
+            } => {
+                self.question = Some(PendingQuestion {
+                    question,
+                    options,
+                    selected: 0,
+                    respond,
+                });
+            }
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
                 self.out_tokens += output;
@@ -831,6 +875,9 @@ impl App {
             }
             AgentEvent::Cancelled => {
                 self.close_blocks();
+                // A cancelled stream drops the ask_user tool future, so an
+                // open dialog can no longer deliver its answer — close it.
+                self.question = None;
                 self.push(EntryKind::Notice, "Generation stopped (Esc)".to_string());
             }
             AgentEvent::Compacted { messages, summary } => {
@@ -858,6 +905,8 @@ impl App {
                 self.running = self.running.saturating_sub(1);
                 self.close_blocks();
                 if self.running == 0 {
+                    // Any dialog still open belongs to a dropped tool future.
+                    self.question = None;
                     self.autosave();
                 }
             }

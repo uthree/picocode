@@ -1,5 +1,6 @@
 //! Built-in tools exposed to the agent.
 
+mod ask;
 mod bash;
 mod edit;
 mod fetch;
@@ -9,6 +10,7 @@ mod read;
 mod search;
 mod write;
 
+pub use ask::AskUser;
 pub use bash::{Bash, BashArgs};
 pub use edit::EditFile;
 pub use fetch::WebFetch;
