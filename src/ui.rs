@@ -289,7 +289,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 
     if app.input.is_empty() {
         let hint = Paragraph::new(Span::styled(
-            "Type a message (Enter to send · \\⏎ newline · / commands · ! runs shell)",
+            "Type a message",
             Style::new().fg(Color::DarkGray),
         ))
         .block(block);
