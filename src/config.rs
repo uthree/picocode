@@ -23,6 +23,15 @@ pub fn provider_name(p: Provider) -> &'static str {
     }
 }
 
+pub fn provider_from_name(s: &str) -> Option<Provider> {
+    match s {
+        "ollama" => Some(Provider::Ollama),
+        "anthropic" => Some(Provider::Anthropic),
+        "openai" => Some(Provider::Openai),
+        _ => None,
+    }
+}
+
 /// picocode — a minimal TUI coding agent.
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -125,6 +134,53 @@ fn pick_entry<'a>(models: &'a [ModelEntry], default: Option<&str>) -> Option<&'a
     match default {
         Some(d) => models.iter().find(|m| m.name == d),
         None => models.first(),
+    }
+}
+
+/// One resolved startup selection:
+/// (provider, model, base_url, active entry name, context window).
+type Selection = (Provider, String, Option<String>, Option<String>, u64);
+
+fn entry_selection(entry: &ModelEntry) -> Selection {
+    (
+        entry.provider,
+        entry.model.clone(),
+        entry.base_url.clone(),
+        Some(entry.name.clone()),
+        entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+    )
+}
+
+/// Startup selection from the saved last-used model: a still-existing
+/// `[[models]]` entry wins (its current definition applies); otherwise the
+/// saved ad-hoc provider/model is used directly.
+fn restore_selection(state: &crate::state::LastModel, models: &[ModelEntry]) -> Option<Selection> {
+    if let Some(name) = &state.entry
+        && let Some(entry) = models.iter().find(|m| m.name == *name)
+    {
+        return Some(entry_selection(entry));
+    }
+    let provider = provider_from_name(&state.provider)?;
+    if state.model.is_empty() {
+        return None;
+    }
+    Some((
+        provider,
+        state.model.clone(),
+        state.base_url.clone(),
+        None,
+        DEFAULT_CONTEXT_WINDOW,
+    ))
+}
+
+/// CLI default model when only `--provider` is given. Ollama has no
+/// hardcoded default: an empty model means "use the first model the server
+/// serves", resolved in `main` before the agent is built.
+fn default_model_for(provider: Provider) -> String {
+    match provider {
+        Provider::Ollama => String::new(),
+        Provider::Anthropic => "claude-opus-4-8".to_string(),
+        Provider::Openai => "gpt-4o".to_string(),
     }
 }
 
@@ -522,32 +578,33 @@ impl Config {
         let models = file.models.unwrap_or_default();
         validate_models(&models, file.default_model.as_deref())?;
 
-        // CLI flags select an ad-hoc model and take precedence over the
-        // config file's [[models]]; the entries stay available to /model.
+        // Startup model precedence: CLI flags > last-used state > config
+        // default_model / first entry > empty (main() picks the first model
+        // Ollama serves, or reports how to configure a provider).
         let cli_selection =
             args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
-        let (provider, model, base_url, active_model, context_window) =
-            match pick_entry(&models, file.default_model.as_deref()) {
-                Some(entry) if !cli_selection => (
-                    entry.provider,
-                    entry.model.clone(),
-                    entry.base_url.clone(),
-                    Some(entry.name.clone()),
-                    entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
-                ),
-                _ => {
-                    let provider = args.provider.unwrap_or(Provider::Ollama);
-                    let model = args.model.unwrap_or_else(|| {
-                        match provider {
-                            Provider::Ollama => "qwen3:4b",
-                            Provider::Anthropic => "claude-opus-4-8",
-                            Provider::Openai => "gpt-4o",
-                        }
-                        .to_string()
-                    });
-                    (provider, model, args.base_url, None, DEFAULT_CONTEXT_WINDOW)
-                }
-            };
+        let state = if cli_selection {
+            None
+        } else {
+            crate::state::state_path(&root).and_then(|p| crate::state::load(&p))
+        };
+        let (provider, model, base_url, active_model, context_window) = if cli_selection {
+            let provider = args.provider.unwrap_or(Provider::Ollama);
+            let model = args.model.unwrap_or_else(|| default_model_for(provider));
+            (provider, model, args.base_url, None, DEFAULT_CONTEXT_WINDOW)
+        } else if let Some(sel) = state.as_ref().and_then(|s| restore_selection(s, &models)) {
+            sel
+        } else if let Some(entry) = pick_entry(&models, file.default_model.as_deref()) {
+            entry_selection(entry)
+        } else {
+            (
+                Provider::Ollama,
+                String::new(),
+                None,
+                None,
+                DEFAULT_CONTEXT_WINDOW,
+            )
+        };
 
         let instruction_names = file
             .instructions
@@ -935,6 +992,55 @@ mod tests {
             merge(global, project).system_prompt.as_deref(),
             Some("global prompt")
         );
+    }
+
+    #[test]
+    fn saved_state_restores_entry_or_ad_hoc_selection() {
+        use crate::state::LastModel;
+        let models: Vec<ModelEntry> = toml::from_str::<FileConfig>(
+            r#"
+            [[models]]
+            name = "local"
+            provider = "ollama"
+            model = "qwen3:4b"
+            context_window = 40960
+            "#,
+        )
+        .unwrap()
+        .models
+        .unwrap();
+        let state = |entry: Option<&str>, provider: &str, model: &str| LastModel {
+            entry: entry.map(str::to_string),
+            provider: provider.into(),
+            model: model.into(),
+            base_url: None,
+        };
+
+        // A still-existing entry wins and applies its current definition.
+        let sel = restore_selection(&state(Some("local"), "ollama", "old-model"), &models).unwrap();
+        assert_eq!(sel.1, "qwen3:4b");
+        assert_eq!(sel.3.as_deref(), Some("local"));
+        assert_eq!(sel.4, 40960);
+
+        // A removed entry falls back to the saved ad-hoc selection.
+        let sel = restore_selection(&state(Some("gone"), "ollama", "qwen3:0.6b"), &models).unwrap();
+        assert_eq!(sel.0, Provider::Ollama);
+        assert_eq!(sel.1, "qwen3:0.6b");
+        assert_eq!(sel.3, None);
+
+        // Broken state is ignored.
+        assert!(restore_selection(&state(None, "nope", "m"), &models).is_none());
+        assert!(restore_selection(&state(None, "ollama", ""), &models).is_none());
+
+        assert_eq!(provider_from_name("openai"), Some(Provider::Openai));
+        assert_eq!(provider_from_name("x"), None);
+    }
+
+    #[test]
+    fn cli_defaults_leave_ollama_model_to_discovery() {
+        assert_eq!(default_model_for(Provider::Ollama), "");
+        assert_eq!(default_model_for(Provider::Anthropic), "claude-opus-4-8");
+        assert_eq!(default_model_for(Provider::Openai), "gpt-4o");
     }
 
     #[test]

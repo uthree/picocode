@@ -48,7 +48,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   serves (Ollama `/api/tags`, OpenAI-compatible `/v1/models`, Anthropic
   `/v1/models`) — pick with `↑`/`↓` and `Enter`; no config entry needed for
   served models and the conversation carries over. `/model <name>` switches
-  directly
+  directly. The last-used model is remembered per project and restored on
+  the next start
 - **Direct shell**: prefix the input with `!` to run a shell command yourself;
   the output is shown and recorded into the model's context
 - **Instruction files**: `AGENTS.md` (configurable) is loaded into the system
@@ -71,7 +72,7 @@ cargo run
 ## Usage
 
 ```sh
-picocode                                   # ollama/qwen3:4b (default)
+picocode                                   # last-used model, else the first model Ollama serves
 picocode --model qwen3:8b                  # different model
 picocode --provider anthropic              # uses ANTHROPIC_API_KEY
 picocode --provider openai --model gpt-4o  # uses OPENAI_API_KEY
@@ -84,6 +85,13 @@ CLI flags select an ad-hoc model and take precedence over the config file's
 `[[models]]` entries. Base URL precedence: `--base-url` > config file >
 environment variables (`OLLAMA_API_BASE_URL` / `OPENAI_BASE_URL` /
 `ANTHROPIC_BASE_URL`) > provider default.
+
+The model a run starts with (or is switched to) is remembered per project in
+`$XDG_DATA_HOME/picocode/state/<project>.json` and restored on the next start;
+CLI flags always win. With no flags, no saved state and no `[[models]]`
+entries, picocode asks the local Ollama server for its model list and uses
+the first one — if Ollama is unreachable or empty, it exits with instructions
+for setting up a provider instead.
 
 Keys inside the TUI:
 
@@ -212,5 +220,6 @@ src/
   highlight.rs — syntax highlighting (syntect) and line diffs (similar)
   markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
   models.rs    — provider model-list queries backing /model
+  state.rs     — per-project persisted state (last-used model)
   tools/       — built-in tool implementations
 ```

@@ -270,7 +270,26 @@ impl App {
         // Fetch the provider's model list in the background so `/model` can
         // offer and validate provider models right away.
         app.refresh_models();
+        // Whatever model this run starts with is the one to restore next time.
+        app.save_last_model();
         app
+    }
+
+    /// Remember the active model (best-effort) so the next start in this
+    /// project resumes with it.
+    fn save_last_model(&self) {
+        let Some(path) = crate::state::state_path(&self.cfg.root) else {
+            return;
+        };
+        let _ = crate::state::save(
+            &path,
+            &crate::state::LastModel {
+                entry: self.cfg.active_model.clone(),
+                provider: crate::config::provider_name(self.cfg.provider).to_string(),
+                model: self.cfg.model.clone(),
+                base_url: self.cfg.base_url.clone(),
+            },
+        );
     }
 
     pub async fn run(
@@ -798,6 +817,7 @@ impl App {
             self.available_models.clear();
             self.refresh_models();
         }
+        self.save_last_model();
     }
 
     /// `/resume` with no argument: open the session-selection dialog.
@@ -1138,7 +1158,8 @@ impl App {
                 self.delta_est = 0;
             }
             AgentEvent::ModelList { label, result } => match result {
-                Ok(names) => {
+                Ok(mut names) => {
+                    names.sort();
                     self.available_models = names;
                     self.rebuild_model_picker();
                 }
@@ -1384,64 +1405,63 @@ fn spawn_input_thread() -> mpsc::Receiver<Event> {
     rx
 }
 
-/// The text a key event would type, if any: `Some((text, is_newline))` for
-/// plain character, Enter and Tab presses, and for bracketed-paste events.
-fn textual(ev: &Event) -> Option<(String, bool)> {
+/// The text a key event would type, if any: plain character, Enter and Tab
+/// presses, and bracketed-paste events.
+fn textual(ev: &Event) -> Option<String> {
     match ev {
         Event::Key(k) if k.kind == KeyEventKind::Press => {
             let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
             match k.code {
-                KeyCode::Char(c) if plain => Some((c.to_string(), false)),
-                KeyCode::Enter if plain => Some(("\n".to_string(), true)),
-                KeyCode::Tab if plain => Some(("\t".to_string(), false)),
+                KeyCode::Char(c) if plain => Some(c.to_string()),
+                KeyCode::Enter if plain => Some("\n".to_string()),
+                KeyCode::Tab if plain => Some("\t".to_string()),
                 _ => None,
             }
         }
-        Event::Paste(s) => Some((s.clone(), s.contains('\n'))),
+        Event::Paste(s) => Some(s.clone()),
         _ => None,
     }
 }
 
 /// Paste detection for terminals without bracketed paste: within a burst of
-/// simultaneously-arriving events, a run of plain text keys that contains a
-/// newline next to other text can only be a paste — a human cannot press
-/// Enter and another key in the same instant. Such runs are replaced by a
+/// simultaneously-arriving events, a run of plain text keys with a newline
+/// *inside* it can only be a multi-line paste. Such runs are replaced by a
 /// single `Event::Paste` so the newlines are inserted instead of each Enter
-/// submitting a message. Anything else passes through unchanged.
+/// submitting a message. Runs whose only newlines trail at the end (text
+/// then Enter — e.g. keystrokes bunched up by a laggy connection, or a
+/// scripted command) replay as normal key presses so the Enter still
+/// submits. Anything else passes through unchanged.
 fn coalesce_paste(batch: Vec<Event>) -> Vec<Event> {
     if batch.len() < 2 {
         return batch;
     }
 
-    fn flush(out: &mut Vec<Event>, run: &mut Vec<Event>, text: &mut String, newline: &mut bool) {
-        if *newline && text.chars().count() >= 2 {
+    fn flush(out: &mut Vec<Event>, run: &mut Vec<Event>, text: &mut String) {
+        if text.trim_end_matches('\n').contains('\n') {
             run.clear();
             out.push(Event::Paste(std::mem::take(text)));
         } else {
             out.append(run);
             text.clear();
         }
-        *newline = false;
     }
 
     let mut out: Vec<Event> = Vec::new();
     let mut run: Vec<Event> = Vec::new();
     let mut text = String::new();
-    let mut newline = false;
     for ev in batch {
         match textual(&ev) {
-            Some((t, nl)) => {
+            Some(t) => {
                 text.push_str(&t);
-                newline |= nl;
                 run.push(ev);
             }
             None => {
-                flush(&mut out, &mut run, &mut text, &mut newline);
+                flush(&mut out, &mut run, &mut text);
                 out.push(ev);
             }
         }
     }
-    flush(&mut out, &mut run, &mut text, &mut newline);
+    flush(&mut out, &mut run, &mut text);
     out
 }
 
@@ -1685,7 +1705,7 @@ mod tests {
         let enter = || Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let up = || Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
 
-        // A burst of text around a newline can only be a paste.
+        // A burst with a newline inside the text can only be a paste.
         let out = coalesce_paste(vec![key('a'), key('b'), enter(), key('c')]);
         assert!(matches!(&out[..], [Event::Paste(s)] if s.as_str() == "ab\nc"));
 
@@ -1698,12 +1718,18 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|e| matches!(e, Event::Key(_))));
 
-        // Non-text events break the run.
-        let out = coalesce_paste(vec![key('a'), enter(), up(), key('b')]);
+        // Text with only a trailing Enter is a typed command bunched up in
+        // transit (or a scripted one) — it replays and still submits.
+        let out = coalesce_paste(vec![key('l'), key('s'), enter()]);
         assert_eq!(out.len(), 3);
-        assert!(matches!(&out[0], Event::Paste(s) if s.as_str() == "a\n"));
+        assert!(out.iter().all(|e| matches!(e, Event::Key(_))));
+
+        // Non-text events break the run.
+        let out = coalesce_paste(vec![key('a'), enter(), key('b'), up(), key('c')]);
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[0], Event::Paste(s) if s.as_str() == "a\nb"));
         assert!(matches!(&out[1], Event::Key(k) if k.code == KeyCode::Up));
-        assert!(matches!(&out[2], Event::Key(k) if k.code == KeyCode::Char('b')));
+        assert!(matches!(&out[2], Event::Key(k) if k.code == KeyCode::Char('c')));
 
         // A bracketed-paste event merges with keys from the same burst.
         let out = coalesce_paste(vec![Event::Paste("x\ny".into()), key('z')]);
@@ -1712,7 +1738,8 @@ mod tests {
         // Modified keys (e.g. Ctrl+C in a burst) are never swallowed.
         let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         let out = coalesce_paste(vec![key('a'), enter(), ctrl_c]);
-        assert!(matches!(&out[1], Event::Key(k) if k.modifiers == KeyModifiers::CONTROL));
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[2], Event::Key(k) if k.modifiers == KeyModifiers::CONTROL));
     }
 
     #[test]

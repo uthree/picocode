@@ -56,7 +56,7 @@ pub fn sessions_dir(root: &Path) -> Option<PathBuf> {
     Some(base.join("picocode/sessions").join(slug(root)))
 }
 
-fn slug(root: &Path) -> String {
+pub(crate) fn slug(root: &Path) -> String {
     root.display()
         .to_string()
         .chars()

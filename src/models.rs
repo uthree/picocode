@@ -32,7 +32,8 @@ fn resolve_base_url(
 
 /// Ask the provider which models it serves: Ollama's `/api/tags`, or the
 /// `/models` listing of OpenAI-compatible and Anthropic APIs. Returns the
-/// model ids sorted; an empty list means the provider reported none.
+/// model ids in the provider's own order (the first is used as the default
+/// model when nothing is configured); empty means it reported none.
 pub async fn fetch(
     provider: Provider,
     configured_base: Option<&str>,
@@ -69,9 +70,7 @@ pub async fn fetch(
         .json()
         .await
         .with_context(|| format!("invalid JSON from {base}"))?;
-    let mut names = parse_names(&body, provider);
-    names.sort();
-    Ok(names)
+    Ok(parse_names(&body, provider))
 }
 
 /// Pull the model ids out of a listing response: Ollama nests them under
