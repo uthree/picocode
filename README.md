@@ -11,6 +11,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage in the status bar. Model reasoning is collapsed by
   default (`Ctrl+T` to expand)
+- **Markdown rendering**: replies are rendered — headings, bold/italic,
+  inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted
   (via syntect, language taken from the ```` ```lang ```` tag)
 - **Diffs**: `edit_file` shows a colored line diff (and `write_file` its added
@@ -187,5 +189,6 @@ src/
   agent.rs     — rig agent construction and the streaming worker
   approval.rs  — approval gate for destructive tools (rig AgentHook)
   highlight.rs — syntax highlighting (syntect) and line diffs (similar)
+  markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
   tools/       — built-in tool implementations
 ```

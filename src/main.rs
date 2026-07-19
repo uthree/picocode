@@ -4,6 +4,7 @@ mod approval;
 mod config;
 mod event;
 mod highlight;
+mod markdown;
 mod session;
 mod tools;
 mod ui;
