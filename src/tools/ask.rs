@@ -76,6 +76,7 @@ impl Tool for AskUser {
         let (respond, rx) = oneshot::channel();
         self.tx
             .send(AgentEvent::UserQuestion {
+                title: "Question".to_string(),
                 question: args.question,
                 options: options.clone(),
                 respond,
@@ -115,6 +116,7 @@ mod tests {
             question,
             options,
             respond,
+            ..
         }) = rx.recv().await
         else {
             panic!("expected a UserQuestion event");

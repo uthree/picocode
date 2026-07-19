@@ -47,6 +47,7 @@ pub fn spawn(
                 .tool(tools::WebFetch::new())
                 .tool(tools::WebSearch::new(cfg.search.clone()))
                 .tool(tools::AskUser::new(event_tx.clone()))
+                .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()))
                 .max_tokens(8192)
                 .build();
             // A second, tool-less agent used by /compact: it only ever needs
@@ -118,7 +119,7 @@ fn default_system_prompt(cfg: &Config) -> String {
          Your working directory is: {root}\n\
          \n\
          Available tools: read_file, list_files, grep, write_file, edit_file, bash, \
-         web_search, web_fetch, ask_user.\n\
+         web_search, web_fetch, ask_user, submit_plan.\n\
          \n\
          Workflow:\n\
          1. Explore first: use list_files and grep to locate relevant files, and read_file \
@@ -275,10 +276,11 @@ async fn run_once<M>(
     let prompt = if cfg.mode.get() == crate::config::Mode::Plan {
         format!(
             "{prompt}\n\n[picocode plan mode is active: investigate with the read-only \
-             tools, then reply with a concise implementation plan — goal, steps, files \
+             tools and put together a concise implementation plan — goal, steps, files \
              to touch, and how to verify. Do not modify files or run state-changing \
-             commands; write_file/edit_file/bash are blocked until the user switches \
-             to edit mode.]"
+             commands; write_file/edit_file/bash are blocked. When the plan is ready, \
+             call submit_plan with the full plan text to ask the user for approval — \
+             if approved you are switched to edit mode and must execute it.]"
         )
     } else {
         prompt

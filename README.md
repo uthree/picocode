@@ -11,8 +11,9 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **TUI chat**: streaming output, scrolling that stays put while the model is
   generating, token usage in the status bar. Model reasoning is collapsed by
   default (`Ctrl+T` to expand)
-- **9 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
-  `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user`
+- **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
+  `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
+  `submit_plan`
 - **Approval flow**: destructive operations (bash, file writes) ask for y/n
   confirmation; reads run automatically; configurable allow/deny rules
 - **Permission modes**: `Shift+Tab` cycles read-only (default — every write
@@ -90,7 +91,7 @@ on macOS ones).
 |---|---|
 | `read-only` (default) | Read tools run freely; **every** write or command asks for confirmation, even if allow-listed |
 | `edit` | `write_file` / `edit_file` run without asking; `bash` and other tools follow the `[approval]` config rules |
-| `plan` | Writes and commands are **auto-denied**: the model investigates with the read tools and presents an implementation plan. Approve it by switching to `edit` and telling the model to go ahead |
+| `plan` | Writes and commands are **auto-denied**: the model investigates with the read tools, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn; declining sends it back to planning |
 
 Deny rules and `--yolo` take precedence over the mode. Full precedence:
 deny rules > `--yolo` > mode > allow rules > ask. A switch takes effect

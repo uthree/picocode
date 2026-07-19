@@ -391,7 +391,7 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
 
 fn draw_question(f: &mut Frame, q: &PendingQuestion) {
     let screen = f.area();
-    let width = screen.width.saturating_sub(6).clamp(30, 70);
+    let width = screen.width.saturating_sub(6).clamp(30, 80);
     let inner_width = width.saturating_sub(2) as usize;
 
     let mut lines: Vec<Line> = Vec::new();
@@ -401,13 +401,26 @@ fn draw_question(f: &mut Frame, q: &PendingQuestion) {
         inner_width.saturating_sub(2),
         |_, s| Line::from(Span::styled(format!(" {s}"), Style::new().bold())),
     );
+
+    // Cap the dialog to the screen. The options and the hint always stay
+    // visible: a long question (e.g. a submitted plan) is truncated first.
+    let max_height = screen.height.saturating_sub(4).max(8) as usize;
+    let content_budget = max_height.saturating_sub(2); // borders
+    let q_budget = content_budget
+        .saturating_sub(q.options.len().min(6) + 2) // options + blank + hint
+        .max(1);
+    if lines.len() > q_budget {
+        let hidden = lines.len() + 1 - q_budget;
+        lines.truncate(q_budget.saturating_sub(1));
+        lines.push(Line::from(Span::styled(
+            format!(" … (+{hidden} more lines)"),
+            Style::new().fg(Color::DarkGray),
+        )));
+    }
     lines.push(Line::default());
 
-    // Cap the dialog to the screen; window the options around the selection.
-    let max_height = screen.height.saturating_sub(4).max(6) as usize;
-    let budget = max_height
-        .saturating_sub(2) // borders
-        .saturating_sub(lines.len() + 1); // question + blank + hint
+    // Window the options around the selection.
+    let budget = content_budget.saturating_sub(lines.len() + 1); // hint
     let visible = q.options.len().min(budget.max(1));
     let offset = (q.selected + 1).saturating_sub(visible);
     for (i, opt) in q.options.iter().enumerate().skip(offset).take(visible) {
@@ -434,7 +447,7 @@ fn draw_question(f: &mut Frame, q: &PendingQuestion) {
         height,
     };
     let block = Block::bordered()
-        .title(" Question ")
+        .title(format!(" {} ", q.title))
         .border_style(Style::new().fg(Color::Cyan));
     f.render_widget(Clear, area);
     f.render_widget(Paragraph::new(lines).block(block), area);

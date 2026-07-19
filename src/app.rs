@@ -71,8 +71,9 @@ pub struct SessionPicker {
     pub selected: usize,
 }
 
-/// State of the `ask_user` option dialog.
+/// State of the `ask_user` / `submit_plan` option dialog.
 pub struct PendingQuestion {
+    pub title: String,
     pub question: String,
     pub options: Vec<String>,
     pub selected: usize,
@@ -854,11 +855,13 @@ impl App {
                 });
             }
             AgentEvent::UserQuestion {
+                title,
                 question,
                 options,
                 respond,
             } => {
                 self.question = Some(PendingQuestion {
+                    title,
                     question,
                     options,
                     selected: 0,
