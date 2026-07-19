@@ -47,6 +47,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
         "Mode: run EVERYTHING unconfirmed (isolated envs)",
     ),
     ("/permissions", "Show the effective permission rules"),
+    ("/status", "Show model, token usage and session info"),
+    ("/usage", "Alias of /status"),
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
@@ -151,6 +153,8 @@ pub struct App {
     pub ctx_tokens: u64,
     /// Output tokens reported for the turn in progress.
     pub turn_out: u64,
+    /// Output tokens reported since the conversation started (`/status`).
+    total_out: u64,
     /// Streamed deltas since the last usage report — a live estimate of
     /// decoded tokens between usage updates.
     pub delta_est: u64,
@@ -207,6 +211,7 @@ impl App {
             question: None,
             ctx_tokens: 0,
             turn_out: 0,
+            total_out: 0,
             delta_est: 0,
             model_label: cfg.model_label(),
             pasted: Vec::new(),
@@ -556,6 +561,9 @@ impl App {
             "/clear" => {
                 self.entries.clear();
                 self.ctx_tokens = 0;
+                self.turn_out = 0;
+                self.total_out = 0;
+                self.delta_est = 0;
                 self.assistant_open = false;
                 self.reasoning_open = false;
                 self.follow = true;
@@ -583,6 +591,7 @@ impl App {
                 }
             }
             "/permissions" => self.show_permissions(),
+            "/status" | "/usage" => self.show_status(),
             "/read-only" => self.set_mode(crate::config::Mode::ReadOnly),
             "/edit" => self.set_mode(crate::config::Mode::Edit),
             "/plan" => self.set_mode(crate::config::Mode::Plan),
@@ -1083,6 +1092,65 @@ impl App {
         );
     }
 
+    /// `/status` (alias `/usage`): one-shot overview of the model, token
+    /// usage, permission mode and session.
+    fn show_status(&mut self) {
+        let entry = match &self.cfg.active_model {
+            Some(name) => format!(" — [[models]] entry `{name}`"),
+            None => String::new(),
+        };
+        let endpoint = crate::models::base_url(self.cfg.provider, self.cfg.base_url.as_deref());
+        let pct = (self.context_ratio() * 100.0).round() as u64;
+        let prompts = self
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::User)
+            .count();
+        let saved = match &self.sessions_dir {
+            Some(dir) => format!("autosaved under {}", dir.display()),
+            None => "not saved (no home directory)".to_string(),
+        };
+        let config = if self.cfg.config_files.is_empty() {
+            "(built-in defaults)".to_string()
+        } else {
+            self.cfg.config_files.join(", ")
+        };
+        let instructions = if self.cfg.instructions.is_empty() {
+            "(none found)".to_string()
+        } else {
+            let names: Vec<&str> = self
+                .cfg
+                .instructions
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
+            names.join(", ")
+        };
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Status\n\
+                 model         {}{entry}\n\
+                 endpoint      {endpoint}\n\
+                 mode          {} — /permissions shows the rules\n\
+                 context       {} of {} tokens ({pct}%)\n\
+                 output        {} tokens this turn · {} this conversation\n\
+                 session       {} — {prompts} prompts, {saved}\n\
+                 project       {}\n\
+                 config        {config}\n\
+                 instructions  {instructions}",
+                self.model_label,
+                self.cfg.mode.get().label(),
+                self.ctx_tokens,
+                self.cfg.context_window,
+                self.turn_out + self.delta_est,
+                self.total_out + self.delta_est,
+                self.session_id,
+                self.cfg.root.display(),
+            ),
+        );
+    }
+
     /// Current permission mode, for the status bar.
     pub fn mode(&self) -> crate::config::Mode {
         self.cfg.mode.get()
@@ -1202,6 +1270,7 @@ impl App {
                 self.ctx_tokens = input;
                 // Snap the live estimate to the reported figure.
                 self.turn_out += output;
+                self.total_out += output;
                 self.delta_est = 0;
             }
             AgentEvent::ModelList { label, result } => match result {

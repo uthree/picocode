@@ -117,6 +117,7 @@ Keys inside the TUI:
 | `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly (see below) |
 | `/permissions` | Show the current mode and the effective allow/deny rules |
+| `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
