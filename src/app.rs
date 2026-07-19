@@ -1283,13 +1283,91 @@ impl App {
 fn spawn_input_thread() -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel(64);
     std::thread::spawn(move || {
-        while let Ok(ev) = ratatui::crossterm::event::read() {
-            if tx.blocking_send(ev).is_err() {
-                break;
+        use ratatui::crossterm::event;
+        loop {
+            let Ok(first) = event::read() else {
+                return;
+            };
+            // Drain everything already queued: a clipboard paste delivers its
+            // characters in one burst, while human keystrokes arrive one per
+            // read. The batch lets `coalesce_paste` tell the two apart on
+            // terminals without bracketed paste.
+            let mut batch = vec![first];
+            while batch.len() < 4096 && event::poll(Duration::ZERO).unwrap_or(false) {
+                match event::read() {
+                    Ok(ev) => batch.push(ev),
+                    Err(_) => return,
+                }
+            }
+            for ev in coalesce_paste(batch) {
+                if tx.blocking_send(ev).is_err() {
+                    return;
+                }
             }
         }
     });
     rx
+}
+
+/// The text a key event would type, if any: `Some((text, is_newline))` for
+/// plain character, Enter and Tab presses, and for bracketed-paste events.
+fn textual(ev: &Event) -> Option<(String, bool)> {
+    match ev {
+        Event::Key(k) if k.kind == KeyEventKind::Press => {
+            let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+            match k.code {
+                KeyCode::Char(c) if plain => Some((c.to_string(), false)),
+                KeyCode::Enter if plain => Some(("\n".to_string(), true)),
+                KeyCode::Tab if plain => Some(("\t".to_string(), false)),
+                _ => None,
+            }
+        }
+        Event::Paste(s) => Some((s.clone(), s.contains('\n'))),
+        _ => None,
+    }
+}
+
+/// Paste detection for terminals without bracketed paste: within a burst of
+/// simultaneously-arriving events, a run of plain text keys that contains a
+/// newline next to other text can only be a paste — a human cannot press
+/// Enter and another key in the same instant. Such runs are replaced by a
+/// single `Event::Paste` so the newlines are inserted instead of each Enter
+/// submitting a message. Anything else passes through unchanged.
+fn coalesce_paste(batch: Vec<Event>) -> Vec<Event> {
+    if batch.len() < 2 {
+        return batch;
+    }
+
+    fn flush(out: &mut Vec<Event>, run: &mut Vec<Event>, text: &mut String, newline: &mut bool) {
+        if *newline && text.chars().count() >= 2 {
+            run.clear();
+            out.push(Event::Paste(std::mem::take(text)));
+        } else {
+            out.append(run);
+            text.clear();
+        }
+        *newline = false;
+    }
+
+    let mut out: Vec<Event> = Vec::new();
+    let mut run: Vec<Event> = Vec::new();
+    let mut text = String::new();
+    let mut newline = false;
+    for ev in batch {
+        match textual(&ev) {
+            Some((t, nl)) => {
+                text.push_str(&t);
+                newline |= nl;
+                run.push(ev);
+            }
+            None => {
+                flush(&mut out, &mut run, &mut text, &mut newline);
+                out.push(ev);
+            }
+        }
+    }
+    flush(&mut out, &mut run, &mut text, &mut newline);
+    out
 }
 
 /// Collapse a JSON args string into a single display line.
@@ -1457,6 +1535,42 @@ mod tests {
         );
         assert!(items.iter().any(|c| c.name == "qwen3:0.6b" && c.active));
         assert!(items.iter().all(|c| c.name != "local" || !c.active));
+    }
+
+    #[test]
+    fn paste_bursts_coalesce_into_paste_events() {
+        let key = |c: char| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        let enter = || Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let up = || Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        // A burst of text around a newline can only be a paste.
+        let out = coalesce_paste(vec![key('a'), key('b'), enter(), key('c')]);
+        assert!(matches!(&out[..], [Event::Paste(s)] if s.as_str() == "ab\nc"));
+
+        // A lone Enter keeps submitting.
+        let out = coalesce_paste(vec![enter()]);
+        assert!(matches!(&out[..], [Event::Key(_)]));
+
+        // A fast burst without newlines passes through unchanged.
+        let out = coalesce_paste(vec![key('h'), key('i')]);
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|e| matches!(e, Event::Key(_))));
+
+        // Non-text events break the run.
+        let out = coalesce_paste(vec![key('a'), enter(), up(), key('b')]);
+        assert_eq!(out.len(), 3);
+        assert!(matches!(&out[0], Event::Paste(s) if s.as_str() == "a\n"));
+        assert!(matches!(&out[1], Event::Key(k) if k.code == KeyCode::Up));
+        assert!(matches!(&out[2], Event::Key(k) if k.code == KeyCode::Char('b')));
+
+        // A bracketed-paste event merges with keys from the same burst.
+        let out = coalesce_paste(vec![Event::Paste("x\ny".into()), key('z')]);
+        assert!(matches!(&out[..], [Event::Paste(s)] if s.as_str() == "x\nyz"));
+
+        // Modified keys (e.g. Ctrl+C in a burst) are never swallowed.
+        let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        let out = coalesce_paste(vec![key('a'), enter(), ctrl_c]);
+        assert!(matches!(&out[1], Event::Key(k) if k.modifiers == KeyModifiers::CONTROL));
     }
 
     #[test]

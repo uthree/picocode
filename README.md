@@ -16,8 +16,11 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   (tokens streaming). Model reasoning is collapsed by default (`Ctrl+T` to
   expand)
 - **Multi-line input**: `\` + `Enter` (also `Alt+Enter` or `Ctrl+J`) inserts a
-  newline and the input box grows with the text; pasted newlines are kept
-  (bracketed paste). `↑`/`↓` move between lines, plain `Enter` sends
+  newline and the input box grows with the text; pasting multi-line text
+  inserts it as one block — via bracketed paste, or, on terminals without
+  it, by treating a burst of simultaneous keystrokes around an Enter as a
+  paste instead of a submission. `↑`/`↓` move between lines, plain `Enter`
+  sends
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted
