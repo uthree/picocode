@@ -19,8 +19,10 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   newline and the input box grows with the text; pasting multi-line text
   inserts it as one block — via bracketed paste, or, on terminals without
   it, by treating a burst of simultaneous keystrokes around an Enter as a
-  paste instead of a submission. `↑`/`↓` move between lines, plain `Enter`
-  sends
+  paste instead of a submission. Long pastes (6+ lines or 500+ chars)
+  collapse into a `[Pasted text #1 +N lines]` placeholder — deleted as one
+  unit, shown collapsed in the transcript, and expanded to the full text
+  for the model on send. `↑`/`↓` move between lines, plain `Enter` sends
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted

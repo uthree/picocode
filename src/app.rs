@@ -16,6 +16,10 @@ use crate::session;
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
+/// Pastes at least this many lines (or chars) long are collapsed into a
+/// `[Pasted text #n +N lines]` placeholder in the input box.
+const PASTE_COLLAPSE_LINES: usize = 6;
+const PASTE_COLLAPSE_CHARS: usize = 500;
 
 pub const LOGO: &str = r"            ███                                          █████
            ░░░                                          ░░███
@@ -150,6 +154,9 @@ pub struct App {
     /// decoded tokens between usage updates.
     pub delta_est: u64,
     pub model_label: String,
+    /// Collapsed pasted blocks as (placeholder, full text); the placeholder
+    /// sits in the input and is expanded when the message is submitted.
+    pasted: Vec<(String, String)>,
     /// Models the current provider reported serving (fetched in the
     /// background); `/model <name>` can switch to any of them ad hoc.
     available_models: Vec<String>,
@@ -201,6 +208,7 @@ impl App {
             turn_out: 0,
             delta_est: 0,
             model_label: cfg.model_label(),
+            pasted: Vec::new(),
             available_models: Vec::new(),
             cfg: cfg.clone(),
             event_tx,
@@ -316,7 +324,7 @@ impl App {
                     .replace("\r\n", "\n")
                     .replace('\r', "\n")
                     .replace('\t', "    ");
-                self.insert_str(&text);
+                self.insert_paste(text);
                 self.reset_completion();
             }
             Event::Mouse(m) => match m.kind {
@@ -454,16 +462,21 @@ impl App {
             }
             KeyCode::Backspace => {
                 if self.cursor > 0 {
-                    self.cursor -= 1;
-                    let i = self.byte_index();
-                    self.input.remove(i);
+                    // A paste placeholder is deleted as one unit.
+                    if !self.delete_placeholder_before_cursor() {
+                        self.cursor -= 1;
+                        let i = self.byte_index();
+                        self.input.remove(i);
+                    }
                     self.reset_completion();
                 }
             }
             KeyCode::Delete => {
                 if self.cursor < self.input.chars().count() {
-                    let i = self.byte_index();
-                    self.input.remove(i);
+                    if !self.delete_placeholder_at_cursor() {
+                        let i = self.byte_index();
+                        self.input.remove(i);
+                    }
                     self.reset_completion();
                 }
             }
@@ -489,13 +502,26 @@ impl App {
         self.cursor = 0;
         self.reset_completion();
 
+        // Expand collapsed pastes: the model (or shell) gets the full text
+        // while the transcript keeps the compact placeholder. A message with
+        // a paste in it is never a command.
+        let expanded = expand_pastes(&text, &self.pasted);
+        if expanded != text {
+            if text.starts_with('!') {
+                self.run_shell(expanded);
+            } else {
+                self.send_prompt(text, expanded).await;
+            }
+            return;
+        }
+
         // Commands are single-line; a multi-line message is always a prompt
         // (or a multi-line `!` shell script).
         if text.contains('\n') {
             if text.starts_with('!') {
                 self.run_shell(text);
             } else {
-                self.send_prompt(text).await;
+                self.send_prompt(text.clone(), text).await;
             }
             return;
         }
@@ -549,15 +575,17 @@ impl App {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
             _ if text.starts_with('!') => self.run_shell(text),
-            _ => self.send_prompt(text).await,
+            _ => self.send_prompt(text.clone(), text).await,
         }
     }
 
-    /// Send a user prompt to the agent worker.
-    async fn send_prompt(&mut self, text: String) {
+    /// Send a user prompt to the agent worker. `display` is what the
+    /// transcript shows (paste placeholders kept), `prompt` what the model
+    /// receives (pastes expanded).
+    async fn send_prompt(&mut self, display: String, prompt: String) {
         self.close_blocks();
-        self.push(EntryKind::User, text.clone());
-        if self.cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
+        self.push(EntryKind::User, display);
+        if self.cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_ok() {
             self.running += 1;
             self.waiting = true;
             self.follow = true;
@@ -1243,6 +1271,53 @@ impl App {
         self.reasoning_open = false;
     }
 
+    /// Insert pasted text at the cursor: long pastes collapse into a
+    /// `[Pasted text #n +N lines]` placeholder and the full text is kept
+    /// aside until the message is submitted.
+    fn insert_paste(&mut self, text: String) {
+        match paste_placeholder(&text, self.pasted.len() + 1) {
+            Some(placeholder) => {
+                self.insert_str(&placeholder);
+                self.pasted.push((placeholder, text));
+            }
+            None => self.insert_str(&text),
+        }
+    }
+
+    /// If the text right before the cursor is a paste placeholder, delete it
+    /// whole (Backspace).
+    fn delete_placeholder_before_cursor(&mut self) -> bool {
+        let byte = self.byte_index();
+        let Some(len) = self
+            .pasted
+            .iter()
+            .find(|(ph, _)| self.input[..byte].ends_with(ph.as_str()))
+            .map(|(ph, _)| ph.len())
+        else {
+            return false;
+        };
+        let chars = self.input[byte - len..byte].chars().count();
+        self.input.replace_range(byte - len..byte, "");
+        self.cursor -= chars;
+        true
+    }
+
+    /// If the text right at the cursor is a paste placeholder, delete it
+    /// whole (Delete).
+    fn delete_placeholder_at_cursor(&mut self) -> bool {
+        let byte = self.byte_index();
+        let Some(len) = self
+            .pasted
+            .iter()
+            .find(|(ph, _)| self.input[byte..].starts_with(ph.as_str()))
+            .map(|(ph, _)| ph.len())
+        else {
+            return false;
+        };
+        self.input.replace_range(byte..byte + len, "");
+        true
+    }
+
     /// Up/Down in a multi-line input: move the cursor a line, keeping the
     /// column where possible.
     fn move_input_line(&mut self, up: bool) {
@@ -1392,6 +1467,29 @@ fn clamp_lines(s: &str, max: usize) -> String {
     }
 }
 
+/// Placeholder for the n-th pasted block, or None when the paste is short
+/// enough to go into the input verbatim.
+fn paste_placeholder(text: &str, n: usize) -> Option<String> {
+    let lines = text.lines().count().max(1);
+    if lines < PASTE_COLLAPSE_LINES && text.chars().count() < PASTE_COLLAPSE_CHARS {
+        return None;
+    }
+    let plural = if lines == 1 { "line" } else { "lines" };
+    Some(format!("[Pasted text #{n} +{lines} {plural}]"))
+}
+
+/// Replace every paste placeholder in a submitted message with its full text.
+/// Placeholders the user edited no longer match and are sent as-is.
+fn expand_pastes(text: &str, pasted: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (placeholder, content) in pasted {
+        if out.contains(placeholder.as_str()) {
+            out = out.replace(placeholder.as_str(), content);
+        }
+    }
+    out
+}
+
 /// (row, column) of a char cursor within a multi-line string, in chars.
 pub fn line_col(text: &str, cursor: usize) -> (usize, usize) {
     let mut row = 0;
@@ -1535,6 +1633,50 @@ mod tests {
         );
         assert!(items.iter().any(|c| c.name == "qwen3:0.6b" && c.active));
         assert!(items.iter().all(|c| c.name != "local" || !c.active));
+    }
+
+    #[test]
+    fn long_pastes_collapse_into_placeholders() {
+        // Short pastes stay verbatim.
+        assert_eq!(paste_placeholder("one\ntwo", 1), None);
+        assert_eq!(paste_placeholder("short", 3), None);
+        // Collapse by line count…
+        let six_lines = "a\nb\nc\nd\ne\nf";
+        assert_eq!(
+            paste_placeholder(six_lines, 1).as_deref(),
+            Some("[Pasted text #1 +6 lines]")
+        );
+        // …or by size, even on a single line.
+        let big = "x".repeat(600);
+        assert_eq!(
+            paste_placeholder(&big, 2).as_deref(),
+            Some("[Pasted text #2 +1 line]")
+        );
+
+        let pasted = vec![
+            (
+                "[Pasted text #1 +6 lines]".to_string(),
+                six_lines.to_string(),
+            ),
+            ("[Pasted text #2 +1 line]".to_string(), big.clone()),
+        ];
+        // Expansion swaps every placeholder for its full text.
+        assert_eq!(
+            expand_pastes("see [Pasted text #1 +6 lines] end", &pasted),
+            format!("see {six_lines} end")
+        );
+        assert_eq!(
+            expand_pastes(
+                "[Pasted text #1 +6 lines]\n[Pasted text #2 +1 line]",
+                &pasted
+            ),
+            format!("{six_lines}\n{big}")
+        );
+        // Edited placeholders no longer match and are left alone.
+        assert_eq!(
+            expand_pastes("[Pasted text #1 +6 line]", &pasted),
+            "[Pasted text #1 +6 line]"
+        );
     }
 
     #[test]
