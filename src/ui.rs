@@ -289,6 +289,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let mode_style = match mode {
         crate::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
         crate::config::Mode::Edit => Style::new().fg(Color::Yellow),
+        crate::config::Mode::Plan => Style::new().fg(Color::Blue),
     };
     let mut left = vec![
         Span::raw(" "),

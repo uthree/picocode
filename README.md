@@ -16,7 +16,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 - **Approval flow**: destructive operations (bash, file writes) ask for y/n
   confirmation; reads run automatically; configurable allow/deny rules
 - **Permission modes**: `Shift+Tab` cycles read-only (default — every write
-  asks) and edit (file writes run freely; commands follow the config rules)
+  asks), edit (file writes run freely; commands follow the config rules), and
+  plan (writes blocked — the model explores and proposes a plan first)
 - **Multi-turn**: keeps conversation history and tool results across turns
 - **Context compaction**: `/compact` replaces the history with an LLM-written
   summary to free context
@@ -89,6 +90,7 @@ on macOS ones).
 |---|---|
 | `read-only` (default) | Read tools run freely; **every** write or command asks for confirmation, even if allow-listed |
 | `edit` | `write_file` / `edit_file` run without asking; `bash` and other tools follow the `[approval]` config rules |
+| `plan` | Writes and commands are **auto-denied**: the model investigates with the read tools and presents an implementation plan. Approve it by switching to `edit` and telling the model to go ahead |
 
 Deny rules and `--yolo` take precedence over the mode. Full precedence:
 deny rules > `--yolo` > mode > allow rules > ask. A switch takes effect

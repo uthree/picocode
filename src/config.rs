@@ -193,12 +193,15 @@ pub enum Mode {
     /// File writes run freely; commands and other tools follow the config
     /// allow/deny rules.
     Edit,
+    /// Writes and commands are auto-denied: the model investigates with the
+    /// read-only tools and presents a plan instead of acting.
+    Plan,
 }
 
 impl Mode {
     /// Cycle order for Shift+Tab. Future modes only need a variant, an entry
     /// here, a label, and their branch in `ApprovalRules::decide`.
-    pub const ALL: &[Mode] = &[Mode::ReadOnly, Mode::Edit];
+    pub const ALL: &[Mode] = &[Mode::ReadOnly, Mode::Edit, Mode::Plan];
 
     pub fn next(self) -> Mode {
         let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
@@ -209,6 +212,7 @@ impl Mode {
         match self {
             Mode::ReadOnly => "read-only",
             Mode::Edit => "edit",
+            Mode::Plan => "plan",
         }
     }
 }
@@ -297,6 +301,17 @@ impl ApprovalRules {
         }
         if yolo {
             return Decision::Allow;
+        }
+        // Plan mode: destructive calls are auto-denied (with a reason that
+        // steers the model back to planning), allow rules notwithstanding.
+        if mode == Mode::Plan {
+            return Decision::Deny(
+                "picocode is in plan mode: writes and commands are blocked. Continue \
+                 investigating with the read-only tools and present a concise \
+                 implementation plan; the user will switch to edit mode to execute it. \
+                 Do not retry this call."
+                    .to_string(),
+            );
         }
         // Read-only (the default) confirms every destructive call, allow
         // rules notwithstanding.
@@ -713,13 +728,35 @@ mod tests {
     fn modes_cycle_and_share_state() {
         assert_eq!(Mode::default(), Mode::ReadOnly);
         assert_eq!(Mode::ReadOnly.next(), Mode::Edit);
-        assert_eq!(Mode::Edit.next(), Mode::ReadOnly);
+        assert_eq!(Mode::Edit.next(), Mode::Plan);
+        assert_eq!(Mode::Plan.next(), Mode::ReadOnly);
         assert_eq!(Mode::ReadOnly.label(), "read-only");
 
         let handle = ModeHandle::new(Mode::ReadOnly);
         let clone = handle.clone();
         handle.set(handle.get().next());
         assert_eq!(clone.get(), Mode::Edit);
+    }
+
+    #[test]
+    fn plan_mode_denies_destructive_but_not_reads() {
+        // Even allow-listed writes/commands are denied with a plan-mode reason.
+        let r = rules(&["write_file"], &[], &["cargo"], &[]);
+        for (tool, cmd) in [("write_file", None), ("bash", Some("cargo build"))] {
+            match r.decide(false, Mode::Plan, tool, cmd, true) {
+                Decision::Deny(reason) => assert!(reason.contains("plan mode")),
+                other => panic!("expected Deny, got {other:?}"),
+            }
+        }
+        // Reads still run, --yolo still overrides the mode.
+        assert_eq!(
+            r.decide(false, Mode::Plan, "read_file", None, false),
+            Decision::Allow
+        );
+        assert_eq!(
+            r.decide(true, Mode::Plan, "write_file", None, true),
+            Decision::Allow
+        );
     }
 
     #[test]

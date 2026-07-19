@@ -269,6 +269,20 @@ async fn run_once<M>(
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
 {
+    // In plan mode, tell the model up front instead of letting it discover
+    // the blocked tools by trial and error (the approval hook still denies
+    // any write it attempts anyway).
+    let prompt = if cfg.mode.get() == crate::config::Mode::Plan {
+        format!(
+            "{prompt}\n\n[picocode plan mode is active: investigate with the read-only \
+             tools, then reply with a concise implementation plan — goal, steps, files \
+             to touch, and how to verify. Do not modify files or run state-changing \
+             commands; write_file/edit_file/bash are blocked until the user switches \
+             to edit mode.]"
+        )
+    } else {
+        prompt
+    };
     let hook = ApprovalHook::new(
         event_tx.clone(),
         cfg.approval.clone(),
