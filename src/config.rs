@@ -498,11 +498,18 @@ fn load_file(path: &Path) -> anyhow::Result<Option<FileConfig>> {
     }
 }
 
+/// The user's home directory: `$HOME`, or `%USERPROFILE%` on Windows.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
 fn global_config_path() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         return Some(PathBuf::from(xdg).join("picocode/config.toml"));
     }
-    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/picocode/config.toml"))
+    Some(home_dir()?.join(".config/picocode/config.toml"))
 }
 
 /// Merge the project config over the global one: scalars from the project win,

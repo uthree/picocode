@@ -68,7 +68,7 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 ## Setup (local LLM)
 
 ```sh
-brew install ollama
+brew install ollama          # other platforms: https://ollama.com/download
 brew services start ollama
 ollama pull qwen3:4b
 cargo run
@@ -155,8 +155,8 @@ turn already running.
 
 Every conversation is saved automatically after each completed turn to
 `$XDG_DATA_HOME/picocode/sessions/<project>/<id>.json` (default
-`~/.local/share/…`), including both the model history and the rendered
-transcript. `/resume` opens a dialog listing this project's sessions
+`~/.local/share/…`; on Windows the home is `%USERPROFILE%`), including both
+the model history and the rendered transcript. `/resume` opens a dialog listing this project's sessions
 newest-first — pick one with `↑`/`↓` and `Enter`. The session is restored into
 the current model and keeps writing to the same log. Empty conversations are
 never written.
@@ -217,7 +217,8 @@ max_results = 5
 # provider = "brave"              # Brave Search API; needs BRAVE_API_KEY
 ```
 
-Bash rules split the command at `&&` `||` `;` `|` `&` and newlines, then match
+The `bash` tool runs commands via `sh -c` (`cmd /C` on Windows). Bash rules
+split the command at `&&` `||` `;` `|` `&` and newlines, then match
 each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 `cargofoo`; a trailing `*` as in `cargo *` is accepted and ignored):
 

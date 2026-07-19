@@ -1427,10 +1427,16 @@ fn spawn_input_thread() -> mpsc::Receiver<Event> {
     let (tx, rx) = mpsc::channel(64);
     std::thread::spawn(move || {
         use ratatui::crossterm::event;
+        // Key releases (reported on Windows) are ignored by the app and
+        // would break the paste-run detection below, so drop them here.
+        let release = |ev: &Event| matches!(ev, Event::Key(k) if k.kind == KeyEventKind::Release);
         loop {
             let Ok(first) = event::read() else {
                 return;
             };
+            if release(&first) {
+                continue;
+            }
             // Drain everything already queued: a clipboard paste delivers its
             // characters in one burst, while human keystrokes arrive one per
             // read. The batch lets `coalesce_paste` tell the two apart on
@@ -1438,6 +1444,7 @@ fn spawn_input_thread() -> mpsc::Receiver<Event> {
             let mut batch = vec![first];
             while batch.len() < 4096 && event::poll(Duration::ZERO).unwrap_or(false) {
                 match event::read() {
+                    Ok(ev) if release(&ev) => {}
                     Ok(ev) => batch.push(ev),
                     Err(_) => return,
                 }

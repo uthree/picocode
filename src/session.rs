@@ -49,11 +49,16 @@ pub struct SessionSummary {
 /// Where this project's sessions live:
 /// `$XDG_DATA_HOME`/picocode/sessions/<project-slug> (default `~/.local/share`).
 pub fn sessions_dir(root: &Path) -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(x) => PathBuf::from(x),
-        None => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
-    };
-    Some(base.join("picocode/sessions").join(slug(root)))
+    Some(data_dir()?.join("picocode/sessions").join(slug(root)))
+}
+
+/// Base directory for picocode's data: `$XDG_DATA_HOME`, defaulting to
+/// `~/.local/share` (with `%USERPROFILE%` as the home on Windows).
+pub(crate) fn data_dir() -> Option<PathBuf> {
+    match std::env::var_os("XDG_DATA_HOME") {
+        Some(x) => Some(PathBuf::from(x)),
+        None => Some(crate::config::home_dir()?.join(".local/share")),
+    }
 }
 
 pub(crate) fn slug(root: &Path) -> String {

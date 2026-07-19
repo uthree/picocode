@@ -42,10 +42,14 @@ async fn main() -> anyhow::Result<()> {
     // Mouse capture enables wheel scrolling in the transcript (terminal-native
     // text selection still works with Shift, or Option on macOS, held);
     // bracketed paste lets multi-line pastes arrive as one event instead of
-    // the newlines submitting early.
+    // the newlines submitting early. Separate calls: a terminal without
+    // bracketed paste (legacy Windows console) shouldn't lose the mouse too.
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
-        ratatui::crossterm::event::EnableMouseCapture,
+        ratatui::crossterm::event::EnableMouseCapture
+    );
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
         ratatui::crossterm::event::EnableBracketedPaste
     );
     let result = app::App::new(&cfg, event_tx, cmd_tx, cancel_tx)
@@ -53,8 +57,11 @@ async fn main() -> anyhow::Result<()> {
         .await;
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
-        ratatui::crossterm::event::DisableMouseCapture,
         ratatui::crossterm::event::DisableBracketedPaste
+    );
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::DisableMouseCapture
     );
     ratatui::restore();
     result
@@ -77,8 +84,7 @@ async fn pick_ollama_model(cfg: &config::Config) -> anyhow::Result<String> {
         },
         Err(e) => anyhow::bail!(
             "No model is configured and Ollama is not reachable at {base} ({e:#}).\n\
-             Install and start it (`brew install ollama && brew services start ollama`), \
-             or {HINT}"
+             Install and start it (https://ollama.com/download), or {HINT}"
         ),
     }
 }

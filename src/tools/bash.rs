@@ -33,10 +33,12 @@ impl Tool for Bash {
     type Output = String;
 
     fn description(&self) -> String {
-        "Run a shell command in the working directory and return its output. \
-         Use for builds, tests, git, and anything the other tools don't cover. \
-         Times out after 120 seconds."
-            .to_string()
+        let shell = if cfg!(windows) { "cmd.exe" } else { "sh" };
+        format!(
+            "Run a shell command ({shell}) in the working directory and return its \
+             output. Use for builds, tests, git, and anything the other tools \
+             don't cover. Times out after 120 seconds."
+        )
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -50,9 +52,7 @@ impl Tool for Bash {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let mut child = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&args.command)
+        let mut child = shell_command(&args.command)
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -112,6 +112,22 @@ impl Tool for Bash {
         }
         Ok(text)
     }
+}
+
+/// The platform shell: `sh -c` on unix, `cmd /C` on Windows (raw_arg keeps
+/// cmd.exe's own quoting rules intact).
+#[cfg(not(windows))]
+fn shell_command(command: &str) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("sh");
+    c.arg("-c").arg(command);
+    c
+}
+
+#[cfg(windows)]
+fn shell_command(command: &str) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("cmd");
+    c.raw_arg("/C").raw_arg(command);
+    c
 }
 
 #[cfg(test)]

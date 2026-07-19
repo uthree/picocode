@@ -22,14 +22,11 @@ pub struct LastModel {
 
 /// Where this project's state lives:
 /// `$XDG_DATA_HOME/picocode/state/<project-slug>.json` (default
-/// `~/.local/share/…`).
+/// `~/.local/share/…`, with `%USERPROFILE%` as the home on Windows).
 pub fn state_path(root: &Path) -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_DATA_HOME") {
-        Some(x) => PathBuf::from(x),
-        None => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
-    };
     Some(
-        base.join("picocode/state")
+        crate::session::data_dir()?
+            .join("picocode/state")
             .join(format!("{}.json", crate::session::slug(root))),
     )
 }
