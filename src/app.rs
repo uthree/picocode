@@ -130,6 +130,9 @@ pub struct App {
     /// decoded tokens between usage updates.
     pub delta_est: u64,
     pub model_label: String,
+    /// Models the current provider reported serving (fetched in the
+    /// background); `/model <name>` can switch to any of them ad hoc.
+    available_models: Vec<String>,
     /// Active config; provider/model/base_url track the current /model choice.
     cfg: Config,
     /// Event channel handed to newly spawned workers on model switch.
@@ -175,6 +178,7 @@ impl App {
             turn_out: 0,
             delta_est: 0,
             model_label: cfg.model_label(),
+            available_models: Vec::new(),
             cfg: cfg.clone(),
             event_tx,
             cmd_tx,
@@ -231,6 +235,9 @@ impl App {
                 "--yolo: skipping all tool approvals".to_string(),
             );
         }
+        // Fetch the provider's model list in the background so `/model <name>`
+        // can offer and validate provider models right away.
+        app.refresh_models(false);
         app
     }
 
@@ -502,7 +509,35 @@ impl App {
         });
     }
 
-    /// `/model` with no argument: list the configured model entries.
+    /// Ask the provider for its model list in the background; the answer
+    /// arrives as a `ModelList` event. `announce` shows the outcome in the
+    /// transcript (used by `/model`); a silent refresh only updates the
+    /// switch candidates.
+    fn refresh_models(&self, announce: bool) {
+        let provider = self.cfg.provider;
+        let base = self.cfg.base_url.clone();
+        let label = format!(
+            "{} @ {}",
+            crate::config::provider_name(provider),
+            crate::models::base_url(provider, base.as_deref())
+        );
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let result = crate::models::fetch(provider, base.as_deref())
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = event_tx
+                .send(AgentEvent::ModelList {
+                    label,
+                    announce,
+                    result,
+                })
+                .await;
+        });
+    }
+
+    /// `/model` with no argument: list the configured model entries and query
+    /// the provider for the models it serves.
     fn list_models(&mut self) {
         if self.cfg.models.is_empty() {
             self.push(
@@ -512,25 +547,27 @@ impl App {
                     self.model_label
                 ),
             );
-            return;
-        }
-        let mut out = String::from("Models (/model <name> to switch):");
-        for m in &self.cfg.models {
-            let marker = if self.cfg.active_model.as_deref() == Some(&m.name) {
-                "▸"
-            } else {
-                " "
-            };
-            out.push_str(&format!("\n{marker} {} — {}", m.name, m.label()));
-            if let Some(url) = &m.base_url {
-                out.push_str(&format!(" @ {url}"));
+        } else {
+            let mut out = String::from("Models (/model <name> to switch):");
+            for m in &self.cfg.models {
+                let marker = if self.cfg.active_model.as_deref() == Some(&m.name) {
+                    "▸"
+                } else {
+                    " "
+                };
+                out.push_str(&format!("\n{marker} {} — {}", m.name, m.label()));
+                if let Some(url) = &m.base_url {
+                    out.push_str(&format!(" @ {url}"));
+                }
             }
+            self.push(EntryKind::Notice, out);
         }
-        self.push(EntryKind::Notice, out);
+        self.refresh_models(true);
     }
 
-    /// `/model <name>`: spawn a worker for the named entry and carry the
-    /// conversation history over to it.
+    /// `/model <name>`: spawn a worker for the named entry — or for a model
+    /// the provider reported serving — and carry the conversation history
+    /// over to it.
     async fn switch_model(&mut self, name: &str) {
         if self.running > 0 {
             self.push(
@@ -539,32 +576,52 @@ impl App {
             );
             return;
         }
-        let Some(entry) = self.cfg.models.iter().find(|m| m.name == name).cloned() else {
-            let names: Vec<&str> = self.cfg.models.iter().map(|m| m.name.as_str()).collect();
-            let hint = if names.is_empty() {
-                "no [[models]] entries are configured".to_string()
-            } else {
-                format!("available: {}", names.join(", "))
-            };
-            self.push(EntryKind::Error, format!("Unknown model `{name}` — {hint}"));
-            return;
-        };
-        if self.cfg.active_model.as_deref() == Some(name) {
-            self.push(
-                EntryKind::Notice,
-                format!("Already using {name} ({})", entry.label()),
-            );
-            return;
-        }
-
         let mut new_cfg = self.cfg.clone();
-        new_cfg.provider = entry.provider;
-        new_cfg.model = entry.model.clone();
-        new_cfg.base_url = entry.base_url.clone();
-        new_cfg.active_model = Some(entry.name.clone());
-        new_cfg.context_window = entry
-            .context_window
-            .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
+        match self.cfg.models.iter().find(|m| m.name == name) {
+            Some(entry) => {
+                if self.cfg.active_model.as_deref() == Some(name) {
+                    self.push(
+                        EntryKind::Notice,
+                        format!("Already using {name} ({})", entry.label()),
+                    );
+                    return;
+                }
+                new_cfg.provider = entry.provider;
+                new_cfg.model = entry.model.clone();
+                new_cfg.base_url = entry.base_url.clone();
+                new_cfg.active_model = Some(entry.name.clone());
+                new_cfg.context_window = entry
+                    .context_window
+                    .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
+            }
+            // A model id the provider reported serving: switch ad hoc,
+            // keeping the current provider and base URL.
+            None if self.available_models.iter().any(|m| m == name) => {
+                if self.cfg.active_model.is_none() && self.cfg.model == name {
+                    self.push(
+                        EntryKind::Notice,
+                        format!("Already using {}", self.model_label),
+                    );
+                    return;
+                }
+                new_cfg.model = name.to_string();
+                new_cfg.active_model = None;
+                new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+            }
+            None => {
+                let names: Vec<&str> = self.cfg.models.iter().map(|m| m.name.as_str()).collect();
+                let hint = if names.is_empty() {
+                    "run /model to list what the provider serves".to_string()
+                } else {
+                    format!(
+                        "configured: {}; /model lists what the provider serves",
+                        names.join(", ")
+                    )
+                };
+                self.push(EntryKind::Error, format!("Unknown model `{name}` — {hint}"));
+                return;
+            }
+        }
 
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
@@ -591,6 +648,9 @@ impl App {
             let _ = new_tx.send(WorkerCmd::SeedHistory(history)).await;
         }
 
+        // The cached model list belongs to the endpoint it was fetched from.
+        let endpoint_changed =
+            new_cfg.provider != self.cfg.provider || new_cfg.base_url != self.cfg.base_url;
         self.cmd_tx = new_tx; // dropping the old sender shuts the old worker down
         self.cfg = new_cfg;
         self.model_label = self.cfg.model_label();
@@ -598,6 +658,10 @@ impl App {
             EntryKind::Notice,
             format!("Model switched to {name} ({})", self.model_label),
         );
+        if endpoint_changed {
+            self.available_models.clear();
+            self.refresh_models(false);
+        }
     }
 
     /// `/resume` with no argument: open the session-selection dialog.
@@ -928,6 +992,36 @@ impl App {
                 self.turn_out += output;
                 self.delta_est = 0;
             }
+            AgentEvent::ModelList {
+                label,
+                announce,
+                result,
+            } => match result {
+                Ok(names) => {
+                    if announce {
+                        if names.is_empty() {
+                            self.push(EntryKind::Notice, format!("No models reported by {label}"));
+                        } else {
+                            self.push(
+                                EntryKind::Notice,
+                                format!(
+                                    "Available on {label} (/model <name> to use):\n{}",
+                                    names.join(", ")
+                                ),
+                            );
+                        }
+                    }
+                    self.available_models = names;
+                }
+                Err(e) => {
+                    if announce {
+                        self.push(
+                            EntryKind::Error,
+                            format!("Could not list models on {label}: {e}"),
+                        );
+                    }
+                }
+            },
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
