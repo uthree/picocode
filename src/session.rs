@@ -194,14 +194,17 @@ mod tests {
                 Entry {
                     kind: EntryKind::Notice,
                     text: "picocode".into(),
+                    lang: None,
                 },
                 Entry {
                     kind: EntryKind::User,
                     text: prompt.into(),
+                    lang: None,
                 },
                 Entry {
                     kind: EntryKind::Assistant,
                     text: "hi!".into(),
+                    lang: None,
                 },
             ],
         )

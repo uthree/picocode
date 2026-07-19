@@ -17,9 +17,11 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted
   (via syntect, language taken from the ```` ```lang ```` tag)
-- **Diffs**: `edit_file` shows a colored line diff (and `write_file` its added
-  lines) both in the approval dialog and in the transcript, so changes are
-  visible even in modes that skip the confirmation
+- **Diffs**: `edit_file` shows a line diff (and `write_file` its added lines)
+  both in the approval dialog and in the transcript, so changes are visible
+  even in modes that skip the confirmation. Additions/removals are marked by
+  the background color (delta-style) while the text keeps its syntax
+  highlighting, picked from the file extension
 - **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
   `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
   `submit_plan`

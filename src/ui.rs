@@ -5,7 +5,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, EntryKind, PendingApproval, PendingQuestion, SessionPicker};
 
@@ -179,13 +179,24 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 });
             }
             EntryKind::Diff => {
-                // Style each diff line by its "+ "/"- "/context prefix;
-                // wrapped continuations keep the line's color.
-                for raw in entry.text.split('\n') {
-                    let style = crate::highlight::diff_style(raw);
-                    push_wrapped(&mut lines, raw, width.saturating_sub(2), |_, s| {
-                        Line::from(Span::styled(format!("  {s}"), style))
-                    });
+                // Syntax-highlighted foregrounds; +/- rows are marked by the
+                // background, extended to the full line width (delta-style).
+                let token = entry.lang.as_deref().unwrap_or("");
+                for (bg, span_line) in crate::highlight::diff_spans(&entry.text, token) {
+                    for chunk in crate::highlight::wrap_spans(&span_line, width.saturating_sub(2)) {
+                        let mut used = 2usize;
+                        let mut spans = vec![Span::raw("  ")];
+                        for (st, s) in chunk {
+                            used += s.width();
+                            spans.push(Span::styled(s, st));
+                        }
+                        if let Some(bg) = bg
+                            && used < width
+                        {
+                            spans.push(Span::styled(" ".repeat(width - used), Style::new().bg(bg)));
+                        }
+                        lines.push(Line::from(spans));
+                    }
                 }
             }
             EntryKind::Notice => {
@@ -353,6 +364,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
     let right = Line::from(vec![
+        // Leading gap so a truncated left side never touches the right block.
+        Span::raw(" "),
         Span::styled(app.model_label.clone(), Style::new().fg(Color::Magenta)),
         Span::raw("  "),
         Span::styled(
@@ -501,22 +514,24 @@ fn draw_question(f: &mut Frame, q: &PendingQuestion) {
 
 // ----- approval modal ------------------------------------------------------
 
-/// One logical (pre-wrap) line of the approval dialog body.
+/// One logical (pre-wrap) line of the approval dialog body, as styled spans.
 struct BodyLine {
-    text: String,
-    style: Style,
+    spans: crate::highlight::SpanLine,
 }
 
 impl BodyLine {
     fn new(text: impl Into<String>, style: Style) -> Self {
         Self {
-            text: text.into(),
-            style,
+            spans: vec![(style, text.into())],
         }
     }
 
     fn plain(text: impl Into<String>) -> Self {
         Self::new(text, Style::new())
+    }
+
+    fn from_spans(spans: crate::highlight::SpanLine) -> Self {
+        Self { spans }
     }
 }
 
@@ -548,9 +563,9 @@ fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
                 Style::new().fg(Color::DarkGray),
             ));
             out.extend(
-                content
-                    .lines()
-                    .map(|l| BodyLine::new(l, Style::new().fg(Color::Gray))),
+                crate::highlight::highlight(content, path)
+                    .into_iter()
+                    .map(BodyLine::from_spans),
             );
         }
         return out;
@@ -561,9 +576,9 @@ fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
         let mut out = vec![BodyLine::new(format!("path: {path}"), Style::new().bold())];
         let old = get("old_string").unwrap_or_default();
         let new = get("new_string").unwrap_or_default();
-        for l in crate::highlight::diff_lines(old, new) {
-            let style = crate::highlight::diff_style(&l);
-            out.push(BodyLine::new(l, style));
+        let diff = crate::highlight::diff_lines(old, new).join("\n");
+        for (_, spans) in crate::highlight::diff_spans(&diff, path) {
+            out.push(BodyLine::from_spans(spans));
         }
         return out;
     }
@@ -602,10 +617,13 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     // Wrap the body first so the dialog can size itself to the content.
     let mut body: Vec<Line> = Vec::new();
     for bl in approval_body(&pending.name, &pending.args) {
-        let style = bl.style;
-        push_wrapped(&mut body, &bl.text, inner_width, |_, s| {
-            Line::from(Span::styled(s, style))
-        });
+        for chunk in crate::highlight::wrap_spans(&bl.spans, inner_width) {
+            let spans: Vec<Span> = chunk
+                .into_iter()
+                .map(|(st, s)| Span::styled(s, st))
+                .collect();
+            body.push(Line::from(spans));
+        }
     }
 
     // Chrome rows: borders (2) + title + blank + blank + [y]/[n] = 6. The
@@ -659,7 +677,7 @@ mod tests {
     fn texts(name: &str, args: &str) -> Vec<String> {
         approval_body(name, args)
             .into_iter()
-            .map(|b| b.text)
+            .map(|b| b.spans.iter().map(|(_, s)| s.as_str()).collect())
             .collect()
     }
 

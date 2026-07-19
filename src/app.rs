@@ -70,6 +70,9 @@ pub enum EntryKind {
 pub struct Entry {
     pub kind: EntryKind,
     pub text: String,
+    /// File name / language hint for syntax highlighting (Diff entries).
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 pub struct PendingApproval {
@@ -980,7 +983,21 @@ impl App {
     // ----- helpers ---------------------------------------------------------
 
     fn push(&mut self, kind: EntryKind, text: String) {
-        self.entries.push(Entry { kind, text });
+        self.entries.push(Entry {
+            kind,
+            text,
+            lang: None,
+        });
+    }
+
+    /// Push a Diff entry carrying the file name so the renderer can pick the
+    /// right syntax for highlighting.
+    fn push_diff(&mut self, text: String, lang: &str) {
+        self.entries.push(Entry {
+            kind: EntryKind::Diff,
+            text,
+            lang: Some(lang.to_string()),
+        });
     }
 
     /// Show a tool call: file-writing tools get a path headline plus a
@@ -999,7 +1016,7 @@ impl App {
         {
             self.push(EntryKind::Tool, format!("{name} {path}"));
             let diff = crate::highlight::diff_lines(old, new).join("\n");
-            self.push(EntryKind::Diff, clamp_lines(&diff, DIFF_MAX_LINES));
+            self.push_diff(clamp_lines(&diff, DIFF_MAX_LINES), path);
             return;
         }
         if name == "write_file"
@@ -1007,10 +1024,7 @@ impl App {
         {
             self.push(EntryKind::Tool, format!("{name} {path}"));
             let diff: Vec<String> = content.lines().map(|l| format!("+ {l}")).collect();
-            self.push(
-                EntryKind::Diff,
-                clamp_lines(&diff.join("\n"), DIFF_MAX_LINES),
-            );
+            self.push_diff(clamp_lines(&diff.join("\n"), DIFF_MAX_LINES), path);
             return;
         }
         self.push(
