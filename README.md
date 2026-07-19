@@ -9,8 +9,10 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 ## Features
 
 - **TUI chat**: streaming output, scrolling that stays put while the model is
-  generating, token usage in the status bar. Model reasoning is collapsed by
-  default (`Ctrl+T` to expand)
+  generating, token usage in the status bar — a context-window gauge
+  (green/yellow/red by pressure) plus a live `↑ prefill ↓ decode` counter
+  while generating. Model reasoning is collapsed by default (`Ctrl+T` to
+  expand)
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned)
 - **Syntax highlighting**: fenced code blocks in replies are highlighted
@@ -140,6 +142,8 @@ Prefer small, verifiable changes.
 name = "local"
 provider = "ollama"
 model = "qwen3:4b"
+context_window = 32768       # tokens; drives the status-bar usage gauge
+                             # (default 32768 when omitted)
 
 [[models]]
 name = "vllm"

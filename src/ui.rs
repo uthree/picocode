@@ -311,13 +311,39 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         crate::config::Mode::Plan => Style::new().fg(Color::Blue),
         crate::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
     };
+    // Context-window usage gauge, colored by pressure.
+    const GAUGE_CELLS: usize = 8;
+    let ratio = app.context_ratio();
+    let filled = (ratio.min(1.0) * GAUGE_CELLS as f64).round() as usize;
+    let gauge_color = if ratio >= 0.85 {
+        Color::Red
+    } else if ratio >= 0.6 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
     let mut left = vec![
         Span::raw(" "),
         Span::styled(format!("[{}]", mode.label()), mode_style),
         Span::raw("  "),
+        Span::styled("▰".repeat(filled), Style::new().fg(gauge_color)),
+        Span::styled(
+            "▱".repeat(GAUGE_CELLS - filled),
+            Style::new().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            format!(" {:>3}%", (ratio * 100.0).round().min(999.0) as u64),
+            Style::new().fg(Color::DarkGray),
+        ),
+        Span::raw("  "),
         indicator,
     ];
     if app.running > 0 {
+        left.push(Span::styled(
+            format!("  ↑ {} ↓ {}", app.ctx_tokens, app.turn_out + app.delta_est),
+            Style::new().fg(Color::DarkGray),
+        ));
         left.push(Span::styled("  Esc stop", Style::new().fg(Color::DarkGray)));
     }
     if !app.follow {

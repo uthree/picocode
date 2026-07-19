@@ -76,6 +76,10 @@ struct FileConfig {
     search: SearchFileConfig,
 }
 
+/// Fallback context-window size when a model entry doesn't declare one.
+/// Only used for the status-bar usage gauge.
+pub const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
+
 /// One switchable `[[models]]` entry in the config file.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,6 +89,9 @@ pub struct ModelEntry {
     pub model: String,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Context-window size in tokens (for the usage gauge).
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 impl ModelEntry {
@@ -486,6 +493,8 @@ pub struct Config {
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
     pub config_files: Vec<String>,
+    /// Context-window size of the active model (for the usage gauge).
+    pub context_window: u64,
 }
 
 impl Config {
@@ -517,13 +526,14 @@ impl Config {
         // config file's [[models]]; the entries stay available to /model.
         let cli_selection =
             args.provider.is_some() || args.model.is_some() || args.base_url.is_some();
-        let (provider, model, base_url, active_model) =
+        let (provider, model, base_url, active_model, context_window) =
             match pick_entry(&models, file.default_model.as_deref()) {
                 Some(entry) if !cli_selection => (
                     entry.provider,
                     entry.model.clone(),
                     entry.base_url.clone(),
                     Some(entry.name.clone()),
+                    entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
                 ),
                 _ => {
                     let provider = args.provider.unwrap_or(Provider::Ollama);
@@ -535,7 +545,7 @@ impl Config {
                         }
                         .to_string()
                     });
-                    (provider, model, args.base_url, None)
+                    (provider, model, args.base_url, None, DEFAULT_CONTEXT_WINDOW)
                 }
             };
 
@@ -560,6 +570,7 @@ impl Config {
             system_prompt: file.system_prompt,
             instructions,
             config_files,
+            context_window,
         })
     }
 
@@ -756,6 +767,27 @@ mod tests {
         // The handle can still store bypass (set via the /bypass command).
         handle.set(Mode::Bypass);
         assert_eq!(clone.get(), Mode::Bypass);
+    }
+
+    #[test]
+    fn context_window_parses_per_model() {
+        let f: FileConfig = toml::from_str(
+            r#"
+            [[models]]
+            name = "a"
+            provider = "ollama"
+            model = "m"
+            context_window = 40960
+            [[models]]
+            name = "b"
+            provider = "ollama"
+            model = "m2"
+            "#,
+        )
+        .unwrap();
+        let models = f.models.unwrap();
+        assert_eq!(models[0].context_window, Some(40960));
+        assert_eq!(models[1].context_window, None);
     }
 
     #[test]

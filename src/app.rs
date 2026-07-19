@@ -123,6 +123,11 @@ pub struct App {
     pub ctx_tokens: u64,
     /// Total output tokens across the session.
     pub out_tokens: u64,
+    /// Output tokens reported for the turn in progress.
+    pub turn_out: u64,
+    /// Streamed deltas since the last usage report — a live estimate of
+    /// decoded tokens between usage updates.
+    pub delta_est: u64,
     pub model_label: String,
     /// Active config; provider/model/base_url track the current /model choice.
     cfg: Config,
@@ -167,6 +172,8 @@ impl App {
             question: None,
             ctx_tokens: 0,
             out_tokens: 0,
+            turn_out: 0,
+            delta_est: 0,
             model_label: cfg.model_label(),
             cfg: cfg.clone(),
             event_tx,
@@ -416,6 +423,8 @@ impl App {
                 if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
                     self.running += 1;
                     self.follow = true;
+                    self.turn_out = 0;
+                    self.delta_est = 0;
                     self.push(EntryKind::Notice, "Compacting conversation…".to_string());
                 } else {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
@@ -445,6 +454,8 @@ impl App {
                 if self.cmd_tx.send(WorkerCmd::Prompt(text)).await.is_ok() {
                     self.running += 1;
                     self.follow = true;
+                    self.turn_out = 0;
+                    self.delta_est = 0;
                 } else {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
@@ -551,6 +562,9 @@ impl App {
         new_cfg.model = entry.model.clone();
         new_cfg.base_url = entry.base_url.clone();
         new_cfg.active_model = Some(entry.name.clone());
+        new_cfg.context_window = entry
+            .context_window
+            .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
 
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
@@ -807,6 +821,11 @@ impl App {
         self.cfg.mode.get()
     }
 
+    /// Fraction of the model's context window used by the latest request.
+    pub fn context_ratio(&self) -> f64 {
+        self.ctx_tokens as f64 / self.cfg.context_window.max(1) as f64
+    }
+
     /// Scroll the transcript. The view is anchored to a fixed top line while
     /// scrolled up, so streaming output doesn't drag it along; scrolling past
     /// the bottom re-enables follow mode.
@@ -850,6 +869,7 @@ impl App {
     fn handle_agent_event(&mut self, ev: AgentEvent) {
         match ev {
             AgentEvent::TextDelta(s) => {
+                self.delta_est += 1;
                 if !self.assistant_open {
                     self.close_blocks();
                     self.push(EntryKind::Assistant, String::new());
@@ -858,6 +878,7 @@ impl App {
                 self.append_to_last(&s);
             }
             AgentEvent::ReasoningDelta(s) => {
+                self.delta_est += 1;
                 if !self.reasoning_open {
                     self.close_blocks();
                     self.push(EntryKind::Reasoning, String::new());
@@ -904,6 +925,9 @@ impl App {
             AgentEvent::Usage { input, output } => {
                 self.ctx_tokens = input;
                 self.out_tokens += output;
+                // Snap the live estimate to the reported figure.
+                self.turn_out += output;
+                self.delta_est = 0;
             }
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();

@@ -438,6 +438,7 @@ mod tests {
             system_prompt: None,
             instructions: Vec::new(),
             config_files: Vec::new(),
+            context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         }
     }
 
