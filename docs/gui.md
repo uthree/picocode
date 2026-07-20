@@ -25,7 +25,12 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   whatever the provider reports serving, with the conversation carried
   over on switch.
 - **Workdir line**: the project directory and git branch (with an icon)
-  sit above the input box, refreshed after each turn.
+  sit above the input box, refreshed after each turn. Clicking the
+  directory opens a native folder picker and moves the project root
+  there — the new directory's config, instructions and saved state are
+  loaded, a fresh worker and conversation start (the current model is
+  kept unless the new project selects its own), and the permission mode
+  and persisted settings carry over.
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills.

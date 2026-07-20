@@ -202,27 +202,7 @@ impl ChatView {
         // file). The runtime handles are shared with the worker, so setting
         // them here is enough.
         let saved = settings::load();
-        if let Some(v) = saved.max_turns {
-            cfg.max_turns.set(v);
-        }
-        if let Some(v) = saved.bash_timeout {
-            cfg.bash_timeout.set(v);
-        }
-        if let Some(v) = saved.read_max_lines {
-            cfg.read_max_lines.set(v);
-        }
-        if let Some(v) = saved.read_max_line_bytes {
-            cfg.read_max_line_bytes.set(v);
-        }
-        if let Some(v) = saved.auto_compact {
-            cfg.auto_compact.set(v);
-        }
-        if let Some(p) = saved.search_provider {
-            cfg.search.set_provider(p);
-        }
-        if let Some(n) = saved.search_max_results {
-            cfg.search.set_max_results(n);
-        }
+        Self::apply_saved(&saved, &cfg);
         let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
         Self::apply_theme(theme_pref, cx);
 
@@ -261,6 +241,32 @@ impl ChatView {
         };
         view.save_last_model();
         view
+    }
+
+    /// Apply the persisted /config overlay onto a config's shared handles
+    /// (used at startup and when switching working directories).
+    fn apply_saved(saved: &GuiSettings, cfg: &Config) {
+        if let Some(v) = saved.max_turns {
+            cfg.max_turns.set(v);
+        }
+        if let Some(v) = saved.bash_timeout {
+            cfg.bash_timeout.set(v);
+        }
+        if let Some(v) = saved.read_max_lines {
+            cfg.read_max_lines.set(v);
+        }
+        if let Some(v) = saved.read_max_line_bytes {
+            cfg.read_max_line_bytes.set(v);
+        }
+        if let Some(v) = saved.auto_compact {
+            cfg.auto_compact.set(v);
+        }
+        if let Some(p) = saved.search_provider {
+            cfg.search.set_provider(p);
+        }
+        if let Some(n) = saved.search_max_results {
+            cfg.search.set_max_results(n);
+        }
     }
 
     fn apply_theme(pref: ThemeSetting, cx: &mut Context<Self>) {
@@ -1066,6 +1072,122 @@ impl ChatView {
             self.available_models.clear();
             self.refresh_models();
         }
+        self.save_last_model();
+        cx.notify();
+    }
+
+    /// Click on the workdir label: open a native directory picker and move
+    /// the project root there.
+    fn pick_workdir(&mut self, cx: &mut Context<Self>) {
+        if self.running {
+            self.push(EntryKind::Error, t!("cd_while_running").to_string());
+            cx.notify();
+            return;
+        }
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = rx.await
+                && let Some(root) = paths.pop()
+            {
+                let _ = this.update(cx, |view, cx| view.change_workdir(root, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Switch the project root: rebuild the config for the new directory
+    /// (its picocode.toml, instructions, saved state), spawn a fresh worker
+    /// there, and start a new conversation. The current model is kept when
+    /// the new project doesn't select one of its own.
+    fn change_workdir(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.running {
+            self.push(EntryKind::Error, t!("cd_while_running").to_string());
+            cx.notify();
+            return;
+        }
+        if root == self.cfg.root {
+            cx.notify();
+            return;
+        }
+        if let Err(e) = std::env::set_current_dir(&root) {
+            self.push(
+                EntryKind::Error,
+                t!("cd_failed", error = format!("{e:#}")).to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        let args = config::Args {
+            provider: None,
+            model: None,
+            base_url: None,
+            bypass: false,
+            max_turns: 50,
+            smoke: None,
+        };
+        let mut new_cfg = match config::Config::from_args(args) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                self.push(
+                    EntryKind::Error,
+                    t!("cd_failed", error = format!("{e:#}")).to_string(),
+                );
+                cx.notify();
+                return;
+            }
+        };
+        // The new project selects no model of its own: keep the current one.
+        if new_cfg.model.is_empty() {
+            new_cfg.provider = self.cfg.provider;
+            new_cfg.model = self.cfg.model.clone();
+            new_cfg.base_url = self.cfg.base_url.clone();
+            new_cfg.active_model = None;
+            new_cfg.context_window = self.cfg.context_window;
+        }
+        // Keep the current permission mode and the persisted /config values.
+        new_cfg.mode.set(self.cfg.mode.get());
+        Self::apply_saved(&self.saved, &new_cfg);
+
+        let new_tx = {
+            let _guard = self.rt.enter();
+            match agent::spawn(&new_cfg, self.event_tx.clone(), self.cancel_tx.subscribe()) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    self.push(
+                        EntryKind::Error,
+                        t!("cd_failed", error = format!("{e:#}")).to_string(),
+                    );
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+        // Dropping the old sender shuts the old worker down; the new
+        // directory starts a fresh conversation and session log.
+        self.cmd_tx = new_tx;
+        self.cfg = new_cfg;
+        self.sessions_dir = session::sessions_dir(&self.cfg.root);
+        self.git_branch = picocode_core::git::branch(&self.cfg.root);
+        self.session_id = session::new_id();
+        self.entries.clear();
+        self.tokens_in = 0;
+        self.tokens_out = 0;
+        self.available_models.clear();
+        self.refresh_models();
+        self.push(
+            EntryKind::Notice,
+            t!(
+                "workdir_changed",
+                dir = picocode_core::git::display_dir(&self.cfg.root),
+                model = self.cfg.model_label()
+            )
+            .to_string(),
+        );
         self.save_last_model();
         cx.notify();
     }
@@ -2129,6 +2251,7 @@ impl Render for ChatView {
         let theme = cx.theme();
         let background = theme.background;
         let border = theme.border;
+        let muted = theme.muted;
         let muted_fg = theme.muted_foreground;
 
         let show_reasoning = self.show_reasoning;
@@ -2223,7 +2346,16 @@ impl Render for ChatView {
                             .items_center()
                             .text_sm()
                             .text_color(muted_fg)
-                            .child(picocode_core::git::display_dir(&self.cfg.root))
+                            .child(
+                                div()
+                                    .id("workdir")
+                                    .cursor_pointer()
+                                    .rounded_md()
+                                    .px_1()
+                                    .hover(move |s| s.bg(muted))
+                                    .child(picocode_core::git::display_dir(&self.cfg.root))
+                                    .on_click(cx.listener(|this, _, _, cx| this.pick_workdir(cx))),
+                            )
                             .children(self.git_branch.as_ref().map(|branch| {
                                 div()
                                     .h_flex()
