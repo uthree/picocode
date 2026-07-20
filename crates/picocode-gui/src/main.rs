@@ -5,6 +5,7 @@
 //! the TUI uses (on a manually created tokio runtime, since gpui brings its
 //! own executor) and renders the event stream in a gpui window.
 
+mod assets;
 mod chat;
 mod math;
 mod tex;
@@ -46,53 +47,57 @@ fn main() -> anyhow::Result<()> {
     // same pump as the worker).
     let handle = rt.handle().clone();
 
-    Application::new().run(move |cx: &mut App| {
-        gpui_component::init(cx);
-        // Shift+Enter inserts a newline instead of submitting: route it to
-        // the input's Enter action flagged as secondary — the multi-line
-        // input inserts the newline either way, and the chat view only
-        // submits on a non-secondary PressEnter.
-        cx.bind_keys([
-            gpui::KeyBinding::new(
-                "shift-enter",
-                gpui_component::input::Enter { secondary: true },
-                Some("Input"),
-            ),
-            // Tab cycles the slash-command completion instead of indenting
-            // (registered after gpui_component::init, so it wins).
-            gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
-        ]);
+    // The asset source serves the icon SVGs gpui-component references
+    // (e.g. the code-block copy button) — without it they render invisibly.
+    Application::new()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            // Shift+Enter inserts a newline instead of submitting: route it to
+            // the input's Enter action flagged as secondary — the multi-line
+            // input inserts the newline either way, and the chat view only
+            // submits on a non-secondary PressEnter.
+            cx.bind_keys([
+                gpui::KeyBinding::new(
+                    "shift-enter",
+                    gpui_component::input::Enter { secondary: true },
+                    Some("Input"),
+                ),
+                // Tab cycles the slash-command completion instead of indenting
+                // (registered after gpui_component::init, so it wins).
+                gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
+            ]);
 
-        let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("picocode".into()),
+            let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("picocode".into()),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        };
-        cx.open_window(options, |window, cx| {
-            let view = cx.new(|cx| {
-                let mut view = chat::ChatView::new(
-                    cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
-                );
-                if let Some(prompt) = smoke {
-                    view.send_prompt(prompt);
-                }
-                view
-            });
-            cx.new(|cx| Root::new(view, window, cx))
-        })
-        .expect("failed to open the picocode window");
+            };
+            cx.open_window(options, |window, cx| {
+                let view = cx.new(|cx| {
+                    let mut view = chat::ChatView::new(
+                        cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
+                    );
+                    if let Some(prompt) = smoke {
+                        view.send_prompt(prompt);
+                    }
+                    view
+                });
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .expect("failed to open the picocode window");
 
-        cx.activate(true);
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-    });
+            cx.activate(true);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+        });
     Ok(())
 }
