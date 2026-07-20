@@ -17,6 +17,10 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 - **TeX math**: display equations (`$$…$$`, `\[…\]`) are typeset by
   [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color;
   inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).
+- **Scrolling**: the transcript is a virtualized list — only the entries
+  in (or near) the viewport are rendered each frame, so long conversations
+  scroll and stream as fast as short ones. The view follows streaming
+  output until you scroll up, and resumes following at the bottom.
 - **Approvals**: y/n/always dialog for destructive tools (bash commands
   shown bare, edits as diffs) — answer by button or key: `y` approve,
   `n`/`Esc` deny, `a` always. The plan-approval dialog for `submit_plan`

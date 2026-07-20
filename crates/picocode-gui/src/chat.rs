@@ -3,8 +3,9 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, KeyDownEvent, MouseButton,
-    MouseDownEvent, Pixels, Point, ScrollHandle, SharedString, Window, div, px,
+    AnyElement, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, KeyDownEvent,
+    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, Pixels, Point, SharedString,
+    Window, div, list, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::clipboard::Clipboard;
@@ -145,7 +146,12 @@ pub struct ChatView {
     math_cache: crate::tex::MathCache,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
-    scroll: ScrollHandle,
+    /// Virtualized-list state for the transcript: only visible entries are
+    /// rendered and measured. Bottom alignment gives chat-log scrolling —
+    /// the view sticks to the bottom until the user scrolls up, and resumes
+    /// following when scrolled back down. Must be kept in sync with
+    /// `entries` (see `push_entry` / `reset_list`).
+    list_state: ListState,
 }
 
 impl ChatView {
@@ -241,7 +247,9 @@ impl ChatView {
             tokens_out: 0,
             math_cache: crate::tex::MathCache::new(),
             ctx_menu: None,
-            scroll: ScrollHandle::new(),
+            // The overdraw pre-measures entries near the viewport so
+            // scrolling doesn't pop items in.
+            list_state: ListState::new(0, ListAlignment::Bottom, px(512.)),
         };
         view.save_last_model();
         view
@@ -301,10 +309,9 @@ impl ChatView {
     // ---------- events from the agent worker ----------
 
     fn on_agent_event(&mut self, ev: AgentEvent, window: &mut Window, _cx: &mut Context<Self>) {
-        // Follow the stream only while the view is already at the bottom —
-        // scrolling up pins the position (like the TUI), and scrolling back
-        // down resumes following.
-        let follow = self.is_scrolled_to_bottom();
+        // No explicit scroll-follow here: the bottom-aligned virtual list
+        // sticks to the bottom on its own while the user hasn't scrolled up,
+        // and pins the position (like the TUI) while they have.
         match ev {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
@@ -417,18 +424,23 @@ impl ChatView {
                 self.push(EntryKind::Error, e);
             }
         }
-        if follow {
-            self.scroll.scroll_to_bottom();
-        }
     }
 
-    /// Whether the transcript is scrolled to (within a few pixels of) the
-    /// bottom. Scroll offsets grow negative downwards, so the bottom sits at
-    /// `-max_offset`; a fresh, unscrolled view reports 0/0 and counts as at
-    /// the bottom.
-    fn is_scrolled_to_bottom(&self) -> bool {
-        let max = self.scroll.max_offset().height;
-        self.scroll.offset().y <= -max + px(4.)
+    /// Jump the transcript to the bottom and resume following the stream.
+    /// (Scrolling to the very end normalizes to the bottom-aligned list's
+    /// "sticking" state on the next layout.)
+    fn scroll_to_bottom(&self) {
+        self.list_state.scroll_to(ListOffset {
+            item_ix: self.list_state.item_count(),
+            offset_in_item: px(0.),
+        });
+    }
+
+    /// Rebuild the list state after a wholesale transcript change (clear,
+    /// resume, entry-height-affecting settings). Drops the cached heights
+    /// and snaps to the bottom.
+    fn reset_list(&self) {
+        self.list_state.reset(self.entries.len());
     }
 
     /// Snapshot the conversation to disk. Runs in the background after each
@@ -541,7 +553,7 @@ impl ChatView {
         );
         self.entries.extend(saved.entries);
         self.session_id = id.to_string();
-        self.scroll.scroll_to_bottom();
+        self.reset_list();
         cx.notify();
     }
 
@@ -681,6 +693,9 @@ impl ChatView {
             2 => {
                 self.show_reasoning = !self.show_reasoning;
                 self.saved.show_reasoning = Some(self.show_reasoning);
+                // Reasoning entries change height everywhere, invalidating
+                // the list's cached measurements.
+                self.reset_list();
             }
             3 => {
                 let turns = self.cfg.max_turns.get() as i64 + delta * 10;
@@ -757,7 +772,7 @@ impl ChatView {
             let old = get("old_string").unwrap_or_default();
             self.push(EntryKind::Tool, format!("{name} {path}"));
             let diff = diff_lines(old, new).join("\n");
-            self.entries.push(Entry {
+            self.push_entry(Entry {
                 kind: EntryKind::Diff,
                 text: clip(&diff, DIFF_MAX_LINES),
                 lang: Some(path.to_string()),
@@ -777,11 +792,20 @@ impl ChatView {
     }
 
     fn push(&mut self, kind: EntryKind, text: String) {
-        self.entries.push(Entry {
+        self.push_entry(Entry {
             kind,
             text,
             lang: None,
         });
+    }
+
+    /// Append a transcript entry and register the new row with the
+    /// virtualized list. In-place text growth (streamed deltas) needs no
+    /// notification — visible items are re-measured every frame.
+    fn push_entry(&mut self, entry: Entry) {
+        let n = self.entries.len();
+        self.entries.push(entry);
+        self.list_state.splice(n..n, 1);
     }
 
     // ---------- user actions ----------
@@ -886,6 +910,7 @@ impl ChatView {
                 // A cleared conversation starts a fresh session log.
                 self.session_id = session::new_id();
                 self.push(EntryKind::Notice, t!("cleared").to_string());
+                self.reset_list();
             }
             "/compact" => {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
@@ -922,7 +947,7 @@ impl ChatView {
             }
             _ => self.send_prompt(text),
         }
-        self.scroll.scroll_to_bottom();
+        self.scroll_to_bottom();
         cx.notify();
     }
 
@@ -1204,6 +1229,7 @@ impl ChatView {
             )
             .to_string(),
         );
+        self.reset_list();
         self.save_last_model();
         cx.notify();
     }
@@ -1266,6 +1292,48 @@ impl ChatView {
     }
 
     // ---------- rendering ----------
+
+    /// Render one row of the virtualized transcript list: the entry body
+    /// plus its right-click (copy menu) hook and inter-entry spacing.
+    /// Called lazily by the list for visible rows only.
+    fn render_item(
+        &mut self,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let last_ix = self.entries.len().saturating_sub(1);
+        let Some(entry) = self.entries.get(ix) else {
+            // The list row count only drifts from `entries` mid-update,
+            // never across a frame; render nothing just in case.
+            return div().into_any_element();
+        };
+        // Only the entry currently receiving deltas is "streaming".
+        let streaming = self.running && ix == last_ix;
+        let rendered = Self::render_entry(
+            entry,
+            ix,
+            self.show_reasoning,
+            streaming,
+            &mut self.math_cache,
+            window,
+            cx,
+        );
+        div()
+            .when(ix > 0, |d| d.pt_2())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    if this.dialog_open() {
+                        return;
+                    }
+                    this.ctx_menu = Some((ix, ev.position));
+                    cx.notify();
+                }),
+            )
+            .child(rendered)
+            .into_any_element()
+    }
 
     fn render_entry(
         entry: &Entry,
@@ -2300,53 +2368,29 @@ impl Render for ChatView {
         let muted = theme.muted;
         let muted_fg = theme.muted_foreground;
 
-        let show_reasoning = self.show_reasoning;
-        let mut items: Vec<AnyElement> = Vec::new();
-        let last_ix = self.entries.len().saturating_sub(1);
-        for (ix, entry) in self.entries.iter().enumerate() {
-            // Only the entry currently receiving deltas is "streaming".
-            let streaming = self.running && ix == last_ix;
-            let rendered = Self::render_entry(
-                entry,
-                ix,
-                show_reasoning,
-                streaming,
-                &mut self.math_cache,
-                window,
-                cx,
-            );
-            // Right-click on any entry opens the copy menu.
-            items.push(
-                div()
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                            if this.dialog_open() {
-                                return;
-                            }
-                            this.ctx_menu = Some((ix, ev.position));
-                            cx.notify();
-                        }),
+        // The transcript is a virtualized list: only the entries in (or
+        // near) the viewport are rendered and measured each frame, so long
+        // conversations cost the same as short ones.
+        let transcript: AnyElement = if self.entries.is_empty() {
+            div()
+                .text_color(muted_fg)
+                .child(
+                    t!(
+                        "greeting",
+                        model = self.cfg.model_label(),
+                        root = self.cfg.root.display()
                     )
-                    .child(rendered)
-                    .into_any_element(),
-            );
-        }
-        if items.is_empty() {
-            items.push(
-                div()
-                    .text_color(muted_fg)
-                    .child(
-                        t!(
-                            "greeting",
-                            model = self.cfg.model_label(),
-                            root = self.cfg.root.display()
-                        )
-                        .to_string(),
-                    )
-                    .into_any_element(),
-            );
-        }
+                    .to_string(),
+                )
+                .into_any_element()
+        } else {
+            list(
+                self.list_state.clone(),
+                cx.processor(|this, ix: usize, window, cx| this.render_item(ix, window, cx)),
+            )
+            .size_full()
+            .into_any_element()
+        };
 
         let send_or_stop: AnyElement = if self.running {
             Button::new("stop")
@@ -2369,15 +2413,7 @@ impl Render for ChatView {
             .bg(background)
             .on_action(cx.listener(Self::accept_completion))
             .on_action(cx.listener(Self::on_submit_prompt))
-            .child(
-                div()
-                    .id("transcript")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .p_4()
-                    .child(div().v_flex().gap_2().children(items)),
-            )
+            .child(div().flex_1().p_4().child(transcript))
             .children(self.render_completions(cx))
             .child(
                 div()
