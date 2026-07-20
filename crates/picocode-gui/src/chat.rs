@@ -2,8 +2,12 @@
 //! question dialogs — a gpui rendering of picocode-core's event stream.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, ClickEvent, Context, Entity, ScrollHandle, SharedString, Window, div, px};
+use gpui::{
+    AnyElement, ClickEvent, ClipboardItem, Context, Entity, MouseButton, MouseDownEvent, Pixels,
+    Point, ScrollHandle, SharedString, Window, div, px,
+};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, StyledExt};
@@ -107,6 +111,8 @@ pub struct ChatView {
     tokens_out: u64,
     /// RaTeX-rendered display formulas, keyed by (scale, color, tex).
     math_cache: crate::tex::MathCache,
+    /// Open right-click menu: (transcript entry index, click position).
+    ctx_menu: Option<(usize, Point<Pixels>)>,
     scroll: ScrollHandle,
 }
 
@@ -171,6 +177,7 @@ impl ChatView {
             tokens_in: 0,
             tokens_out: 0,
             math_cache: crate::tex::MathCache::new(),
+            ctx_menu: None,
             scroll: ScrollHandle::new(),
         };
         view.save_last_model();
@@ -1006,12 +1013,32 @@ impl ChatView {
                 for (six, segment) in segments.into_iter().enumerate() {
                     match segment {
                         crate::math::Segment::Markdown(md) => {
-                            col = col.child(TextView::markdown(
-                                SharedString::from(format!("md-{ix}-{six}")),
-                                SharedString::from(crate::math::render_math(&md)),
-                                window,
-                                cx,
-                            ));
+                            col = col.child(
+                                TextView::markdown(
+                                    SharedString::from(format!("md-{ix}-{six}")),
+                                    SharedString::from(crate::math::render_math(&md)),
+                                    window,
+                                    cx,
+                                )
+                                .selectable(true)
+                                // Copy button in each code block's top-right
+                                // corner (ids hashed from the code so every
+                                // block gets its own "copied" check mark).
+                                .code_block_actions(
+                                    |code_block, _, _| {
+                                        use std::hash::{Hash, Hasher};
+                                        let code = code_block.code();
+                                        let mut hasher =
+                                            std::collections::hash_map::DefaultHasher::new();
+                                        code.hash(&mut hasher);
+                                        Clipboard::new(SharedString::from(format!(
+                                            "copy-code-{:x}",
+                                            hasher.finish()
+                                        )))
+                                        .value(code)
+                                    },
+                                ),
+                            );
                         }
                         crate::math::Segment::Display(tex_src) => {
                             let key = crate::tex::cache_key(&tex_src, foreground, scale);
@@ -1031,12 +1058,17 @@ impl ChatView {
                                 }
                                 // RaTeX couldn't typeset it: Unicode text.
                                 None => {
-                                    col = col.child(TextView::markdown(
-                                        SharedString::from(format!("md-{ix}-{six}")),
-                                        SharedString::from(crate::math::display_fallback(&tex_src)),
-                                        window,
-                                        cx,
-                                    ));
+                                    col = col.child(
+                                        TextView::markdown(
+                                            SharedString::from(format!("md-{ix}-{six}")),
+                                            SharedString::from(crate::math::display_fallback(
+                                                &tex_src,
+                                            )),
+                                            window,
+                                            cx,
+                                        )
+                                        .selectable(true),
+                                    );
                                 }
                             }
                         }
@@ -1197,6 +1229,65 @@ impl ChatView {
                                 cx.listener(|this, _, _, cx| this.answer_question(None, cx)),
                             ),
                         )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Right-click menu on a transcript entry: copy its text.
+    fn render_ctx_menu(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (ix, pos) = self.ctx_menu?;
+        let text = self.entries.get(ix)?.text.clone();
+        let theme = cx.theme();
+        // Keep the panel inside the window.
+        let viewport = window.viewport_size();
+        let x = pos.x.min(viewport.width - px(240.)).max(px(0.));
+        let y = pos.y.min(viewport.height - px(64.)).max(px(0.));
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    div()
+                        .id("ctx-menu-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.ctx_menu = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div().absolute().left(x).top(y).occlude().child(
+                        div()
+                            .v_flex()
+                            .w(px(220.))
+                            .p_1()
+                            .rounded_lg()
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.border)
+                            .shadow_lg()
+                            .text_sm()
+                            .child(
+                                menu_row(
+                                    SharedString::from("ctx-copy"),
+                                    "Copy text",
+                                    one_line(&text, 32),
+                                    false,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.clone(),
+                                        ));
+                                        this.ctx_menu = None;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    ),
                 )
                 .into_any_element(),
         )
@@ -1661,14 +1752,24 @@ impl Render for ChatView {
         let show_reasoning = self.show_reasoning;
         let mut items: Vec<AnyElement> = Vec::new();
         for (ix, entry) in self.entries.iter().enumerate() {
-            items.push(Self::render_entry(
-                entry,
-                ix,
-                show_reasoning,
-                &mut self.math_cache,
-                window,
-                cx,
-            ));
+            let rendered =
+                Self::render_entry(entry, ix, show_reasoning, &mut self.math_cache, window, cx);
+            // Right-click on any entry opens the copy menu.
+            items.push(
+                div()
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                            if this.dialog_open() {
+                                return;
+                            }
+                            this.ctx_menu = Some((ix, ev.position));
+                            cx.notify();
+                        }),
+                    )
+                    .child(rendered)
+                    .into_any_element(),
+            );
         }
         if items.is_empty() {
             items.push(
@@ -1724,6 +1825,7 @@ impl Render for ChatView {
                     .child(send_or_stop),
             )
             .child(self.render_status_bar(cx))
+            .children(self.render_ctx_menu(window, cx))
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
             .children(self.render_session_picker(cx))

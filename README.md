@@ -243,7 +243,9 @@ switching (click the chips in the status bar, or `/model <name>` etc.),
 a context-usage gauge, session autosave with `/resume` (sessions are
 shared with the TUI, so either front end can resume the other's), a
 `/config` settings dialog, `/status` and `/permissions`, a slash-command
-completion popup (Tab cycles, click fills), and TeX math in replies:
+completion popup (Tab cycles, click fills), text selection with copy
+buttons on code blocks and a right-click "Copy text" menu on any entry,
+and TeX math in replies:
 display equations (`$$…$$`, `\[…\]`) are typeset by
 [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color,
 inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).
