@@ -87,6 +87,9 @@ struct FileConfig {
     read_max_lines: Option<u64>,
     /// Bytes per line before read_file truncates it (default 500).
     read_max_line_bytes: Option<u64>,
+    /// Context usage (percent of the window) at which the conversation is
+    /// compacted automatically after a turn; 0 disables (default 85).
+    auto_compact: Option<u64>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
@@ -98,6 +101,8 @@ pub const DEFAULT_BASH_TIMEOUT: u64 = 120;
 /// Default read_file output limits.
 pub const DEFAULT_READ_MAX_LINES: u64 = 2000;
 pub const DEFAULT_READ_MAX_LINE_BYTES: u64 = 500;
+/// Default auto-compaction threshold (percent of the context window).
+pub const DEFAULT_AUTO_COMPACT: u64 = 85;
 
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
@@ -712,6 +717,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         bash_timeout: project.bash_timeout.or(global.bash_timeout),
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
+        auto_compact: project.auto_compact.or(global.auto_compact),
         approval,
         search: SearchFileConfig {
             provider: project.search.provider.or(global.search.provider),
@@ -764,6 +770,9 @@ pub struct Config {
     /// runtime (`/config`).
     pub read_max_lines: NumHandle,
     pub read_max_line_bytes: NumHandle,
+    /// Auto-compaction threshold in percent of the context window (0 = off),
+    /// checked after each completed turn and adjustable at runtime (`/config`).
+    pub auto_compact: NumHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -827,6 +836,10 @@ impl Config {
         if read_max_lines == 0 || read_max_line_bytes == 0 {
             anyhow::bail!("read_max_lines and read_max_line_bytes must be at least 1");
         }
+        let auto_compact = file.auto_compact.unwrap_or(DEFAULT_AUTO_COMPACT);
+        if auto_compact > 99 {
+            anyhow::bail!("auto_compact must be 0 (off) to 99 (percent of the context window)");
+        }
 
         // Startup model precedence: CLI flags > last-used state > config
         // default_model / first entry > empty (main() picks the first model
@@ -876,6 +889,7 @@ impl Config {
             bash_timeout: NumHandle::new(bash_timeout),
             read_max_lines: NumHandle::new(read_max_lines),
             read_max_line_bytes: NumHandle::new(read_max_line_bytes),
+            auto_compact: NumHandle::new(auto_compact),
             root,
             approval: RulesHandle::new(file.approval),
             mode: ModeHandle::new(if args.bypass {
@@ -956,18 +970,22 @@ mod tests {
 
     #[test]
     fn tool_limits_parse_and_merge() {
-        let global: FileConfig =
-            toml::from_str("bash_timeout = 60\nread_max_lines = 100\nread_max_line_bytes = 200")
-                .unwrap();
+        let global: FileConfig = toml::from_str(
+            "bash_timeout = 60\nread_max_lines = 100\nread_max_line_bytes = 200\nauto_compact = 70",
+        )
+        .unwrap();
         assert_eq!(global.bash_timeout, Some(60));
         assert_eq!(global.read_max_lines, Some(100));
         assert_eq!(global.read_max_line_bytes, Some(200));
-        // Project value wins; a global one fills in.
-        let project: FileConfig = toml::from_str("bash_timeout = 240").unwrap();
+        assert_eq!(global.auto_compact, Some(70));
+        // Project value wins; a global one fills in. auto_compact = 0 (off)
+        // is a real value, not an absent one.
+        let project: FileConfig = toml::from_str("bash_timeout = 240\nauto_compact = 0").unwrap();
         let merged = merge(global, project);
         assert_eq!(merged.bash_timeout, Some(240));
         assert_eq!(merged.read_max_lines, Some(100));
         assert_eq!(merged.read_max_line_bytes, Some(200));
+        assert_eq!(merged.auto_compact, Some(0));
     }
 
     #[test]

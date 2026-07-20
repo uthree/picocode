@@ -434,6 +434,7 @@ mod tests {
             bash_timeout: crate::config::NumHandle::new(120),
             read_max_lines: crate::config::NumHandle::new(2000),
             read_max_line_bytes: crate::config::NumHandle::new(500),
+            auto_compact: crate::config::NumHandle::new(85),
             root: PathBuf::from("/tmp/proj"),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),

@@ -124,6 +124,11 @@ bash_timeout = 120
 read_max_lines = 2000        # max lines per call
 read_max_line_bytes = 500    # bytes per line before truncation
 
+# Auto-compact the conversation when the context usage crosses this percent
+# of the window, checked after each turn (default: 85; 0 disables; also
+# adjustable in /config)
+auto_compact = 85
+
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.
 system_prompt = """

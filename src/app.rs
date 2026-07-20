@@ -203,8 +203,9 @@ pub struct SettingsMenu {
 }
 
 /// Number of rows in the `/config` dialog (mode, reasoning, max turns,
-/// bash timeout, read limits, web search provider/results, model).
-pub const SETTINGS_ROWS: usize = 9;
+/// bash timeout, read limits, web search provider/results, auto-compact,
+/// model).
+pub const SETTINGS_ROWS: usize = 10;
 
 /// State of the `ask_user` / `submit_plan` option dialog.
 pub struct PendingQuestion {
@@ -258,6 +259,10 @@ pub struct App {
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
+    /// True while an auto-compaction is pending or has failed — blocks
+    /// re-triggering until a compaction succeeds or a new prompt is sent,
+    /// so a failing compactor can't retry in a loop.
+    auto_compact_tried: bool,
     pub model_label: String,
     /// Collapsed pasted blocks as (placeholder, full text); the placeholder
     /// sits in the input and is expanded when the message is submitted.
@@ -317,6 +322,7 @@ impl App {
             total_out: 0,
             delta_est: 0,
             background_jobs: 0,
+            auto_compact_tried: false,
             model_label: cfg.model_label(),
             pasted: Vec::new(),
             available_models: Vec::new(),
@@ -690,6 +696,7 @@ impl App {
             "/quit" | "/q" | "/exit" => self.should_quit = true,
             "/clear" => {
                 self.entries.clear();
+                self.auto_compact_tried = false;
                 self.ctx_tokens = 0;
                 self.turn_out = 0;
                 self.total_out = 0;
@@ -750,6 +757,8 @@ impl App {
     /// receives (pastes expanded).
     async fn send_prompt(&mut self, display: String, prompt: String) {
         self.close_blocks();
+        // A new prompt re-arms auto-compaction (one attempt per user turn).
+        self.auto_compact_tried = false;
         self.push(EntryKind::User, display);
         if self.cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_ok() {
             self.running += 1;
@@ -1300,6 +1309,14 @@ impl App {
                 self.cfg.search.snapshot().max_results.to_string(),
                 "← →",
             ),
+            (
+                "auto-compact",
+                match self.cfg.auto_compact.get() {
+                    0 => "off".to_string(),
+                    pct => format!("{pct}%"),
+                },
+                "← →",
+            ),
             ("model", self.model_label.clone(), "Enter"),
         ]
     }
@@ -1343,6 +1360,18 @@ impl App {
             7 => {
                 let n = self.cfg.search.snapshot().max_results as i64 + delta;
                 self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
+            }
+            // ±5% between 50 and 95; stepping below 50 turns it off.
+            8 => {
+                let cur = self.cfg.auto_compact.get() as i64;
+                let next = if delta < 0 {
+                    if cur <= 50 { 0 } else { cur - 5 }
+                } else if cur == 0 {
+                    50
+                } else {
+                    (cur + 5).min(95)
+                };
+                self.cfg.auto_compact.set(next as u64);
             }
             _ => {}
         }
@@ -1417,6 +1446,49 @@ impl App {
                 self.cfg.root.display(),
             ),
         );
+    }
+
+    /// After a turn completes with nothing else running: compact the
+    /// conversation automatically once the context usage crossed the
+    /// configured threshold (`auto_compact` percent, 0 = disabled).
+    /// `auto_compact_tried` keeps a failing compaction from retrying in a
+    /// loop; it re-arms on the next user prompt or a successful compaction.
+    fn maybe_auto_compact(&mut self) {
+        let threshold = self.cfg.auto_compact.get();
+        if threshold == 0 || self.auto_compact_tried {
+            return;
+        }
+        let pct = self.context_ratio() * 100.0;
+        if pct < threshold as f64 {
+            return;
+        }
+        self.auto_compact_tried = true;
+        self.close_blocks();
+        self.running += 1;
+        self.waiting = true;
+        self.follow = true;
+        self.turn_out = 0;
+        self.delta_est = 0;
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Context {}% full (auto_compact threshold {threshold}%) — compacting the \
+                 conversation…",
+                pct.round()
+            ),
+        );
+        let cmd_tx = self.cmd_tx.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            if cmd_tx.send(WorkerCmd::Compact).await.is_err() {
+                let _ = event_tx
+                    .send(AgentEvent::Error(
+                        "The agent worker has stopped".to_string(),
+                    ))
+                    .await;
+                let _ = event_tx.send(AgentEvent::TurnComplete).await;
+            }
+        });
     }
 
     /// Current permission mode, for the status bar.
@@ -1665,6 +1737,7 @@ impl App {
                 } else {
                     // Mirror the model's new context: drop the old transcript
                     // and show what the model now remembers.
+                    self.auto_compact_tried = false;
                     self.entries.clear();
                     self.close_blocks();
                     self.ctx_tokens = 0;
@@ -1686,6 +1759,7 @@ impl App {
                     // Any dialog still open belongs to a dropped tool future.
                     self.question = None;
                     self.autosave();
+                    self.maybe_auto_compact();
                 }
             }
             AgentEvent::Error(s) => {

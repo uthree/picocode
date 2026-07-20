@@ -88,7 +88,12 @@ pub fn new_id() -> String {
 pub fn save(dir: &Path, id: &str, session: &SessionFile) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     let json = serde_json::to_vec(session)?;
-    let tmp = dir.join(format!("{id}.json.tmp"));
+    // Unique temp name: concurrent autosaves of the same session (e.g. a
+    // turn completing and an auto-compaction right after it) must not race
+    // on one temp file — the loser's rename would fail with ENOENT.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{id}.json.tmp{}-{seq}", std::process::id()));
     let path = dir.join(format!("{id}.json"));
     std::fs::write(&tmp, json).with_context(|| format!("failed to write {}", tmp.display()))?;
     std::fs::rename(&tmp, &path)
