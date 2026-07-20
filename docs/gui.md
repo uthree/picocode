@@ -24,6 +24,8 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   (right) opening the model menu — configured `[[models]]` entries plus
   whatever the provider reports serving, with the conversation carried
   over on switch.
+- **Workdir line**: the project directory and git branch (with an icon)
+  sit above the input box, refreshed after each turn.
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills.

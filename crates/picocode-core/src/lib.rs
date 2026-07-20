@@ -11,6 +11,7 @@ pub mod agent;
 pub mod approval;
 pub mod config;
 pub mod event;
+pub mod git;
 pub mod models;
 pub mod session;
 pub mod state;

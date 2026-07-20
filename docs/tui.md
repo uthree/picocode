@@ -78,6 +78,8 @@ on macOS ones).
   on send.
 - **Direct shell**: the input box turns yellow while typing a `!` command,
   and cyan while typing a `/` command.
+- **Workdir title**: the input box's top border shows the project directory
+  (`~`-shortened) and the git branch, refreshed after each turn.
 - **Long-running commands**: a bash command (model-invoked or `!`) still
   running after the configured timeout becomes a background job instead of
   being killed; the status bar shows `⏳ N bg` while jobs are running. When

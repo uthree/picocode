@@ -294,7 +294,13 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     } else {
         (" picocode ", Style::new().fg(Color::DarkGray))
     };
-    let block = Block::bordered().title(title).border_style(border);
+    let block = Block::bordered()
+        .title(title)
+        .title(Span::styled(
+            format!(" {} ", app.workdir_label()),
+            Style::new().fg(Color::DarkGray),
+        ))
+        .border_style(border);
     let inner_width = area.width.saturating_sub(2) as usize;
     let inner_height = (area.height.saturating_sub(2) as usize).max(1);
     let dialog_open = app.pending.is_some()

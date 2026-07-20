@@ -128,6 +128,9 @@ pub struct ChatView {
     /// Set while Tab fills the input, so the resulting Change event doesn't
     /// reset `comp_prefix`.
     completing: bool,
+    /// Git branch of the project root (refreshed after each turn), shown
+    /// above the input box.
+    git_branch: Option<String>,
     /// Backgrounded (timed-out) bash commands still running:
     /// (id, command, start time). Shown in the status bar; clicking opens
     /// a details popup.
@@ -224,6 +227,7 @@ impl ChatView {
         Self::apply_theme(theme_pref, cx);
 
         let sessions_dir = session::sessions_dir(&cfg.root);
+        let git_branch = picocode_core::git::branch(&cfg.root);
         let view = Self {
             cfg,
             entries: Vec::new(),
@@ -247,6 +251,7 @@ impl ChatView {
             saved,
             comp_prefix: None,
             completing: false,
+            git_branch,
             bg_jobs: Vec::new(),
             tokens_in: 0,
             tokens_out: 0,
@@ -390,6 +395,8 @@ impl ChatView {
             AgentEvent::TurnComplete => {
                 self.running = false;
                 self.waiting = false;
+                // Tools may have switched branches during the turn.
+                self.git_branch = picocode_core::git::branch(&self.cfg.root);
                 self.autosave();
             }
             AgentEvent::Error(e) => {
@@ -2204,13 +2211,40 @@ impl Render for ChatView {
             .children(self.render_completions(cx))
             .child(
                 div()
-                    .h_flex()
-                    .gap_2()
+                    .v_flex()
+                    .gap_1()
                     .p_3()
                     .border_t_1()
                     .border_color(border)
-                    .child(div().flex_1().child(Input::new(&self.input)))
-                    .child(send_or_stop),
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_1()
+                            .items_center()
+                            .text_sm()
+                            .text_color(muted_fg)
+                            .child(picocode_core::git::display_dir(&self.cfg.root))
+                            .children(self.git_branch.as_ref().map(|branch| {
+                                div()
+                                    .h_flex()
+                                    .gap_0p5()
+                                    .items_center()
+                                    .child(
+                                        gpui_component::Icon::default()
+                                            .path("icons/git-branch.svg")
+                                            .size_3p5()
+                                            .flex_none(),
+                                    )
+                                    .child(branch.clone())
+                            })),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(div().flex_1().child(Input::new(&self.input)))
+                            .child(send_or_stop),
+                    ),
             )
             .child(self.render_status_bar(cx))
             .children(self.render_ctx_menu(window, cx))

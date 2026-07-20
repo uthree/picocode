@@ -180,6 +180,9 @@ pub struct App {
     /// so a failing compactor can't retry in a loop.
     auto_compact_tried: bool,
     pub model_label: String,
+    /// Git branch of the project root (refreshed after each turn), for the
+    /// input-box title.
+    pub git_branch: Option<String>,
     /// Collapsed pasted blocks as (placeholder, full text); the placeholder
     /// sits in the input and is expanded when the message is submitted.
     pasted: Vec<(String, String)>,
@@ -240,6 +243,7 @@ impl App {
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
+            git_branch: picocode_core::git::branch(&cfg.root),
             pasted: Vec::new(),
             available_models: Vec::new(),
             cfg: cfg.clone(),
@@ -1418,6 +1422,15 @@ impl App {
         self.cfg.mode.get()
     }
 
+    /// "dir (branch)" for the input-box title.
+    pub fn workdir_label(&self) -> String {
+        let dir = picocode_core::git::display_dir(&self.cfg.root);
+        match &self.git_branch {
+            Some(branch) => format!("{dir} ({branch})"),
+            None => dir,
+        }
+    }
+
     /// Fraction of the model's context window used by the latest request.
     pub fn context_ratio(&self) -> f64 {
         self.ctx_tokens as f64 / self.cfg.context_window.max(1) as f64
@@ -1664,6 +1677,7 @@ impl App {
                 if self.running == 0 {
                     // Any dialog still open belongs to a dropped tool future.
                     self.question = None;
+                    self.git_branch = picocode_core::git::branch(&self.cfg.root);
                     self.autosave();
                     self.maybe_auto_compact();
                 }
