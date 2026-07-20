@@ -284,11 +284,13 @@ fn push_wrapped(
 // ----- input ---------------------------------------------------------------
 
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
-    // A leading `!` means the input is a direct shell command; recolor the
-    // box so the mode is obvious while typing.
-    let shell = app.input.starts_with('!');
-    let (title, border) = if shell {
+    // A leading `!` means the input is a direct shell command and a leading
+    // `/` a slash command; recolor the box so the mode is obvious while
+    // typing.
+    let (title, border) = if app.input.starts_with('!') {
         (" shell ", Style::new().fg(Color::Yellow))
+    } else if app.input.starts_with('/') {
+        (" command ", Style::new().fg(Color::Cyan))
     } else {
         (" picocode ", Style::new().fg(Color::DarkGray))
     };

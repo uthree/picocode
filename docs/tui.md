@@ -75,7 +75,8 @@ on macOS ones).
   `[Pasted text #1 +N lines]` placeholder — deleted as one unit, shown
   collapsed in the transcript, and expanded to the full text for the model
   on send.
-- **Direct shell**: the input box turns yellow while typing a `!` command.
+- **Direct shell**: the input box turns yellow while typing a `!` command,
+  and cyan while typing a `/` command.
 - **Long-running commands**: a bash command (model-invoked or `!`) still
   running after the configured timeout becomes a background job instead of
   being killed; the status bar shows `⏳ N bg` while jobs are running. When
