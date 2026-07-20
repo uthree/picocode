@@ -100,33 +100,11 @@ const DEL_BG: Color = Color::Rgb(75, 24, 24);
 /// separately so syntect's per-line state stays consistent. Returns the row
 /// background (None for context) plus the styled spans per line.
 pub fn diff_spans(diff: &str, token: &str) -> Vec<(Option<Color>, SpanLine)> {
-    enum Row<'a> {
-        Old(usize),
-        New(usize),
-        Ctx(usize),
-        Other(&'a str),
-    }
-    let mut old_src: Vec<&str> = Vec::new();
-    let mut new_src: Vec<&str> = Vec::new();
-    let mut rows: Vec<Row> = Vec::new();
-    for l in diff.lines() {
-        if let Some(code) = l.strip_prefix("- ") {
-            rows.push(Row::Old(old_src.len()));
-            old_src.push(code);
-        } else if let Some(code) = l.strip_prefix("+ ") {
-            rows.push(Row::New(new_src.len()));
-            new_src.push(code);
-        } else if let Some(code) = l.strip_prefix("  ") {
-            rows.push(Row::Ctx(new_src.len()));
-            old_src.push(code);
-            new_src.push(code);
-        } else {
-            // Truncation markers and the like.
-            rows.push(Row::Other(l));
-        }
-    }
-    let old_hl = highlight(&old_src.join("\n"), token);
-    let new_hl = highlight(&new_src.join("\n"), token);
+    use picocode_core::transcript::DiffRow;
+
+    let (rows, old_src, new_src) = picocode_core::transcript::parse_diff(diff);
+    let old_hl = highlight(&old_src, token);
+    let new_hl = highlight(&new_src, token);
     let line = |hl: &[SpanLine], i: usize| hl.get(i).cloned().unwrap_or_default();
     let marked = |sign: &str, fg: Color, bg: Color, code: SpanLine| {
         let mut spans: SpanLine = vec![(Style::new().fg(fg).bg(bg), sign.to_string())];
@@ -136,23 +114,20 @@ pub fn diff_spans(diff: &str, token: &str) -> Vec<(Option<Color>, SpanLine)> {
 
     rows.into_iter()
         .map(|row| match row {
-            Row::Old(i) => (
+            DiffRow::Old(i) => (
                 Some(DEL_BG),
                 marked("- ", Color::Red, DEL_BG, line(&old_hl, i)),
             ),
-            Row::New(i) => (
+            DiffRow::New(i) => (
                 Some(ADD_BG),
                 marked("+ ", Color::Green, ADD_BG, line(&new_hl, i)),
             ),
-            Row::Ctx(i) => {
+            DiffRow::Ctx(i) => {
                 let mut spans: SpanLine = vec![(Style::new(), "  ".to_string())];
                 spans.extend(line(&new_hl, i));
                 (None, spans)
             }
-            Row::Other(l) => (
-                None,
-                vec![(Style::new().fg(Color::DarkGray), l.to_string())],
-            ),
+            DiffRow::Other(l) => (None, vec![(Style::new().fg(Color::DarkGray), l)]),
         })
         .collect()
 }
@@ -187,13 +162,6 @@ mod tests {
         // The split span keeps its style.
         assert_eq!(chunks[1][1].0, Style::new().fg(Color::Red));
         assert!(!wrap_spans(&Vec::new(), 4).is_empty());
-    }
-
-    #[test]
-    fn diffs_lines_with_context() {
-        let old = "a\nb\nc\n";
-        let new = "a\nB\nc\n";
-        assert_eq!(diff_lines(old, new), ["  a", "- b", "+ B", "  c"]);
     }
 
     #[test]

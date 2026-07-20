@@ -1169,42 +1169,11 @@ impl App {
 
     /// `/permissions`: show what the current mode and config rules do.
     fn show_permissions(&mut self) {
-        use picocode_core::config::Mode;
-        let mode = self.cfg.mode.get();
-        let mode_line = match mode {
-            Mode::ReadOnly => "destructive calls ask unless allow-listed",
-            Mode::Edit => "file writes run freely; other destructive calls ask unless allow-listed",
-            Mode::Plan => "bash and file writes are denied; web tools ask unless allow-listed",
-            Mode::Bypass => "EVERYTHING runs without confirmation (deny rules still apply)",
-        };
-        let rules = self.cfg.approval.snapshot();
-        let list = |xs: &[String]| {
-            if xs.is_empty() {
-                "(none)".to_string()
-            } else {
-                xs.join(", ")
-            }
-        };
-        self.push(
-            EntryKind::Notice,
-            format!(
-                "Permissions — precedence: deny > mode (plan/bypass) > allow > ask\n\
-                 mode         [{}] {mode_line}\n\
-                 deny_tools   {}\n\
-                 deny_bash    {}\n\
-                 allow_tools  {}\n\
-                 allow_bash   {}\n\
-                 Local reads (read_file, list_files, grep) always run; file tools are \
-                 confined to {}. Commands with $( ), backticks or > never auto-run. \
-                 `!` commands are typed by you and skip all rules.",
-                mode.label(),
-                list(&rules.deny_tools),
-                list(&rules.deny_bash),
-                list(&rules.allow_tools),
-                list(&rules.allow_bash),
-                self.cfg.root.display(),
-            ),
+        let text = format!(
+            "{} `!` commands are typed by you and skip all rules.",
+            picocode_core::report::permissions_text(&self.cfg)
         );
+        self.push(EntryKind::Notice, text);
     }
 
     /// Rows of the `/config` dialog: (name, current value, key hint). Values
@@ -1266,47 +1235,14 @@ impl App {
         match menu.selected {
             // Same cycle as Shift+Tab; bypass stays /bypass-only, and
             // adjusting away from it lands on read-only.
-            0 => {
-                let cycle = picocode_core::config::Mode::CYCLE;
-                let next = match cycle.iter().position(|m| *m == self.cfg.mode.get()) {
-                    Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
-                    Some(i) => cycle[(i + 1) % cycle.len()],
-                    None => cycle[0],
-                };
-                self.cfg.mode.set(next);
-            }
+            0 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
             1 => self.show_reasoning = !self.show_reasoning,
-            2 => {
-                let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
-                self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
-            }
-            3 => {
-                let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
-                self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
-            }
-            4 => {
-                let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
-                self.cfg
-                    .read_max_line_bytes
-                    .set(bytes.clamp(100, 5000) as u64);
-            }
+            2 => self.cfg.step_bash_timeout(delta),
+            3 => self.cfg.step_read_lines(delta),
+            4 => self.cfg.step_line_bytes(delta),
             5 => self.cfg.search.cycle_provider(delta),
-            6 => {
-                let n = self.cfg.search.snapshot().max_results as i64 + delta;
-                self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
-            }
-            // ±5% between 50 and 95; stepping below 50 turns it off.
-            7 => {
-                let cur = self.cfg.auto_compact.get() as i64;
-                let next = if delta < 0 {
-                    if cur <= 50 { 0 } else { cur - 5 }
-                } else if cur == 0 {
-                    50
-                } else {
-                    (cur + 5).min(95)
-                };
-                self.cfg.auto_compact.set(next as u64);
-            }
+            6 => self.cfg.search.step_max_results(delta),
+            7 => self.cfg.step_auto_compact(delta),
             _ => {}
         }
     }
@@ -1326,61 +1262,27 @@ impl App {
     /// `/status` (alias `/usage`): one-shot overview of the model, token
     /// usage, permission mode and session.
     fn show_status(&mut self) {
-        let entry = match &self.cfg.active_model {
-            Some(name) => format!(" — [[models]] entry `{name}`"),
-            None => String::new(),
-        };
-        let endpoint =
-            picocode_core::models::base_url(self.cfg.provider, self.cfg.base_url.as_deref());
-        let pct = (self.context_ratio() * 100.0).round() as u64;
         let prompts = self
             .entries
             .iter()
             .filter(|e| e.kind == EntryKind::User)
             .count();
-        let saved = match &self.sessions_dir {
-            Some(dir) => format!("autosaved under {}", dir.display()),
-            None => "not saved (no home directory)".to_string(),
-        };
-        let config = if self.cfg.config_files.is_empty() {
-            "(built-in defaults)".to_string()
-        } else {
-            self.cfg.config_files.join(", ")
-        };
-        let instructions = if self.cfg.instructions.is_empty() {
-            "(none found)".to_string()
-        } else {
-            let names: Vec<&str> = self
-                .cfg
-                .instructions
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect();
-            names.join(", ")
-        };
-        self.push(
-            EntryKind::Notice,
-            format!(
-                "Status\n\
-                 model         {}{entry}\n\
-                 endpoint      {endpoint}\n\
-                 mode          {} — /permissions shows the rules\n\
-                 context       {} of {} tokens ({pct}%)\n\
-                 output        {} tokens this turn · {} this conversation\n\
-                 session       {} — {prompts} prompts, {saved}\n\
-                 project       {}\n\
-                 config        {config}\n\
-                 instructions  {instructions}",
-                self.model_label,
-                self.cfg.mode.get().label(),
-                self.ctx_tokens,
-                self.cfg.context_window,
-                self.turn_out + self.delta_est,
-                self.total_out + self.delta_est,
-                self.session_id,
-                self.cfg.root.display(),
-            ),
+        let text = picocode_core::report::status_text(
+            &self.cfg,
+            &picocode_core::report::StatusInfo {
+                model_label: &self.model_label,
+                ctx_tokens: self.ctx_tokens,
+                output: format!(
+                    "{} tokens this turn · {} this conversation",
+                    self.turn_out + self.delta_est,
+                    self.total_out + self.delta_est
+                ),
+                session_id: &self.session_id,
+                prompts,
+                sessions_dir: self.sessions_dir.as_deref(),
+            },
         );
+        self.push(EntryKind::Notice, text);
     }
 
     /// After a turn completes with nothing else running: compact the

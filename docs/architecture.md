@@ -14,10 +14,12 @@ crates/
     approval.rs  — approval gate for destructive tools (rig AgentHook)
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
     models.rs    — provider model-list queries backing /model
+    report.rs    — /status and /permissions text shared by both front ends
     session.rs   — session autosave/load backing /resume
     state.rs     — per-project persisted state (last-used model)
     tools/       — built-in tool implementations
     transcript.rs — renderer-agnostic transcript entries (Entry/EntryKind)
+                   and diff-line parsing shared by both front ends
   picocode-tui/src/      — the ratatui front end (binary `picocode`)
     main.rs      — entry point (+ --smoke headless debug mode)
     app.rs       — application state and event loop
@@ -28,7 +30,10 @@ crates/
     markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
   picocode-gui/src/      — experimental gpui front end (binary `picocode-gui`)
     main.rs      — window bootstrap, tokio ⇄ gpui bridge (+ --smoke auto-prompt)
-    chat.rs      — chat view: transcript, input, status bar, dialogs, menus
+    chat/        — the chat view: state, events and commands (mod), entry
+                   rendering (transcript), dialogs and popups (dialogs),
+                   status bar and its menus (status)
+    highlight.rs — tree-sitter syntax highlighting for diffs (cached)
     math.rs      — TeX span extraction and Unicode fallback (unicodeit)
     tex.rs       — display-math typesetting via RaTeX (cached PNGs)
     assets.rs    — embedded icon SVGs served to gpui-component

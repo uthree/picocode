@@ -35,9 +35,18 @@ impl Mode {
     pub const CYCLE: &[Mode] = &[Mode::ReadOnly, Mode::Edit, Mode::Plan];
 
     pub fn next(self) -> Mode {
-        match Self::CYCLE.iter().position(|m| *m == self) {
-            Some(i) => Self::CYCLE[(i + 1) % Self::CYCLE.len()],
-            None => Self::CYCLE[0],
+        self.cycled(1)
+    }
+
+    /// Step along [`Mode::CYCLE`] in either direction — the `/config` mode
+    /// row in both front ends. Adjusting away from bypass (not in the
+    /// cycle) lands on read-only.
+    pub fn cycled(self, delta: i64) -> Mode {
+        let cycle = Self::CYCLE;
+        match cycle.iter().position(|m| *m == self) {
+            Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
+            Some(i) => cycle[(i + 1) % cycle.len()],
+            None => cycle[0],
         }
     }
 

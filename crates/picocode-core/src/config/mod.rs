@@ -204,8 +204,8 @@ fn default_model_for(provider: Provider) -> String {
 
 /// Shared, runtime-adjustable numeric setting: the `/config` dialog writes
 /// it while the worker or a tool reads it per use, so a change applies to
-/// the next prompt / tool call. Used for the turn limit, the bash timeout
-/// and the read_file output limits.
+/// the next prompt / tool call. Used for the bash timeout, the read_file
+/// output limits and the auto-compact threshold.
 #[derive(Clone, Debug)]
 pub struct NumHandle(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
@@ -220,6 +220,13 @@ impl NumHandle {
 
     pub fn set(&self, n: u64) {
         self.0.store(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// `/config` ←/→ stepping: move by `delta` steps of `step`, clamped to
+    /// `min..=max`. Shared by both front ends so the ranges stay in sync.
+    pub fn step(&self, delta: i64, step: i64, min: u64, max: u64) {
+        let next = self.get() as i64 + delta * step;
+        self.set(next.clamp(min as i64, max as i64) as u64);
     }
 }
 
@@ -360,6 +367,34 @@ pub struct Config {
 }
 
 impl Config {
+    /// `/config` ←/→ steppers for the numeric rows, one per setting so both
+    /// front ends share the step sizes and ranges.
+    pub fn step_bash_timeout(&self, delta: i64) {
+        self.bash_timeout.step(delta, 30, 30, 1800);
+    }
+
+    pub fn step_read_lines(&self, delta: i64) {
+        self.read_max_lines.step(delta, 500, 500, 10_000);
+    }
+
+    pub fn step_line_bytes(&self, delta: i64) {
+        self.read_max_line_bytes.step(delta, 100, 100, 5000);
+    }
+
+    /// Auto-compact threshold: ±5% between 50 and 95; stepping below 50
+    /// turns it off (0), and stepping up from off restarts at 50.
+    pub fn step_auto_compact(&self, delta: i64) {
+        let cur = self.auto_compact.get() as i64;
+        let next = if delta < 0 {
+            if cur <= 50 { 0 } else { cur - 5 }
+        } else if cur == 0 {
+            50
+        } else {
+            (cur + 5).min(95)
+        };
+        self.auto_compact.set(next as u64);
+    }
+
     pub fn from_args(args: Args) -> anyhow::Result<Self> {
         // The project root is the nearest ancestor holding a picocode.toml,
         // so starting from a subdirectory finds the same config, sessions

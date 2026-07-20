@@ -92,6 +92,12 @@ impl SearchHandle {
         self.0.write().unwrap().max_results = n;
     }
 
+    /// `/config` ←/→ stepping for the result count, clamped to 1..=20.
+    pub fn step_max_results(&self, delta: i64) {
+        let n = self.snapshot().max_results as i64 + delta;
+        self.set_max_results(n.clamp(1, 20) as usize);
+    }
+
     /// Providers usable right now: searxng needs a configured base_url and
     /// brave a BRAVE_API_KEY; duckduckgo always works.
     pub fn available_providers(&self) -> Vec<SearchProvider> {

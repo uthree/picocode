@@ -51,3 +51,67 @@ pub fn diff_lines(old: &str, new: &str) -> Vec<String> {
         })
         .collect()
 }
+
+/// One row of a rendered diff: the sign, and which side's line (by index)
+/// carries the code, so front ends can pair rows with syntax-highlighted
+/// sources.
+pub enum DiffRow {
+    /// A removed line: index into the old side.
+    Old(usize),
+    /// An added line: index into the new side.
+    New(usize),
+    /// An unchanged line: index into the new side (also present in old).
+    Ctx(usize),
+    /// Anything unprefixed (truncation markers and the like).
+    Other(String),
+}
+
+/// Split [`diff_lines`]-style text back into rows plus the rebuilt old/new
+/// sources. Each side comes back as one coherent snippet so highlighters
+/// can parse multi-line constructs (strings, comments) correctly.
+pub fn parse_diff(diff: &str) -> (Vec<DiffRow>, String, String) {
+    let mut old_src: Vec<&str> = Vec::new();
+    let mut new_src: Vec<&str> = Vec::new();
+    let mut rows: Vec<DiffRow> = Vec::new();
+    for line in diff.lines() {
+        if let Some(code) = line.strip_prefix("- ") {
+            rows.push(DiffRow::Old(old_src.len()));
+            old_src.push(code);
+        } else if let Some(code) = line.strip_prefix("+ ") {
+            rows.push(DiffRow::New(new_src.len()));
+            new_src.push(code);
+        } else if let Some(code) = line.strip_prefix("  ") {
+            rows.push(DiffRow::Ctx(new_src.len()));
+            old_src.push(code);
+            new_src.push(code);
+        } else {
+            rows.push(DiffRow::Other(line.to_string()));
+        }
+    }
+    (rows, old_src.join("\n"), new_src.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diffs_lines_with_context() {
+        let old = "a\nb\nc\n";
+        let new = "a\nB\nc\n";
+        assert_eq!(diff_lines(old, new), ["  a", "- b", "+ B", "  c"]);
+    }
+
+    #[test]
+    fn parses_diff_rows_and_sides() {
+        let diff = "  let x = 1;\n- let y = 2;\n+ let y = 3;\n… (+2 lines)";
+        let (rows, old, new) = parse_diff(diff);
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(rows[0], DiffRow::Ctx(0)));
+        assert!(matches!(rows[1], DiffRow::Old(1)));
+        assert!(matches!(rows[2], DiffRow::New(1)));
+        assert!(matches!(rows[3], DiffRow::Other(_)));
+        assert_eq!(old, "let x = 1;\nlet y = 2;");
+        assert_eq!(new, "let x = 1;\nlet y = 3;");
+    }
+}

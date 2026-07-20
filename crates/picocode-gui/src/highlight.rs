@@ -80,44 +80,6 @@ pub fn highlight_lines(src: &str, token: &str, theme: &Arc<HighlightTheme>) -> A
     lines
 }
 
-/// One row of a rendered diff: the sign, the code text, and which side's
-/// highlight (by line index) colors it.
-pub enum DiffRow {
-    /// A removed line: index into the old side.
-    Old(usize),
-    /// An added line: index into the new side.
-    New(usize),
-    /// An unchanged line: index into the new side.
-    Ctx(usize),
-    /// Anything unprefixed (truncation markers).
-    Other(String),
-}
-
-/// Split [`picocode_core::transcript::diff_lines`]-style text
-/// ("+ "/"- "/"  " prefixes) into rows plus the rebuilt old/new sources,
-/// so each side can be highlighted as a coherent snippet.
-pub fn parse_diff(diff: &str) -> (Vec<DiffRow>, String, String) {
-    let mut old_src: Vec<&str> = Vec::new();
-    let mut new_src: Vec<&str> = Vec::new();
-    let mut rows: Vec<DiffRow> = Vec::new();
-    for line in diff.lines() {
-        if let Some(code) = line.strip_prefix("- ") {
-            rows.push(DiffRow::Old(old_src.len()));
-            old_src.push(code);
-        } else if let Some(code) = line.strip_prefix("+ ") {
-            rows.push(DiffRow::New(new_src.len()));
-            new_src.push(code);
-        } else if let Some(code) = line.strip_prefix("  ") {
-            rows.push(DiffRow::Ctx(new_src.len()));
-            old_src.push(code);
-            new_src.push(code);
-        } else {
-            rows.push(DiffRow::Other(line.to_string()));
-        }
-    }
-    (rows, old_src.join("\n"), new_src.join("\n"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,18 +111,5 @@ mod tests {
         // Second call is served from the cache (same allocation).
         let again = highlight_lines(src, "rust", &theme);
         assert!(Arc::ptr_eq(&lines, &again));
-    }
-
-    #[test]
-    fn parses_diff_rows_and_sides() {
-        let diff = "  let x = 1;\n- let y = 2;\n+ let y = 3;\n… (+2 lines)";
-        let (rows, old, new) = parse_diff(diff);
-        assert_eq!(rows.len(), 4);
-        assert!(matches!(rows[0], DiffRow::Ctx(0)));
-        assert!(matches!(rows[1], DiffRow::Old(1)));
-        assert!(matches!(rows[2], DiffRow::New(1)));
-        assert!(matches!(rows[3], DiffRow::Other(_)));
-        assert_eq!(old, "let x = 1;\nlet y = 2;");
-        assert_eq!(new, "let x = 1;\nlet y = 3;");
     }
 }
