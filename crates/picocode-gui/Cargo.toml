@@ -15,6 +15,9 @@ picocode-core.workspace = true
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # tree-sitter-languages: syntax highlighting inside markdown code blocks.
 gpui-component = { version = "0.5", features = ["tree-sitter-languages"] }
+# Pinned to the exact version gpui-component uses: its highlighter takes a
+# ropey::Rope, so both crates must agree on the type.
+ropey = "=2.0.0-beta.1"
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

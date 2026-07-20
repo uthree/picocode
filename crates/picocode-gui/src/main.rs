@@ -7,6 +7,7 @@
 
 mod assets;
 mod chat;
+mod highlight;
 mod math;
 mod settings;
 mod tex;

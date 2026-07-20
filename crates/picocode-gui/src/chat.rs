@@ -3,7 +3,7 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, KeyDownEvent,
+    AnyElement, App, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, KeyDownEvent,
     ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, Pixels, Point, SharedString,
     Window, div, list, px,
 };
@@ -1499,7 +1499,7 @@ impl ChatView {
                 .into_any_element(),
             EntryKind::Diff => div()
                 .pl_4()
-                .child(diff_element(&entry.text, mono))
+                .child(diff_element(&entry.text, entry.lang.as_deref(), mono, cx))
                 .into_any_element(),
             EntryKind::Notice | EntryKind::Logo => div()
                 .text_sm()
@@ -1612,6 +1612,7 @@ impl ChatView {
                                     a,
                                     theme.mono_font_family.clone(),
                                     theme.muted_foreground,
+                                    cx,
                                 )),
                         )
                         .child(
@@ -2565,31 +2566,91 @@ fn menu_row(
         )
 }
 
-/// Render "+ "/"- "/"  " diff text with add/remove row backgrounds.
-fn diff_element(text: &str, mono: SharedString) -> AnyElement {
-    let mut rows = div().v_flex().font_family(mono).text_sm();
-    for line in text.lines() {
-        let content = if line.is_empty() {
-            " ".to_string()
+/// Render "+ "/"- "/"  " diff text: add/remove rows are marked by the
+/// background color, while the text keeps its syntax highlighting, picked
+/// from the file path (like the TUI). Both sides of the diff are rebuilt
+/// and highlighted separately so multi-line constructs color correctly.
+fn diff_element(text: &str, lang: Option<&str>, mono: SharedString, cx: &App) -> AnyElement {
+    use crate::highlight::{self, DiffRow, LineSpans};
+
+    let theme = cx.theme();
+    let token = lang.unwrap_or("text");
+    let (rows, old_src, new_src) = highlight::parse_diff(text);
+    let old_hl = highlight::highlight_lines(&old_src, token, &theme.highlight_theme);
+    let new_hl = highlight::highlight_lines(&new_src, token, &theme.highlight_theme);
+
+    // One row: the sign prefix in its own color, the code spans shifted
+    // past it. Blank rows keep a space so they hold their line height.
+    let styled_row = |sign: &str, sign_color: gpui::Hsla, code: &str, spans: Option<&LineSpans>| {
+        let row_text = format!("{sign}{code}");
+        let mut highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
+        if !sign.trim().is_empty() {
+            highlights.push((
+                0..sign.len(),
+                gpui::HighlightStyle {
+                    color: Some(sign_color),
+                    ..Default::default()
+                },
+            ));
+        }
+        highlights.extend(
+            spans
+                .into_iter()
+                .flatten()
+                .map(|(r, st)| (r.start + sign.len()..r.end + sign.len(), *st)),
+        );
+        gpui::StyledText::new(if row_text.trim_end().is_empty() {
+            " ".into()
         } else {
-            line.to_string()
+            row_text
+        })
+        .with_highlights(highlights)
+    };
+
+    let old_lines: Vec<&str> = old_src.split('\n').collect();
+    let new_lines: Vec<&str> = new_src.split('\n').collect();
+    let code = |lines: &[&str], i: usize| lines.get(i).copied().unwrap_or_default().to_string();
+
+    let mut out = div().v_flex().font_family(mono).text_sm();
+    for row in rows {
+        let el = match row {
+            DiffRow::Old(i) => div().px_1().bg(gpui::rgba(DIFF_DEL_BG)).child(styled_row(
+                "- ",
+                theme.danger,
+                &code(&old_lines, i),
+                old_hl.get(i),
+            )),
+            DiffRow::New(i) => div().px_1().bg(gpui::rgba(DIFF_ADD_BG)).child(styled_row(
+                "+ ",
+                theme.success,
+                &code(&new_lines, i),
+                new_hl.get(i),
+            )),
+            DiffRow::Ctx(i) => div().px_1().child(styled_row(
+                "  ",
+                theme.foreground,
+                &code(&new_lines, i),
+                new_hl.get(i),
+            )),
+            DiffRow::Other(text) => {
+                div()
+                    .px_1()
+                    .text_color(theme.muted_foreground)
+                    .child(if text.is_empty() {
+                        " ".to_string()
+                    } else {
+                        text
+                    })
+            }
         };
-        let row = div().px_1().child(content);
-        let row = if line.starts_with('+') {
-            row.bg(gpui::rgba(DIFF_ADD_BG))
-        } else if line.starts_with('-') {
-            row.bg(gpui::rgba(DIFF_DEL_BG))
-        } else {
-            row
-        };
-        rows = rows.child(row);
+        out = out.child(el);
     }
-    rows.into_any_element()
+    out.into_any_element()
 }
 
 /// Body of the approval dialog: `edit_file` shows the path plus a colored
 /// diff, `bash` the command line, anything else pretty-printed JSON args.
-fn approval_body(a: &Approval, mono: SharedString, muted: gpui::Hsla) -> AnyElement {
+fn approval_body(a: &Approval, mono: SharedString, muted: gpui::Hsla, cx: &App) -> AnyElement {
     let parsed: Option<serde_json::Value> = serde_json::from_str(&a.args).ok();
     let get = |k: &str| {
         parsed
@@ -2611,7 +2672,7 @@ fn approval_body(a: &Approval, mono: SharedString, muted: gpui::Hsla) -> AnyElem
                     .text_color(muted)
                     .child(format!("path: {path}")),
             )
-            .child(diff_element(&clip(&diff, 200), mono))
+            .child(diff_element(&clip(&diff, 200), Some(path), mono, cx))
             .into_any_element();
     }
     if a.name == "bash"

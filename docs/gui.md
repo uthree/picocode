@@ -13,7 +13,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 - **Chat**: streaming replies rendered as markdown with syntax-highlighted
   code blocks; reasoning shown dimmed (collapsible via `/config`); tool
   calls with per-tool icons and accent colors, outputs as attached blocks;
-  colored `edit_file` line diffs in the transcript and the approval dialog.
+  `edit_file` line diffs in the transcript and the approval dialog, with
+  additions/removals marked by the row background while the text keeps its
+  syntax highlighting (picked from the file extension, theme-aware).
 - **TeX math**: display equations (`$$…$$`, `\[…\]`) are typeset by
   [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color;
   inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).

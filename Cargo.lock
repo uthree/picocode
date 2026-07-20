@@ -7969,6 +7969,7 @@ dependencies = [
  "ratex-parser",
  "ratex-render",
  "ratex-types",
+ "ropey",
  "rust-i18n",
  "serde",
  "serde_json",
