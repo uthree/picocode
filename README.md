@@ -242,5 +242,6 @@ approvals, plan approval, `/clear` and `/compact`) plus mode and model
 switching (click the chips in the status bar, or `/model <name>` etc.),
 a context-usage gauge, session autosave with `/resume` (sessions are
 shared with the TUI, so either front end can resume the other's), a
-`/config` settings dialog, `/status` and `/permissions`, and a
-slash-command completion popup (Tab cycles, click fills).
+`/config` settings dialog, `/status` and `/permissions`, a slash-command
+completion popup (Tab cycles, click fills), and TeX math in replies
+rendered as Unicode (`$x^2$` → `x²`, via unicodeit).

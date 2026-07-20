@@ -994,7 +994,8 @@ impl ChatView {
                 .into_any_element(),
             EntryKind::Assistant => TextView::markdown(
                 SharedString::from(format!("md-{ix}")),
-                SharedString::from(entry.text.clone()),
+                // TeX math spans become Unicode before rendering.
+                SharedString::from(crate::math::render_math(&entry.text)),
                 window,
                 cx,
             )

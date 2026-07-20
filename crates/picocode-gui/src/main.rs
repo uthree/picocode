@@ -6,6 +6,7 @@
 //! own executor) and renders the event stream in a gpui window.
 
 mod chat;
+mod math;
 
 use clap::Parser;
 use gpui::{
