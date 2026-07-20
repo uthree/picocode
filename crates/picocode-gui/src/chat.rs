@@ -1674,14 +1674,17 @@ impl ChatView {
             "● idle"
         };
 
+        // Button-like pill: mode color as the fill, like the Send button.
         let mode_chip = div()
             .id("mode-chip")
             .cursor_pointer()
-            .rounded_md()
+            .rounded(theme.radius)
             .px_2()
-            .text_color(mode_color(mode))
-            .hover(|s| s.bg(theme.muted))
-            .child(format!("[{}]", mode.label()))
+            .py_0p5()
+            .bg(mode_color(mode))
+            .text_color(gpui::white())
+            .hover(|s| s.opacity(0.85))
+            .child(mode.label().to_string())
             .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Mode, cx)));
         let model_chip = div()
             .id("model-chip")
