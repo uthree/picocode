@@ -3,8 +3,8 @@
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, ClipboardItem, Context, Entity, MouseButton, MouseDownEvent, Pixels,
-    Point, ScrollHandle, SharedString, Window, div, px,
+    AnyElement, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, KeyDownEvent, MouseButton,
+    MouseDownEvent, Pixels, Point, ScrollHandle, SharedString, Window, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::clipboard::Clipboard;
@@ -99,6 +99,9 @@ pub struct ChatView {
     /// provider requests (model lists) and model switches.
     rt: tokio::runtime::Handle,
     running: bool,
+    /// Keyboard focus while an approval / question dialog is open, so
+    /// y/n/a/Esc reach the dialog instead of the text input.
+    dialog_focus: FocusHandle,
     /// True while a completion request is in flight but no tokens have
     /// arrived yet — the status bar shows "waiting" instead of "generating".
     waiting: bool,
@@ -184,10 +187,10 @@ impl ChatView {
         // Pump agent events from the tokio channel into this view. tokio's
         // mpsc receiver is executor-agnostic, so awaiting it on gpui's
         // executor is fine.
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             while let Some(ev) = event_rx.recv().await {
-                let alive = this.update(cx, |view, cx| {
-                    view.on_agent_event(ev, cx);
+                let alive = this.update_in(cx, |view, window, cx| {
+                    view.on_agent_event(ev, window, cx);
                     cx.notify();
                 });
                 if alive.is_err() {
@@ -217,6 +220,7 @@ impl ChatView {
             cancel_tx,
             rt,
             running: false,
+            dialog_focus: cx.focus_handle(),
             waiting: false,
             approval: None,
             question: None,
@@ -296,7 +300,7 @@ impl ChatView {
 
     // ---------- events from the agent worker ----------
 
-    fn on_agent_event(&mut self, ev: AgentEvent, _cx: &mut Context<Self>) {
+    fn on_agent_event(&mut self, ev: AgentEvent, window: &mut Window, _cx: &mut Context<Self>) {
         // Follow the stream only while the view is already at the bottom —
         // scrolling up pins the position (like the TUI), and scrolling back
         // down resumes following.
@@ -328,6 +332,8 @@ impl ChatView {
                     args,
                     respond,
                 });
+                // y/n/a and Esc go to the dialog, not the text input.
+                self.dialog_focus.focus(window);
             }
             AgentEvent::UserQuestion {
                 title,
@@ -341,6 +347,7 @@ impl ChatView {
                     options,
                     respond,
                 });
+                self.dialog_focus.focus(window);
             }
             AgentEvent::Usage { input, output } => {
                 self.tokens_in = input;
@@ -1204,10 +1211,17 @@ impl ChatView {
         cx.notify();
     }
 
-    fn answer_approval(&mut self, approve: bool, always: bool, cx: &mut Context<Self>) {
+    fn answer_approval(
+        &mut self,
+        approve: bool,
+        always: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(a) = self.approval.take() else {
             return;
         };
+        self.input.update(cx, |state, cx| state.focus(window, cx));
         if approve && always {
             // Same runtime allow rules the TUI's `a` answer adds.
             match approval::bash_command(&a.name, &a.args) {
@@ -1229,9 +1243,15 @@ impl ChatView {
         cx.notify();
     }
 
-    fn answer_question(&mut self, answer: Option<usize>, cx: &mut Context<Self>) {
+    fn answer_question(
+        &mut self,
+        answer: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(q) = self.question.take() {
             let _ = q.respond.send(answer);
+            self.input.update(cx, |state, cx| state.focus(window, cx));
         }
         cx.notify();
     }
@@ -1467,6 +1487,16 @@ impl ChatView {
             overlay()
                 .child(
                     div()
+                        .id("approval-dialog")
+                        .track_focus(&self.dialog_focus)
+                        .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                            match ev.keystroke.key.as_str() {
+                                "y" => this.answer_approval(true, false, window, cx),
+                                "n" | "escape" => this.answer_approval(false, false, window, cx),
+                                "a" => this.answer_approval(true, true, window, cx),
+                                _ => {}
+                            }
+                        }))
                         .v_flex()
                         .w(px(560.))
                         .max_h(px(420.))
@@ -1513,21 +1543,21 @@ impl ChatView {
                                 .gap_2()
                                 .justify_end()
                                 .child(Button::new("deny").label(t!("deny").to_string()).on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.answer_approval(false, false, cx)
+                                    cx.listener(|this, _, window, cx| {
+                                        this.answer_approval(false, false, window, cx)
                                     }),
                                 ))
                                 .child(Button::new("always").label(always_label).on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.answer_approval(true, true, cx)
+                                    cx.listener(|this, _, window, cx| {
+                                        this.answer_approval(true, true, window, cx)
                                     }),
                                 ))
                                 .child(
                                     Button::new("approve")
                                         .primary()
                                         .label(t!("approve").to_string())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.answer_approval(true, false, cx)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.answer_approval(true, false, window, cx)
                                         })),
                                 ),
                         ),
@@ -1542,13 +1572,22 @@ impl ChatView {
         let options = q.options.iter().enumerate().map(|(ix, opt)| {
             Button::new(SharedString::from(format!("opt-{ix}")))
                 .label(opt.clone())
-                .on_click(cx.listener(move |this, _, _, cx| this.answer_question(Some(ix), cx)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.answer_question(Some(ix), window, cx)
+                }))
                 .into_any_element()
         });
         Some(
             overlay()
                 .child(
                     div()
+                        .id("question-dialog")
+                        .track_focus(&self.dialog_focus)
+                        .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                            if ev.keystroke.key.as_str() == "escape" {
+                                this.answer_question(None, window, cx);
+                            }
+                        }))
                         .v_flex()
                         .w(px(560.))
                         .max_h(px(480.))
@@ -1572,11 +1611,9 @@ impl ChatView {
                             div().h_flex().justify_end().child(
                                 Button::new("dismiss")
                                     .label(t!("dismiss").to_string())
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.answer_question(None, cx)
-                                        }),
-                                    ),
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.answer_question(None, window, cx)
+                                    })),
                             ),
                         ),
                 )

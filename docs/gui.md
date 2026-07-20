@@ -18,7 +18,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color;
   inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).
 - **Approvals**: y/n/always dialog for destructive tools (bash commands
-  shown bare, edits as diffs), plan-approval dialog for `submit_plan`.
+  shown bare, edits as diffs) — answer by button or key: `y` approve,
+  `n`/`Esc` deny, `a` always. The plan-approval dialog for `submit_plan`
+  dismisses with `Esc`; focus returns to the input afterwards.
 - **Status bar**: clickable mode chip (left) opening the mode menu;
   context-usage gauge colored by pressure and a clickable model chip
   (right) opening the model menu — configured `[[models]]` entries plus
