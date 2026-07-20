@@ -14,7 +14,7 @@ For setup, permissions and configuration, see the [README](../README.md).
 | `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input |
 | `y` / `n` | Approve / deny a tool call |
 | `a` | Approve and don't ask again for similar calls this session (the dialog shows the allow rule it adds) |
-| `Esc` | Stop the generation in progress |
+| `Esc` | Stop the generation in progress, or a running `!` shell command (the process is killed) |
 | `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
 | `Ctrl+T` | Expand / collapse model reasoning |
 | `Ctrl+C` / `Ctrl+D` | Quit |
@@ -31,7 +31,7 @@ on macOS ones).
 | `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly |
 | `/permissions` | Show the current mode and the effective allow/deny rules |
-| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display and max turns per prompt (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter` |
+| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, max turns per prompt and bash timeout (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter` |
 | `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
@@ -71,6 +71,10 @@ on macOS ones).
   collapsed in the transcript, and expanded to the full text for the model
   on send.
 - **Direct shell**: the input box turns yellow while typing a `!` command.
+- **Long-running commands**: a bash command (model-invoked or `!`) still
+  running after the configured timeout becomes a background job instead of
+  being killed; a notice with its output appears — and is added to the
+  model's context — when it finishes.
 - **User questions**: the model can present concrete choices (`ask_user`); a
   dialog opens — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the
   model is told and proceeds on its own).

@@ -10,7 +10,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::{App, EntryKind, ModelPicker, PendingApproval, PendingQuestion, SessionPicker};
 
 /// Column width of the setting names in the `/config` dialog.
-const SETTING_NAME_COL: usize = 10;
+const SETTING_NAME_COL: usize = 12;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 

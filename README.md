@@ -116,6 +116,10 @@ default_model = "local"    # [[models]] entry used at startup (default: first)
 # Instruction files loaded into the system prompt (default: ["AGENTS.md"])
 instructions = ["AGENTS.md"]
 
+# Seconds before a bash command is moved to the background (default: 120;
+# also adjustable at runtime in /config)
+bash_timeout = 120
+
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.
 system_prompt = """
@@ -157,7 +161,13 @@ max_results = 5
 # provider = "brave"              # Brave Search API; needs BRAVE_API_KEY
 ```
 
-The `bash` tool runs commands via `sh -c` (`cmd /C` on Windows). Bash rules
+The `bash` tool runs commands via `sh -c` (`cmd /C` on Windows). A command
+still running after `bash_timeout` seconds is not killed but moved to a
+**background job**: the model is told right away, and the job's output is
+shown and added to the conversation when it finishes. `Esc` stops a command
+that is still in the foreground (the process is killed).
+
+Bash rules
 split the command at `&&` `||` `;` `|` `&` and newlines, then match
 each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 `cargofoo`; a trailing `*` as in `cargo *` is accepted and ignored):

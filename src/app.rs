@@ -140,8 +140,9 @@ pub struct SettingsMenu {
     pub selected: usize,
 }
 
-/// Number of rows in the `/config` dialog (mode, reasoning, max turns, model).
-pub const SETTINGS_ROWS: usize = 4;
+/// Number of rows in the `/config` dialog (mode, reasoning, max turns,
+/// bash timeout, model).
+pub const SETTINGS_ROWS: usize = 5;
 
 /// State of the `ask_user` / `submit_plan` option dialog.
 pub struct PendingQuestion {
@@ -703,18 +704,25 @@ impl App {
         self.follow = true;
 
         let root = self.cfg.root.clone();
+        let timeout = self.cfg.bash_timeout.clone();
         let event_tx = self.event_tx.clone();
         let cmd_tx = self.cmd_tx.clone();
+        let mut cancel = self.cancel_tx.subscribe();
         tokio::spawn(async move {
             use rig::tool::Tool;
-            let output = match crate::tools::Bash::new(root)
-                .call(crate::tools::BashArgs {
-                    command: command.clone(),
-                })
-                .await
-            {
-                Ok(out) => out,
-                Err(e) => format!("error: {e}"),
+            let tool = crate::tools::Bash::new(root, timeout, event_tx.clone());
+            let call = tool.call(crate::tools::BashArgs {
+                command: command.clone(),
+            });
+            // Esc drops the call future, which kills the process
+            // (kill_on_drop) — unless it already went to the background.
+            let output = tokio::select! {
+                biased;
+                _ = cancel.changed() => "(stopped by Esc before finishing)".to_string(),
+                out = call => match out {
+                    Ok(out) => out,
+                    Err(e) => format!("error: {e}"),
+                },
             };
             let _ = cmd_tx
                 .send(WorkerCmd::ShellRecord {
@@ -1165,6 +1173,11 @@ impl App {
                 "← →",
             ),
             ("max turns", self.cfg.max_turns.get().to_string(), "← →"),
+            (
+                "bash timeout",
+                format!("{}s", self.cfg.bash_timeout.get()),
+                "← →",
+            ),
             ("model", self.model_label.clone(), "Enter"),
         ]
     }
@@ -1189,6 +1202,10 @@ impl App {
             2 => {
                 let turns = self.cfg.max_turns.get() as i64 + delta * 10;
                 self.cfg.max_turns.set(turns.clamp(10, 200) as usize);
+            }
+            3 => {
+                let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
+                self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
             }
             _ => {}
         }
@@ -1445,6 +1462,36 @@ impl App {
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
+            }
+            AgentEvent::BackgroundDone {
+                id,
+                command,
+                output,
+            } => {
+                self.close_blocks();
+                self.push(
+                    EntryKind::Notice,
+                    format!(
+                        "background job #{id} finished: $ {}",
+                        compact_one_line(&command, 120)
+                    ),
+                );
+                let text = clamp_lines(output.trim_end(), TOOL_OUTPUT_MAX_LINES);
+                if !text.is_empty() {
+                    self.push(EntryKind::ToolOut, text);
+                }
+                // Record it in the history so the model sees the result on
+                // its next turn.
+                let tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(WorkerCmd::BackgroundRecord {
+                            id,
+                            command,
+                            output,
+                        })
+                        .await;
+                });
             }
             AgentEvent::Cancelled => {
                 self.waiting = false;

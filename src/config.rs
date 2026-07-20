@@ -81,11 +81,16 @@ struct FileConfig {
     /// Replaces the built-in base system prompt. `{root}` expands to the
     /// working directory. Instruction files are still appended after it.
     system_prompt: Option<String>,
+    /// Seconds before a bash command is moved to the background (default 120).
+    bash_timeout: Option<u64>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
     search: SearchFileConfig,
 }
+
+/// Default bash timeout in seconds.
+pub const DEFAULT_BASH_TIMEOUT: u64 = 120;
 
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
@@ -329,6 +334,27 @@ impl ModeHandle {
     pub fn set(&self, mode: Mode) {
         let i = Mode::ALL.iter().position(|m| *m == mode).unwrap_or(0);
         self.0.store(i as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Shared, runtime-adjustable bash timeout in seconds: the `/config` dialog
+/// changes it while the bash tool reads it per call, so a change applies to
+/// the next command. On timeout the command is not killed but moved to the
+/// background; its output is posted to the conversation when it finishes.
+#[derive(Clone, Debug)]
+pub struct TimeoutHandle(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl TimeoutHandle {
+    pub fn new(secs: u64) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(secs)))
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set(&self, secs: u64) {
+        self.0.store(secs, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -635,6 +661,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         models,
         instructions: project.instructions.or(global.instructions),
         system_prompt: project.system_prompt.or(global.system_prompt),
+        bash_timeout: project.bash_timeout.or(global.bash_timeout),
         approval,
         search: SearchFileConfig {
             provider: project.search.provider.or(global.search.provider),
@@ -680,6 +707,9 @@ pub struct Config {
     /// Turn limit per prompt, shared with the worker and adjustable at
     /// runtime (`/config`).
     pub max_turns: TurnsHandle,
+    /// Bash timeout in seconds, shared with the bash tool and adjustable at
+    /// runtime (`/config`).
+    pub bash_timeout: TimeoutHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -730,6 +760,10 @@ impl Config {
         let models = file.models.unwrap_or_default();
         validate_models(&models, file.default_model.as_deref())?;
         validate_tool_lists(&file.approval)?;
+        let bash_timeout = file.bash_timeout.unwrap_or(DEFAULT_BASH_TIMEOUT);
+        if bash_timeout == 0 {
+            anyhow::bail!("bash_timeout must be at least 1 second");
+        }
 
         // Startup model precedence: CLI flags > last-used state > config
         // default_model / first entry > empty (main() picks the first model
@@ -776,6 +810,7 @@ impl Config {
             active_model,
             model_note,
             max_turns: TurnsHandle::new(args.max_turns),
+            bash_timeout: TimeoutHandle::new(bash_timeout),
             root,
             approval: RulesHandle::new(file.approval),
             mode: ModeHandle::new(if args.bypass {
@@ -852,6 +887,22 @@ mod tests {
         let worker_side = handle.clone();
         handle.set(120);
         assert_eq!(worker_side.get(), 120);
+    }
+
+    #[test]
+    fn bash_timeout_parses_shares_and_merges() {
+        let handle = TimeoutHandle::new(120);
+        let tool_side = handle.clone();
+        handle.set(300);
+        assert_eq!(tool_side.get(), 300);
+
+        let global: FileConfig = toml::from_str("bash_timeout = 60").unwrap();
+        assert_eq!(global.bash_timeout, Some(60));
+        // Project value wins; a global one fills in.
+        let project: FileConfig = toml::from_str("bash_timeout = 240").unwrap();
+        assert_eq!(merge(global, project).bash_timeout, Some(240));
+        let global: FileConfig = toml::from_str("bash_timeout = 60").unwrap();
+        assert_eq!(merge(global, FileConfig::default()).bash_timeout, Some(60));
     }
 
     #[test]

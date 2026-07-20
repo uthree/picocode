@@ -127,6 +127,9 @@ async fn run_smoke(
                 println!("\n[compacted] {messages} messages\n{summary}");
             }
             AgentEvent::ShellOutput { output } => println!("[shell]\n{output}"),
+            AgentEvent::BackgroundDone { id, output, .. } => {
+                println!("[background job #{id} done]\n{output}");
+            }
             AgentEvent::Cancelled => println!("\n[cancelled]"),
             AgentEvent::Error(e) => println!("\n[error] {e}"),
             AgentEvent::TurnComplete => break,

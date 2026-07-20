@@ -43,7 +43,11 @@ pub fn spawn(
                 .tool(tools::Grep::new(root.clone()))
                 .tool(tools::WriteFile::new(root.clone()))
                 .tool(tools::EditFile::new(root.clone()))
-                .tool(tools::Bash::new(root))
+                .tool(tools::Bash::new(
+                    root,
+                    cfg.bash_timeout.clone(),
+                    event_tx.clone(),
+                ))
                 .tool(tools::WebFetch::new())
                 .tool(tools::WebSearch::new(cfg.search.clone()))
                 .tool(tools::AskUser::new(event_tx.clone()))
@@ -171,6 +175,16 @@ async fn worker<M>(
                 history.push(Message::user(format!(
                     "I ran this shell command myself in the working directory:\n\
                      $ {command}\n\nOutput:\n{output}"
+                )));
+            }
+            WorkerCmd::BackgroundRecord {
+                id,
+                command,
+                output,
+            } => {
+                history.push(Message::user(format!(
+                    "The bash command that timed out and was moved to background \
+                     job #{id} has finished:\n$ {command}\n\nOutput:\n{output}"
                 )));
             }
             WorkerCmd::TakeHistory(tx) => {
@@ -423,6 +437,7 @@ mod tests {
             active_model: None,
             model_note: None,
             max_turns: crate::config::TurnsHandle::new(50),
+            bash_timeout: crate::config::TimeoutHandle::new(120),
             root: PathBuf::from("/tmp/proj"),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),
