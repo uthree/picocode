@@ -1,21 +1,14 @@
-mod agent;
 mod app;
-mod approval;
-mod config;
-mod event;
 mod highlight;
 mod history;
 mod input;
 mod markdown;
-mod models;
-mod session;
-mod state;
-mod tools;
 mod ui;
 
 use clap::Parser;
 
-use crate::event::{AgentEvent, WorkerCmd};
+use picocode_core::event::{AgentEvent, WorkerCmd};
+use picocode_core::{agent, config, models};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

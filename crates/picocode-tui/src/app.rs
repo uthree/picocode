@@ -7,14 +7,15 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
 };
-use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::config::Config;
-use crate::event::{AgentEvent, WorkerCmd};
+use picocode_core::config::Config;
+use picocode_core::event::{AgentEvent, WorkerCmd};
+use picocode_core::session;
+pub use picocode_core::transcript::{Entry, EntryKind};
+
 use crate::history::InputHistory;
 use crate::input::{cursor_at, expand_pastes, line_col, paste_placeholder, spawn_input_thread};
-use crate::session;
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
@@ -52,35 +53,6 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/quit", "Exit picocode"),
     ("/exit", "Exit picocode"),
 ];
-
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EntryKind {
-    User,
-    Assistant,
-    Reasoning,
-    Tool,
-    ToolOut,
-    /// A colored line diff shown for file-writing tool calls ("+ "/"- "/"  "
-    /// prefixed lines).
-    Diff,
-    Notice,
-    /// A prominent warning (e.g. entering bypass mode).
-    Warning,
-    /// The conversation summary produced by /compact.
-    Summary,
-    Error,
-    /// Rendered verbatim without wrapping (startup logo).
-    Logo,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Entry {
-    pub kind: EntryKind,
-    pub text: String,
-    /// File name / language hint for syntax highlighting (Diff entries).
-    #[serde(default)]
-    pub lang: Option<String>,
-}
 
 pub struct PendingApproval {
     pub name: String,
@@ -335,7 +307,7 @@ impl App {
                 format!("Models: {} — /model <name> to switch", names.join(", ")),
             );
         }
-        if cfg.mode.get() == crate::config::Mode::Bypass {
+        if cfg.mode.get() == picocode_core::config::Mode::Bypass {
             app.push(
                 EntryKind::Warning,
                 "bypass mode: EVERY tool call runs without confirmation (deny rules \
@@ -354,14 +326,14 @@ impl App {
     /// Remember the active model (best-effort) so the next start in this
     /// project resumes with it.
     fn save_last_model(&self) {
-        let Some(path) = crate::state::state_path(&self.cfg.root) else {
+        let Some(path) = picocode_core::state::state_path(&self.cfg.root) else {
             return;
         };
-        let _ = crate::state::save(
+        let _ = picocode_core::state::save(
             &path,
-            &crate::state::LastModel {
+            &picocode_core::state::LastModel {
                 entry: self.cfg.active_model.clone(),
-                provider: crate::config::provider_name(self.cfg.provider).to_string(),
+                provider: picocode_core::config::provider_name(self.cfg.provider).to_string(),
                 model: self.cfg.model.clone(),
                 base_url: self.cfg.base_url.clone(),
             },
@@ -680,10 +652,10 @@ impl App {
             "/permissions" => self.show_permissions(),
             "/config" | "/settings" => self.settings = Some(SettingsMenu { selected: 0 }),
             "/status" | "/usage" => self.show_status(),
-            "/read-only" => self.set_mode(crate::config::Mode::ReadOnly),
-            "/edit" => self.set_mode(crate::config::Mode::Edit),
-            "/plan" => self.set_mode(crate::config::Mode::Plan),
-            "/bypass" => self.set_mode(crate::config::Mode::Bypass),
+            "/read-only" => self.set_mode(picocode_core::config::Mode::ReadOnly),
+            "/edit" => self.set_mode(picocode_core::config::Mode::Edit),
+            "/plan" => self.set_mode(picocode_core::config::Mode::Plan),
+            "/bypass" => self.set_mode(picocode_core::config::Mode::Bypass),
             "/model" => self.open_model_picker(),
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
@@ -766,8 +738,8 @@ impl App {
         let mut cancel = self.cancel_tx.subscribe();
         tokio::spawn(async move {
             use rig::tool::Tool;
-            let tool = crate::tools::Bash::new(root, timeout, event_tx.clone());
-            let call = tool.call(crate::tools::BashArgs {
+            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone());
+            let call = tool.call(picocode_core::tools::BashArgs {
                 command: command.clone(),
             });
             // Esc drops the call future, which kills the process
@@ -799,12 +771,12 @@ impl App {
         let base = self.cfg.base_url.clone();
         let label = format!(
             "{} @ {}",
-            crate::config::provider_name(provider),
-            crate::models::base_url(provider, base.as_deref())
+            picocode_core::config::provider_name(provider),
+            picocode_core::models::base_url(provider, base.as_deref())
         );
         let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
-            let result = crate::models::fetch(provider, base.as_deref())
+            let result = picocode_core::models::fetch(provider, base.as_deref())
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = event_tx.send(AgentEvent::ModelList { label, result }).await;
@@ -884,7 +856,7 @@ impl App {
                 new_cfg.active_model = Some(entry.name.clone());
                 new_cfg.context_window = entry
                     .context_window
-                    .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
+                    .unwrap_or(picocode_core::config::DEFAULT_CONTEXT_WINDOW);
             }
             // A model id the provider reported serving: switch ad hoc,
             // keeping the current provider and base URL.
@@ -898,7 +870,7 @@ impl App {
                 }
                 new_cfg.model = name.to_string();
                 new_cfg.active_model = None;
-                new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+                new_cfg.context_window = picocode_core::config::DEFAULT_CONTEXT_WINDOW;
             }
             None => {
                 let names: Vec<&str> = self.cfg.models.iter().map(|m| m.name.as_str()).collect();
@@ -917,7 +889,7 @@ impl App {
 
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
-        let new_tx = match crate::agent::spawn(
+        let new_tx = match picocode_core::agent::spawn(
             &new_cfg,
             self.event_tx.clone(),
             self.cancel_tx.subscribe(),
@@ -1183,9 +1155,9 @@ impl App {
     /// for tool calls later in the turn currently running.
     /// Explicit mode switch via the /read-only, /edit, /plan and /bypass
     /// commands. Bypass is only reachable this way and comes with a warning.
-    fn set_mode(&mut self, mode: crate::config::Mode) {
+    fn set_mode(&mut self, mode: picocode_core::config::Mode) {
         self.cfg.mode.set(mode);
-        if mode == crate::config::Mode::Bypass {
+        if mode == picocode_core::config::Mode::Bypass {
             self.push(
                 EntryKind::Warning,
                 "bypass mode: EVERY tool call now runs without confirmation (deny rules \
@@ -1204,7 +1176,7 @@ impl App {
 
     /// `/permissions`: show what the current mode and config rules do.
     fn show_permissions(&mut self) {
-        use crate::config::Mode;
+        use picocode_core::config::Mode;
         let mode = self.cfg.mode.get();
         let mode_line = match mode {
             Mode::ReadOnly => "destructive calls ask unless allow-listed",
@@ -1303,7 +1275,7 @@ impl App {
             // Same cycle as Shift+Tab; bypass stays /bypass-only, and
             // adjusting away from it lands on read-only.
             0 => {
-                let cycle = crate::config::Mode::CYCLE;
+                let cycle = picocode_core::config::Mode::CYCLE;
                 let next = match cycle.iter().position(|m| *m == self.cfg.mode.get()) {
                     Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
                     Some(i) => cycle[(i + 1) % cycle.len()],
@@ -1370,7 +1342,8 @@ impl App {
             Some(name) => format!(" — [[models]] entry `{name}`"),
             None => String::new(),
         };
-        let endpoint = crate::models::base_url(self.cfg.provider, self.cfg.base_url.as_deref());
+        let endpoint =
+            picocode_core::models::base_url(self.cfg.provider, self.cfg.base_url.as_deref());
         let pct = (self.context_ratio() * 100.0).round() as u64;
         let prompts = self
             .entries
@@ -1451,7 +1424,7 @@ impl App {
     }
 
     /// Current permission mode, for the status bar.
-    pub fn mode(&self) -> crate::config::Mode {
+    pub fn mode(&self) -> picocode_core::config::Mode {
         self.cfg.mode.get()
     }
 
@@ -1567,9 +1540,9 @@ impl App {
                 self.waiting = false;
                 // What "always" would whitelist: the command's prefix
                 // patterns for bash, the tool name for everything else.
-                let always = match crate::approval::bash_command(&name, &args) {
+                let always = match picocode_core::approval::bash_command(&name, &args) {
                     Some(cmd) => {
-                        let patterns = crate::config::bash_allow_patterns(&cmd);
+                        let patterns = picocode_core::config::bash_allow_patterns(&cmd);
                         if patterns.is_empty() {
                             AlwaysAllow::Tool(name.clone())
                         } else {
@@ -1880,9 +1853,9 @@ fn clamp_lines(s: &str, max: usize) -> String {
 /// then the models the provider reported serving, skipping ids an entry
 /// already covers (same name, or same model on the same endpoint).
 fn model_choices(
-    models: &[crate::config::ModelEntry],
+    models: &[picocode_core::config::ModelEntry],
     active_model: Option<&str>,
-    provider: crate::config::Provider,
+    provider: picocode_core::config::Provider,
     base_url: Option<&str>,
     current_model: &str,
     available: &[String],
@@ -1909,7 +1882,7 @@ fn model_choices(
         if !covered {
             items.push(ModelChoice {
                 name: id.clone(),
-                detail: crate::config::provider_name(provider).to_string(),
+                detail: picocode_core::config::provider_name(provider).to_string(),
                 active: active_model.is_none() && current_model == id,
             });
         }
@@ -1923,7 +1896,7 @@ mod tests {
 
     #[test]
     fn model_choices_merge_config_and_served_models() {
-        use crate::config::{ModelEntry, Provider};
+        use picocode_core::config::{ModelEntry, Provider};
         let models = vec![
             ModelEntry {
                 name: "local".into(),

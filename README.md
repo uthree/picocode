@@ -202,21 +202,31 @@ each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 
 ## Layout
 
+A two-crate workspace: everything UI-independent lives in `picocode-core`,
+and the TUI is one front end on top of it (a GUI could be another). The two
+sides talk exclusively through the `AgentEvent` / `WorkerCmd` channels and
+the plain data types in `transcript` — nothing in the core depends on a
+rendering library.
+
 ```
-src/
-  main.rs      — entry point (+ --smoke headless debug mode)
-  config/      — CLI args and config file (mod), permission modes and
-                 approval rules (rules), web-search settings (search)
-  app.rs       — application state and event loop
-  ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
-  input.rs     — input thread, paste detection, input-box cursor math
-  history.rs   — shell-style ↑/↓ input history
-  agent.rs     — rig agent construction and the streaming worker
-  approval.rs  — approval gate for destructive tools (rig AgentHook)
-  highlight.rs — syntax highlighting (syntect) and line diffs (similar)
-  markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
-  models.rs    — provider model-list queries backing /model
-  session.rs   — session autosave/load backing /resume
-  state.rs     — per-project persisted state (last-used model)
-  tools/       — built-in tool implementations
+crates/
+  picocode-core/src/     — the agent engine (library)
+    config/      — CLI args and config file (mod), permission modes and
+                   approval rules (rules), web-search settings (search)
+    agent.rs     — rig agent construction and the streaming worker
+    approval.rs  — approval gate for destructive tools (rig AgentHook)
+    event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
+    models.rs    — provider model-list queries backing /model
+    session.rs   — session autosave/load backing /resume
+    state.rs     — per-project persisted state (last-used model)
+    tools/       — built-in tool implementations
+    transcript.rs — renderer-agnostic transcript entries (Entry/EntryKind)
+  picocode-tui/src/      — the ratatui front end (binary `picocode`)
+    main.rs      — entry point (+ --smoke headless debug mode)
+    app.rs       — application state and event loop
+    ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
+    input.rs     — input thread, paste detection, input-box cursor math
+    history.rs   — shell-style ↑/↓ input history
+    highlight.rs — syntax highlighting (syntect) and line diffs (similar)
+    markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
 ```

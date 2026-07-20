@@ -1,0 +1,23 @@
+[package]
+name = "picocode-tui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "picocode"
+path = "src/main.rs"
+
+[dependencies]
+picocode-core.workspace = true
+
+rig.workspace = true
+tokio.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+textwrap.workspace = true
+unicode-width.workspace = true
+syntect.workspace = true
+similar.workspace = true
+pulldown-cmark.workspace = true

@@ -5606,7 +5606,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "picocode"
+name = "picocode-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -5614,22 +5614,34 @@ dependencies = [
  "futures",
  "html2text",
  "ignore",
- "pulldown-cmark",
- "ratatui",
  "regex",
  "reqwest 0.13.4",
  "rig",
  "serde",
  "serde_json",
- "similar",
- "syntect",
  "tempfile",
- "textwrap",
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "unicode-width",
  "url",
+]
+
+[[package]]
+name = "picocode-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "picocode-core",
+ "pulldown-cmark",
+ "ratatui",
+ "rig",
+ "serde_json",
+ "similar",
+ "syntect",
+ "textwrap",
+ "tokio",
+ "unicode-width",
 ]
 
 [[package]]

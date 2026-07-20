@@ -28,7 +28,7 @@ impl ApprovalHook {
 }
 
 /// Extract the `command` string from the bash tool's JSON args.
-pub(crate) fn bash_command(tool_name: &str, args: &str) -> Option<String> {
+pub fn bash_command(tool_name: &str, args: &str) -> Option<String> {
     if tool_name != Bash::NAME {
         return None;
     }

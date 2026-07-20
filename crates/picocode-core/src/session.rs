@@ -9,7 +9,7 @@ use anyhow::Context;
 use rig::completion::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::app::{Entry, EntryKind};
+use crate::transcript::{Entry, EntryKind};
 
 const VERSION: u32 = 1;
 

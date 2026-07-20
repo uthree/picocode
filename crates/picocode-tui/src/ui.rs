@@ -370,10 +370,10 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     };
     let mode = app.mode();
     let mode_style = match mode {
-        crate::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
-        crate::config::Mode::Edit => Style::new().fg(Color::Yellow),
-        crate::config::Mode::Plan => Style::new().fg(Color::Blue),
-        crate::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
+        picocode_core::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
+        picocode_core::config::Mode::Edit => Style::new().fg(Color::Yellow),
+        picocode_core::config::Mode::Plan => Style::new().fg(Color::Blue),
+        picocode_core::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
     };
     let mut left = vec![
         Span::raw(" "),
@@ -522,7 +522,7 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
         };
         let text = format!(
             " {} · {} msgs · {} · {snippet}",
-            crate::session::age(s.modified),
+            picocode_core::session::age(s.modified),
             s.messages,
             s.model,
         );

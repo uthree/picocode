@@ -31,6 +31,12 @@ impl WebFetch {
     }
 }
 
+impl Default for WebFetch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tool for WebFetch {
     const NAME: &'static str = "web_fetch";
     type Error = ToolError;
