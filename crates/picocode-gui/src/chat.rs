@@ -9,10 +9,12 @@ use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, StyledExt};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use std::path::PathBuf;
+
 use picocode_core::config::{self, Config, Mode};
 use picocode_core::event::{AgentEvent, WorkerCmd};
 use picocode_core::transcript::{Entry, EntryKind, diff_lines};
-use picocode_core::{agent, approval, models, state};
+use picocode_core::{agent, approval, models, session, state};
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
@@ -60,6 +62,15 @@ pub struct ChatView {
     menu: Option<Menu>,
     /// Model ids the provider reported serving (via `ModelList`).
     available_models: Vec<String>,
+    /// Id of the session being written; a new one starts on `/clear`.
+    session_id: String,
+    sessions_dir: Option<PathBuf>,
+    /// Rows of the open `/resume` dialog, if any.
+    session_picker: Option<Vec<session::SessionSummary>>,
+    /// Whether the `/config` dialog is open.
+    settings_open: bool,
+    /// Show reasoning entries in full, or collapsed to one line.
+    show_reasoning: bool,
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
@@ -103,6 +114,7 @@ impl ChatView {
         })
         .detach();
 
+        let sessions_dir = session::sessions_dir(&cfg.root);
         let view = Self {
             cfg,
             entries: Vec::new(),
@@ -116,6 +128,11 @@ impl ChatView {
             question: None,
             menu: None,
             available_models: Vec::new(),
+            session_id: session::new_id(),
+            sessions_dir,
+            session_picker: None,
+            settings_open: false,
+            show_reasoning: true,
             tokens_in: 0,
             tokens_out: 0,
             scroll: ScrollHandle::new(),
@@ -203,6 +220,7 @@ impl ChatView {
                     self.push(EntryKind::Summary, summary);
                 }
                 self.running = false;
+                self.autosave();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
             AgentEvent::BackgroundStarted { id } => {
@@ -227,10 +245,203 @@ impl ChatView {
                 }
             }
             AgentEvent::Cancelled => self.push(EntryKind::Notice, "cancelled".to_string()),
-            AgentEvent::TurnComplete => self.running = false,
+            AgentEvent::TurnComplete => {
+                self.running = false;
+                self.autosave();
+            }
             AgentEvent::Error(e) => self.push(EntryKind::Error, e),
         }
         self.scroll.scroll_to_bottom();
+    }
+
+    /// Snapshot the conversation to disk. Runs in the background after each
+    /// completed turn; empty conversations are not written.
+    fn autosave(&mut self) {
+        let Some(dir) = self.sessions_dir.clone() else {
+            return;
+        };
+        let id = self.session_id.clone();
+        let cwd = self.cfg.root.display().to_string();
+        let model = self.cfg.model_label();
+        let entries: Vec<Entry> = self.entries.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let event_tx = self.event_tx.clone();
+        self.rt.spawn(async move {
+            let (htx, hrx) = oneshot::channel();
+            if cmd_tx.send(WorkerCmd::TakeHistory(htx)).await.is_err() {
+                return;
+            }
+            let Ok(history) = hrx.await else {
+                return;
+            };
+            if history.is_empty() {
+                return;
+            }
+            let file = session::SessionFile::new(cwd, model, history, entries);
+            if let Err(e) = session::save(&dir, &id, &file) {
+                let _ = event_tx
+                    .send(AgentEvent::Error(format!("Failed to save session: {e:#}")))
+                    .await;
+            }
+        });
+    }
+
+    /// `/resume`: open the session-selection dialog.
+    fn open_session_picker(&mut self, cx: &mut Context<Self>) {
+        if self.running {
+            self.push(
+                EntryKind::Error,
+                "Cannot resume while a turn is running".to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(
+                EntryKind::Error,
+                "Session storage is unavailable (no $HOME)".to_string(),
+            );
+            cx.notify();
+            return;
+        };
+        // Resuming the current session would be a no-op, so it isn't offered.
+        let sessions: Vec<_> = session::list(&dir)
+            .into_iter()
+            .filter(|s| s.id != self.session_id)
+            .collect();
+        if sessions.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                "No saved sessions for this project yet".to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        self.session_picker = Some(sessions);
+        cx.notify();
+    }
+
+    /// Resume a session by id (picked in the dialog or given to
+    /// `/resume <id>`): seed the worker with its history and restore the
+    /// transcript.
+    fn resume_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.session_picker = None;
+        if self.running {
+            self.push(
+                EntryKind::Error,
+                "Cannot resume while a turn is running".to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(
+                EntryKind::Error,
+                "Session storage is unavailable (no $HOME)".to_string(),
+            );
+            cx.notify();
+            return;
+        };
+        if id == self.session_id {
+            self.push(EntryKind::Notice, "That is the current session".to_string());
+            cx.notify();
+            return;
+        }
+
+        let saved = match session::load(&dir, id) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("Failed to resume: {e:#}"));
+                cx.notify();
+                return;
+            }
+        };
+        let messages = saved.history.len();
+        if self
+            .cmd_tx
+            .try_send(WorkerCmd::SeedHistory(saved.history))
+            .is_err()
+        {
+            self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+            cx.notify();
+            return;
+        }
+
+        self.entries.clear();
+        self.tokens_in = 0;
+        self.tokens_out = 0;
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Resumed session {id} — {messages} messages, last saved with {}",
+                saved.model
+            ),
+        );
+        self.entries.extend(saved.entries);
+        self.session_id = id.to_string();
+        self.scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// A `/config` row change. Every change applies immediately (max turns
+    /// from the next prompt on). Mirrors the TUI's `/config` dialog.
+    fn adjust_setting(&mut self, row: usize, delta: i64, cx: &mut Context<Self>) {
+        match row {
+            // Same cycle as the TUI: bypass stays menu/command-only, and
+            // adjusting away from it lands on read-only.
+            0 => {
+                let cycle = Mode::CYCLE;
+                let next = match cycle.iter().position(|m| *m == self.cfg.mode.get()) {
+                    Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
+                    Some(i) => cycle[(i + 1) % cycle.len()],
+                    None => cycle[0],
+                };
+                self.cfg.mode.set(next);
+            }
+            1 => self.show_reasoning = !self.show_reasoning,
+            2 => {
+                let turns = self.cfg.max_turns.get() as i64 + delta * 10;
+                self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
+            }
+            3 => {
+                let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
+                self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
+            }
+            4 => {
+                let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
+                self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
+            }
+            5 => {
+                let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
+                self.cfg
+                    .read_max_line_bytes
+                    .set(bytes.clamp(100, 5000) as u64);
+            }
+            6 => self.cfg.search.cycle_provider(delta),
+            7 => {
+                let n = self.cfg.search.snapshot().max_results as i64 + delta;
+                self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
+            }
+            // ±5% between 50 and 95; stepping below 50 turns it off.
+            8 => {
+                let cur = self.cfg.auto_compact.get() as i64;
+                let next = if delta < 0 {
+                    if cur <= 50 { 0 } else { cur - 5 }
+                } else if cur == 0 {
+                    50
+                } else {
+                    (cur + 5).min(95)
+                };
+                self.cfg.auto_compact.set(next as u64);
+            }
+            // Model: close the dialog and open the model menu.
+            9 => {
+                self.settings_open = false;
+                self.toggle_menu(Menu::Model, cx);
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     /// Show a tool call: `edit_file` gets a path headline plus a colored
@@ -295,7 +506,11 @@ impl ChatView {
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.approval.is_some() || self.question.is_some() {
+        if self.approval.is_some()
+            || self.question.is_some()
+            || self.session_picker.is_some()
+            || self.settings_open
+        {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
@@ -314,6 +529,8 @@ impl ChatView {
                 self.entries.clear();
                 self.tokens_in = 0;
                 self.tokens_out = 0;
+                // A cleared conversation starts a fresh session log.
+                self.session_id = session::new_id();
                 self.push(EntryKind::Notice, "conversation cleared".to_string());
             }
             "/compact" => {
@@ -327,9 +544,15 @@ impl ChatView {
             "/plan" => self.select_mode(Mode::Plan, cx),
             "/bypass" => self.select_mode(Mode::Bypass, cx),
             "/model" => self.toggle_menu(Menu::Model, cx),
+            "/resume" => self.open_session_picker(cx),
+            "/config" | "/settings" => self.settings_open = true,
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
                 self.switch_model(&name, cx);
+            }
+            _ if text.starts_with("/resume ") => {
+                let id = text["/resume ".len()..].trim().to_string();
+                self.resume_session(&id, cx);
             }
             _ if text.starts_with('/') => {
                 self.push(
@@ -556,6 +779,7 @@ impl ChatView {
     fn render_entry(
         entry: &Entry,
         ix: usize,
+        show_reasoning: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -583,7 +807,12 @@ impl ChatView {
                 .italic()
                 .text_sm()
                 .text_color(muted)
-                .child(entry.text.clone())
+                .child(if show_reasoning {
+                    entry.text.clone()
+                } else {
+                    // Collapsed (the `/config` "reasoning" row): one line.
+                    format!("✳ {}", one_line(&entry.text, 80))
+                })
                 .into_any_element(),
             EntryKind::Tool => div()
                 .font_family(mono)
@@ -727,6 +956,184 @@ impl ChatView {
                                 cx.listener(|this, _, _, cx| this.answer_question(None, cx)),
                             ),
                         )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The `/resume` dialog: this project's saved sessions, newest first.
+    fn render_session_picker(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let sessions = self.session_picker.as_ref()?;
+        let theme = cx.theme();
+        let mut list = div()
+            .id("session-picker-list")
+            .v_flex()
+            .gap_1()
+            .overflow_y_scroll();
+        for (ix, s) in sessions.iter().enumerate() {
+            let id = s.id.clone();
+            let title = if s.snippet.is_empty() {
+                id.clone()
+            } else {
+                s.snippet.clone()
+            };
+            let detail = format!(
+                "{} · {} messages · {}",
+                session::age(s.modified),
+                s.messages,
+                s.model
+            );
+            list = list.child(
+                menu_row(
+                    SharedString::from(format!("session-{ix}")),
+                    title,
+                    detail,
+                    false,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.resume_session(&id.clone(), cx))),
+            );
+        }
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .v_flex()
+                        .w(px(560.))
+                        .max_h(px(480.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(div().font_bold().child("Resume a session"))
+                        .child(list)
+                        .child(
+                            div().h_flex().justify_end().child(
+                                Button::new("resume-cancel")
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.session_picker = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The `/config` dialog: the same rows as the TUI's settings dialog,
+    /// adjusted with −/+ buttons; every change applies immediately.
+    fn render_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.settings_open {
+            return None;
+        }
+        let theme = cx.theme();
+        let search = self.cfg.search.snapshot();
+        let rows: [(&str, String); 10] = [
+            ("mode", self.cfg.mode.get().label().to_string()),
+            (
+                "reasoning",
+                if self.show_reasoning {
+                    "shown".to_string()
+                } else {
+                    "collapsed".to_string()
+                },
+            ),
+            ("max turns", self.cfg.max_turns.get().to_string()),
+            ("bash timeout", format!("{}s", self.cfg.bash_timeout.get())),
+            ("read lines", self.cfg.read_max_lines.get().to_string()),
+            ("line bytes", self.cfg.read_max_line_bytes.get().to_string()),
+            ("web search", search.provider.label().to_string()),
+            ("results", search.max_results.to_string()),
+            (
+                "auto-compact",
+                match self.cfg.auto_compact.get() {
+                    0 => "off".to_string(),
+                    pct => format!("{pct}%"),
+                },
+            ),
+            ("model", self.cfg.model_label()),
+        ];
+
+        let mut panel = div().v_flex().gap_1();
+        for (ix, (label, value)) in rows.into_iter().enumerate() {
+            // The model row is a single button opening the model menu; the
+            // others adjust in place with −/+.
+            let controls: AnyElement = if ix == 9 {
+                Button::new("cfg-model")
+                    .label(value)
+                    .on_click(cx.listener(move |this, _, _, cx| this.adjust_setting(9, 1, cx)))
+                    .into_any_element()
+            } else {
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Button::new(SharedString::from(format!("cfg-dec-{ix}")))
+                            .ghost()
+                            .label("−")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.adjust_setting(ix, -1, cx)),
+                            ),
+                    )
+                    .child(div().min_w(px(110.)).text_center().child(value))
+                    .child(
+                        Button::new(SharedString::from(format!("cfg-inc-{ix}")))
+                            .ghost()
+                            .label("+")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.adjust_setting(ix, 1, cx)),
+                            ),
+                    )
+                    .into_any_element()
+            };
+            panel = panel.child(
+                div()
+                    .h_flex()
+                    .justify_between()
+                    .items_center()
+                    .px_2()
+                    .py_1()
+                    .child(label.to_string())
+                    .child(controls),
+            );
+        }
+
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .v_flex()
+                        .w(px(460.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(div().font_bold().child("Settings"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("Changes apply immediately, for this session only."),
+                        )
+                        .child(panel)
+                        .child(
+                            div().h_flex().justify_end().child(
+                                Button::new("settings-close")
+                                    .primary()
+                                    .label("Close")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_open = false;
+                                        cx.notify();
+                                    })),
+                            ),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -940,9 +1347,10 @@ impl Render for ChatView {
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
 
+        let show_reasoning = self.show_reasoning;
         let mut items: Vec<AnyElement> = Vec::new();
         for (ix, entry) in self.entries.iter().enumerate() {
-            items.push(Self::render_entry(entry, ix, window, cx));
+            items.push(Self::render_entry(entry, ix, show_reasoning, window, cx));
         }
         if items.is_empty() {
             items.push(
@@ -997,6 +1405,8 @@ impl Render for ChatView {
             )
             .child(self.render_status_bar(cx))
             .children(self.render_menu(cx))
+            .children(self.render_settings(cx))
+            .children(self.render_session_picker(cx))
             .children(self.render_approval(cx))
             .children(self.render_question(cx))
     }
