@@ -986,6 +986,7 @@ impl ChatView {
         entry: &Entry,
         ix: usize,
         show_reasoning: bool,
+        streaming: bool,
         math_cache: &mut crate::tex::MathCache,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1005,6 +1006,16 @@ impl ChatView {
                 .child(entry.text.clone())
                 .into_any_element(),
             EntryKind::Assistant => {
+                // While the reply is still streaming, render it as plain
+                // text: the markdown TextView re-parses on a 200ms debounce
+                // that RESETS on every change, so a delta stream faster than
+                // that postpones the parse indefinitely and the displayed
+                // text freezes until the stream pauses. Plain text updates
+                // every delta; the markdown (and math) rendering takes over
+                // the moment the entry stops growing.
+                if streaming {
+                    return div().child(entry.text.clone()).into_any_element();
+                }
                 // Display math blocks are typeset by RaTeX as images; the
                 // markdown between them still gets inline math as Unicode.
                 let scale = window.scale_factor();
@@ -1818,9 +1829,19 @@ impl Render for ChatView {
 
         let show_reasoning = self.show_reasoning;
         let mut items: Vec<AnyElement> = Vec::new();
+        let last_ix = self.entries.len().saturating_sub(1);
         for (ix, entry) in self.entries.iter().enumerate() {
-            let rendered =
-                Self::render_entry(entry, ix, show_reasoning, &mut self.math_cache, window, cx);
+            // Only the entry currently receiving deltas is "streaming".
+            let streaming = self.running && ix == last_ix;
+            let rendered = Self::render_entry(
+                entry,
+                ix,
+                show_reasoning,
+                streaming,
+                &mut self.math_cache,
+                window,
+                cx,
+            );
             // Right-click on any entry opens the copy menu.
             items.push(
                 div()
