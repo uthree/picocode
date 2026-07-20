@@ -17,6 +17,7 @@ copy_text: "Copy text"
 greeting: "picocode — %{model} in %{root}"
 running: "● running"
 idle: "● idle"
+bg_jobs: "⏳ %{n} bg"
 
 row_theme: "theme"
 row_mode: "mode"

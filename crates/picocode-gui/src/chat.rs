@@ -121,6 +121,9 @@ pub struct ChatView {
     /// Set while Tab fills the input, so the resulting Change event doesn't
     /// reset `comp_prefix`.
     completing: bool,
+    /// Backgrounded (timed-out) bash commands still running, shown in the
+    /// status bar.
+    background_jobs: usize,
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
@@ -235,6 +238,7 @@ impl ChatView {
             saved,
             comp_prefix: None,
             completing: false,
+            background_jobs: 0,
             tokens_in: 0,
             tokens_out: 0,
             math_cache: crate::tex::MathCache::new(),
@@ -340,6 +344,7 @@ impl ChatView {
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
             AgentEvent::BackgroundStarted { id } => {
+                self.background_jobs += 1;
                 self.push(EntryKind::Notice, t!("bg_started", id = id).to_string());
             }
             AgentEvent::BackgroundDone {
@@ -347,6 +352,7 @@ impl ChatView {
                 command,
                 output,
             } => {
+                self.background_jobs = self.background_jobs.saturating_sub(1);
                 self.push(EntryKind::Notice, t!("bg_done", id = id).to_string());
                 self.push(EntryKind::ToolOut, clip(&output, TOOL_OUTPUT_MAX_LINES));
                 // Prompt the model with the result so it reacts to it, like
@@ -1833,7 +1839,18 @@ impl ChatView {
             .pb_2()
             .text_sm()
             .text_color(muted_fg)
-            .child(div().h_flex().gap_3().child(mode_chip).child(state))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .child(mode_chip)
+                    .child(state)
+                    .children((self.background_jobs > 0).then(|| {
+                        div()
+                            .text_color(theme.warning)
+                            .child(t!("bg_jobs", n = self.background_jobs).to_string())
+                    })),
+            )
             .child(
                 div()
                     .h_flex()
