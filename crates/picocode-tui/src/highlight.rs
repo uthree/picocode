@@ -86,21 +86,8 @@ pub fn wrap_spans(line: &SpanLine, width: usize) -> Vec<SpanLine> {
     out
 }
 
-/// Line diff between `old` and `new`: each returned line starts with "- ",
-/// "+ " or "  " (unchanged context).
-pub fn diff_lines(old: &str, new: &str) -> Vec<String> {
-    similar::TextDiff::from_lines(old, new)
-        .iter_all_changes()
-        .map(|change| {
-            let prefix = match change.tag() {
-                similar::ChangeTag::Delete => "- ",
-                similar::ChangeTag::Insert => "+ ",
-                similar::ChangeTag::Equal => "  ",
-            };
-            format!("{prefix}{}", change.value().trim_end_matches('\n'))
-        })
-        .collect()
-}
+/// Line diff between `old` and `new`, shared with the other front ends.
+pub use picocode_core::transcript::diff_lines;
 
 /// Diff row backgrounds: the +/- marking lives in the background so the
 /// foreground stays free for syntax highlighting.

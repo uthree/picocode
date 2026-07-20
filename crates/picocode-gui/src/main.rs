@@ -37,8 +37,12 @@ fn main() -> anyhow::Result<()> {
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
     let cmd_tx = {
         let _guard = rt.enter();
-        agent::spawn(&cfg, event_tx, cancel_rx)?
+        agent::spawn(&cfg, event_tx.clone(), cancel_rx)?
     };
+    // The view keeps a runtime handle (model-list fetches, model switches)
+    // and the event sender (so those background jobs report back through the
+    // same pump as the worker).
+    let handle = rt.handle().clone();
 
     Application::new().run(move |cx: &mut App| {
         gpui_component::init(cx);
@@ -54,7 +58,9 @@ fn main() -> anyhow::Result<()> {
         };
         cx.open_window(options, |window, cx| {
             let view = cx.new(|cx| {
-                let mut view = chat::ChatView::new(cfg, event_rx, cmd_tx, cancel_tx, window, cx);
+                let mut view = chat::ChatView::new(
+                    cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
+                );
                 if let Some(prompt) = smoke {
                     view.send_prompt(prompt);
                 }

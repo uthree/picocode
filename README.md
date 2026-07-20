@@ -236,6 +236,9 @@ crates/
     chat.rs      — chat view: transcript, input, status bar, approval dialogs
 ```
 
-The GUI covers the core chat loop (streaming replies with markdown, tool
-calls, y/n/always approvals, plan approval, `/clear` and `/compact`); mode
-switching, model switching and `/resume` are still TUI-only.
+The GUI covers the core chat loop (streaming replies as markdown with
+highlighted code blocks, tool calls, colored `edit_file` diffs, y/n/always
+approvals, plan approval, `/clear` and `/compact`) plus mode and model
+switching (click the chips in the status bar, or `/model <name>` etc.) and
+a context-usage gauge; `/resume` and the settings dialog are still
+TUI-only.

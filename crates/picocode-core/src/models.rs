@@ -7,6 +7,59 @@ use anyhow::Context;
 
 use crate::config::Provider;
 
+/// One row in a model-switch listing: a configured `[[models]]` entry, or a
+/// model id the provider reported serving.
+pub struct ModelChoice {
+    /// Name accepted by the model switch: a config entry name, or a model id
+    /// the provider reported serving.
+    pub name: String,
+    /// Display detail: the entry's label (and URL), or the provider name for
+    /// served ids.
+    pub detail: String,
+    pub active: bool,
+}
+
+/// Rows for a model-switch listing: the configured `[[models]]` entries
+/// first, then the models the provider reported serving, skipping ids an
+/// entry already covers (same name, or same model on the same endpoint).
+pub fn model_choices(
+    models: &[crate::config::ModelEntry],
+    active_model: Option<&str>,
+    provider: Provider,
+    base_url: Option<&str>,
+    current_model: &str,
+    available: &[String],
+) -> Vec<ModelChoice> {
+    let mut items: Vec<ModelChoice> = models
+        .iter()
+        .map(|m| {
+            let mut detail = m.label();
+            if let Some(url) = &m.base_url {
+                detail.push_str(&format!(" @ {url}"));
+            }
+            ModelChoice {
+                name: m.name.clone(),
+                detail,
+                active: active_model == Some(m.name.as_str()),
+            }
+        })
+        .collect();
+    for id in available {
+        let covered = models.iter().any(|m| {
+            m.name == *id
+                || (m.model == *id && m.provider == provider && m.base_url.as_deref() == base_url)
+        });
+        if !covered {
+            items.push(ModelChoice {
+                name: id.clone(),
+                detail: crate::config::provider_name(provider).to_string(),
+                active: active_model.is_none() && current_model == id,
+            });
+        }
+    }
+    items
+}
+
 /// Pick the first model the Ollama server reports serving (the startup
 /// fallback when no model is configured anywhere); when it can't, explain
 /// how to set up a model provider instead of starting broken.
@@ -178,5 +231,55 @@ mod tests {
         // Malformed or empty bodies degrade to an empty list, not a panic.
         assert!(parse_names(&serde_json::json!({}), Provider::Ollama).is_empty());
         assert!(parse_names(&serde_json::json!({"models": 3}), Provider::Ollama).is_empty());
+    }
+
+    #[test]
+    fn model_choices_merge_config_and_served_models() {
+        use crate::config::ModelEntry;
+        let models = vec![
+            ModelEntry {
+                name: "local".into(),
+                provider: Provider::Ollama,
+                model: "qwen3:4b".into(),
+                base_url: None,
+                context_window: None,
+            },
+            ModelEntry {
+                name: "vllm".into(),
+                provider: Provider::Openai,
+                model: "qwen3:8b".into(),
+                base_url: Some("http://host:8000/v1".into()),
+                context_window: None,
+            },
+        ];
+        let available = vec!["qwen3:0.6b".into(), "qwen3:4b".into()];
+        let items = model_choices(
+            &models,
+            Some("local"),
+            Provider::Ollama,
+            None,
+            "qwen3:4b",
+            &available,
+        );
+        // Config entries first; qwen3:4b is covered by `local` on the same
+        // endpoint, so only qwen3:0.6b is appended.
+        let names: Vec<&str> = items.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["local", "vllm", "qwen3:0.6b"]);
+        assert!(items[0].active);
+        assert!(!items[2].active);
+        assert_eq!(items[1].detail, "openai/qwen3:8b @ http://host:8000/v1");
+        assert_eq!(items[2].detail, "ollama");
+
+        // Ad-hoc selection: no active entry, the current model id is marked.
+        let items = model_choices(
+            &models,
+            None,
+            Provider::Ollama,
+            None,
+            "qwen3:0.6b",
+            &available,
+        );
+        assert!(items.iter().any(|c| c.name == "qwen3:0.6b" && c.active));
+        assert!(items.iter().all(|c| c.name != "local" || !c.active));
     }
 }

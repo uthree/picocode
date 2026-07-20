@@ -34,3 +34,20 @@ pub struct Entry {
     #[serde(default)]
     pub lang: Option<String>,
 }
+
+/// Line diff between two strings, as "+ " / "- " / "  " prefixed lines —
+/// the text form [`EntryKind::Diff`] entries carry. Front ends decide how
+/// to color it.
+pub fn diff_lines(old: &str, new: &str) -> Vec<String> {
+    similar::TextDiff::from_lines(old, new)
+        .iter_all_changes()
+        .map(|change| {
+            let prefix = match change.tag() {
+                similar::ChangeTag::Delete => "- ",
+                similar::ChangeTag::Insert => "+ ",
+                similar::ChangeTag::Equal => "  ",
+            };
+            format!("{prefix}{}", change.value().trim_end_matches('\n'))
+        })
+        .collect()
+}

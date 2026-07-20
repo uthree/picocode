@@ -19,5 +19,4 @@ anyhow.workspace = true
 textwrap.workspace = true
 unicode-width.workspace = true
 syntect.workspace = true
-similar.workspace = true
 pulldown-cmark.workspace = true

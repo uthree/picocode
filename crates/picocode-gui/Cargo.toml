@@ -13,7 +13,8 @@ picocode-core.workspace = true
 # runtime_shaders: compile the Metal shaders at runtime instead of via the
 # `metal` CLI, which is only available with a full Xcode install.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
-gpui-component = "0.5"
+# tree-sitter-languages: syntax highlighting inside markdown code blocks.
+gpui-component = { version = "0.5", features = ["tree-sitter-languages"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
