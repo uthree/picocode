@@ -194,6 +194,10 @@ impl ChatView {
     // ---------- events from the agent worker ----------
 
     fn on_agent_event(&mut self, ev: AgentEvent, _cx: &mut Context<Self>) {
+        // Follow the stream only while the view is already at the bottom —
+        // scrolling up pins the position (like the TUI), and scrolling back
+        // down resumes following.
+        let follow = self.is_scrolled_to_bottom();
         match ev {
             AgentEvent::TextDelta(s) => self.append(EntryKind::Assistant, &s),
             AgentEvent::ReasoningDelta(s) => self.append(EntryKind::Reasoning, &s),
@@ -284,7 +288,18 @@ impl ChatView {
             }
             AgentEvent::Error(e) => self.push(EntryKind::Error, e),
         }
-        self.scroll.scroll_to_bottom();
+        if follow {
+            self.scroll.scroll_to_bottom();
+        }
+    }
+
+    /// Whether the transcript is scrolled to (within a few pixels of) the
+    /// bottom. Scroll offsets grow negative downwards, so the bottom sits at
+    /// `-max_offset`; a fresh, unscrolled view reports 0/0 and counts as at
+    /// the bottom.
+    fn is_scrolled_to_bottom(&self) -> bool {
+        let max = self.scroll.max_offset().height;
+        self.scroll.offset().y <= -max + px(4.)
     }
 
     /// Snapshot the conversation to disk. Runs in the background after each
