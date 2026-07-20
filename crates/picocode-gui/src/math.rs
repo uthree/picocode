@@ -11,6 +11,110 @@
 //! space just inside the delimiters, closing `$` not followed by a digit)
 //! so prices like "$5 and $10" survive.
 
+/// A piece of an assistant reply: ordinary markdown, or one display-math
+/// block to typeset with RaTeX (see [`crate::tex`]).
+pub enum Segment {
+    Markdown(String),
+    /// Contents of a `$$...$$` / `\[...\]` block, delimiters stripped.
+    Display(String),
+}
+
+/// Split markdown into ordinary segments and display-math blocks, leaving
+/// code fences and inline code untouched (they stay in the markdown
+/// segments). Inline math is not extracted — it renders as Unicode inside
+/// the text flow.
+pub fn split_display_math(text: &str) -> Vec<Segment> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut plain = String::new(); // non-fence text pending a math scan
+    let mut in_fence = false;
+    for line in text.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            if !in_fence {
+                split_chunk(&plain, &mut cur, &mut out);
+                plain.clear();
+            }
+            in_fence = !in_fence;
+            cur.push_str(line);
+        } else if in_fence {
+            cur.push_str(line);
+        } else {
+            plain.push_str(line);
+        }
+    }
+    split_chunk(&plain, &mut cur, &mut out);
+    if !cur.is_empty() {
+        out.push(Segment::Markdown(cur));
+    }
+    out
+}
+
+/// Scan a fence-free chunk for display-math blocks, appending to `cur` /
+/// flushing segments into `out`.
+fn split_chunk(chunk: &str, cur: &mut String, out: &mut Vec<Segment>) {
+    let chars: Vec<char> = chunk.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '`' => match chars[i + 1..].iter().position(|&c| c == '`') {
+                Some(n) => {
+                    cur.extend(&chars[i..=i + 1 + n]);
+                    i += n + 2;
+                }
+                None => {
+                    cur.extend(&chars[i..]);
+                    break;
+                }
+            },
+            '$' if chars.get(i + 1) == Some(&'$') => match find_str(&chars, i + 2, &['$', '$']) {
+                Some(j) => {
+                    flush_display(cur, out, &chars[i + 2..j]);
+                    i = j + 2;
+                }
+                None => {
+                    cur.push('$');
+                    i += 1;
+                }
+            },
+            '\\' if chars.get(i + 1) == Some(&'[') => match find_str(&chars, i + 2, &['\\', ']']) {
+                Some(j) => {
+                    flush_display(cur, out, &chars[i + 2..j]);
+                    i = j + 2;
+                }
+                None => {
+                    cur.push('\\');
+                    i += 1;
+                }
+            },
+            c => {
+                cur.push(c);
+                i += 1;
+            }
+        }
+    }
+}
+
+fn flush_display(cur: &mut String, out: &mut Vec<Segment>, inner: &[char]) {
+    let tex: String = inner.iter().collect();
+    let tex = tex.trim().to_string();
+    if tex.is_empty() {
+        return;
+    }
+    if !cur.trim().is_empty() {
+        out.push(Segment::Markdown(std::mem::take(cur)));
+    } else {
+        cur.clear();
+    }
+    out.push(Segment::Display(tex));
+}
+
+/// Unicode fallback for one display-math block RaTeX could not typeset.
+pub fn display_fallback(tex: &str) -> String {
+    let mut out = String::new();
+    push_display(&mut out, &tex.chars().collect::<Vec<_>>());
+    out
+}
+
 /// Replace TeX math spans in markdown `text` with Unicode approximations.
 pub fn render_math(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -166,6 +270,38 @@ fn push_display(out: &mut String, inner: &[char]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_extracts_display_blocks() {
+        let segs = split_display_math("intro\n$$\\frac{a}{b}$$\noutro $x^2$ end");
+        assert_eq!(segs.len(), 3);
+        assert!(matches!(&segs[0], Segment::Markdown(s) if s.contains("intro")));
+        assert!(matches!(&segs[1], Segment::Display(s) if s == "\\frac{a}{b}"));
+        // Inline math stays in the markdown segment.
+        assert!(matches!(&segs[2], Segment::Markdown(s) if s.contains("$x^2$")));
+
+        let segs = split_display_math(r"a \[E=mc^2\] b");
+        assert!(matches!(&segs[1], Segment::Display(s) if s == "E=mc^2"));
+    }
+
+    #[test]
+    fn split_leaves_code_alone() {
+        let text = "```\n$$not math$$\n```\n";
+        let segs = split_display_math(text);
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(&segs[0], Segment::Markdown(s) if s == text));
+
+        let segs = split_display_math("`$$x$$` and $$y$$");
+        assert!(matches!(&segs[0], Segment::Markdown(s) if s.contains("`$$x$$`")));
+        assert!(matches!(&segs[1], Segment::Display(s) if s == "y"));
+    }
+
+    #[test]
+    fn split_keeps_unclosed_display_literal() {
+        let segs = split_display_math("open $$ never closes");
+        assert_eq!(segs.len(), 1);
+        assert!(matches!(&segs[0], Segment::Markdown(s) if s == "open $$ never closes"));
+    }
 
     #[test]
     fn inline_dollar_math_is_converted() {

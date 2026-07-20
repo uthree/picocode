@@ -105,6 +105,8 @@ pub struct ChatView {
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
+    /// RaTeX-rendered display formulas, keyed by (scale, color, tex).
+    math_cache: crate::tex::MathCache,
     scroll: ScrollHandle,
 }
 
@@ -168,6 +170,7 @@ impl ChatView {
             completing: false,
             tokens_in: 0,
             tokens_out: 0,
+            math_cache: crate::tex::MathCache::new(),
             scroll: ScrollHandle::new(),
         };
         view.save_last_model();
@@ -976,11 +979,13 @@ impl ChatView {
         entry: &Entry,
         ix: usize,
         show_reasoning: bool,
+        math_cache: &mut crate::tex::MathCache,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
+        let foreground = theme.foreground;
         let mono = theme.mono_font_family.clone();
         match entry.kind {
             EntryKind::User => div()
@@ -992,14 +997,53 @@ impl ChatView {
                 .border_color(theme.border)
                 .child(entry.text.clone())
                 .into_any_element(),
-            EntryKind::Assistant => TextView::markdown(
-                SharedString::from(format!("md-{ix}")),
-                // TeX math spans become Unicode before rendering.
-                SharedString::from(crate::math::render_math(&entry.text)),
-                window,
-                cx,
-            )
-            .into_any_element(),
+            EntryKind::Assistant => {
+                // Display math blocks are typeset by RaTeX as images; the
+                // markdown between them still gets inline math as Unicode.
+                let scale = window.scale_factor();
+                let mut col = div().v_flex().gap_1();
+                let segments = crate::math::split_display_math(&entry.text);
+                for (six, segment) in segments.into_iter().enumerate() {
+                    match segment {
+                        crate::math::Segment::Markdown(md) => {
+                            col = col.child(TextView::markdown(
+                                SharedString::from(format!("md-{ix}-{six}")),
+                                SharedString::from(crate::math::render_math(&md)),
+                                window,
+                                cx,
+                            ));
+                        }
+                        crate::math::Segment::Display(tex_src) => {
+                            let key = crate::tex::cache_key(&tex_src, foreground, scale);
+                            let cached = math_cache.entry(key).or_insert_with(|| {
+                                crate::tex::render_display(&tex_src, foreground, scale)
+                                    .map(std::sync::Arc::new)
+                            });
+                            match cached {
+                                Some(mi) => {
+                                    col = col.child(
+                                        div().py_1().child(
+                                            gpui::img(mi.image.clone())
+                                                .w(px(mi.width))
+                                                .h(px(mi.height)),
+                                        ),
+                                    );
+                                }
+                                // RaTeX couldn't typeset it: Unicode text.
+                                None => {
+                                    col = col.child(TextView::markdown(
+                                        SharedString::from(format!("md-{ix}-{six}")),
+                                        SharedString::from(crate::math::display_fallback(&tex_src)),
+                                        window,
+                                        cx,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                col.into_any_element()
+            }
             EntryKind::Reasoning => div()
                 .italic()
                 .text_sm()
@@ -1617,7 +1661,14 @@ impl Render for ChatView {
         let show_reasoning = self.show_reasoning;
         let mut items: Vec<AnyElement> = Vec::new();
         for (ix, entry) in self.entries.iter().enumerate() {
-            items.push(Self::render_entry(entry, ix, show_reasoning, window, cx));
+            items.push(Self::render_entry(
+                entry,
+                ix,
+                show_reasoning,
+                &mut self.math_cache,
+                window,
+                cx,
+            ));
         }
         if items.is_empty() {
             items.push(

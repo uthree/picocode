@@ -20,3 +20,7 @@ clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 unicodeit.workspace = true
+ratex-render.workspace = true
+ratex-parser.workspace = true
+ratex-layout.workspace = true
+ratex-types.workspace = true

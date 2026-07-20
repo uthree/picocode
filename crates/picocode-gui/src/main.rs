@@ -7,6 +7,7 @@
 
 mod chat;
 mod math;
+mod tex;
 
 use clap::Parser;
 use gpui::{
