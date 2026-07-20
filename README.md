@@ -10,9 +10,11 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
 
 - **TUI chat** with streaming output, markdown rendering, syntax-highlighted
   code blocks and line diffs for file edits
-- **10 built-in tools**: `read_file` / `list_files` / `grep` / `write_file` /
-  `edit_file` / `bash` / `web_search` / `web_fetch` / `ask_user` /
-  `submit_plan` — file tools are confined to the project directory
+- **8 built-in tools**: `read_file` / `list_files` / `grep` / `edit_file`
+  (replace a string, or create/overwrite a whole file) / `bash` /
+  `web_search` / `web_fetch` / `submit_plan` — file tools are confined to
+  the project directory, and the web tools can be switched off entirely
+  with `disable_tools`
 - **Approval flow** for anything that changes state or talks to the network:
   `y` / `n`, or `a` (always) to whitelist similar calls for the session
 - **Permission modes**: read-only / edit / plan / bypass (`Shift+Tab` cycles)
@@ -63,8 +65,8 @@ for setting up a provider instead.
 
 Tools fall into two classes. **Local reads** (`read_file`, `list_files`,
 `grep`) and the dialog tools always run. Everything that changes state or
-talks to the network (`bash`, `write_file`, `edit_file`, `web_search`,
-`web_fetch`) is **destructive** and asks for y/n confirmation by default.
+talks to the network (`bash`, `edit_file`, `web_search`, `web_fetch`) is
+**destructive** and asks for y/n confirmation by default.
 File tools only ever touch the project directory: absolute paths and `..`
 escaping the root are rejected (the model is pointed at `bash`, which asks).
 
@@ -84,7 +86,7 @@ Allow rules come from the config file or from the approval dialog's `a`
 | Mode | Behavior |
 |---|---|
 | `read-only` (default) | Destructive calls ask, unless allow-listed |
-| `edit` | Like read-only, plus `write_file` / `edit_file` run without asking |
+| `edit` | Like read-only, plus `edit_file` runs without asking |
 | `plan` | `bash` and file writes are **denied** (even if allow-listed): the model investigates, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn. Web tools stay available under the usual ask/allow rules |
 | `bypass` | **Everything runs without confirmation** (deny rules still apply). Meant for isolated environments such as containers — the `--bypass` flag starts in it. Not in the `Shift+Tab` cycle — only `/bypass` or `--bypass` enter it, with a warning; `Shift+Tab` leaves it for `read-only` |
 
@@ -128,6 +130,11 @@ read_max_line_bytes = 500    # bytes per line before truncation
 # of the window, checked after each turn (default: 85; 0 disables; also
 # adjustable in /config)
 auto_compact = 85
+
+# Leave tools unregistered entirely — their schemas are never sent to the
+# model, saving context on models that don't need them. Only the web tools
+# can be listed; default: [] (everything on). Needs a restart to change.
+disable_tools = ["web_search", "web_fetch"]
 
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.

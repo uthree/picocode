@@ -161,7 +161,7 @@ pub struct SettingsMenu {
 /// model).
 pub const SETTINGS_ROWS: usize = 10;
 
-/// State of the `ask_user` / `submit_plan` option dialog.
+/// State of the `submit_plan` approval (question) dialog.
 pub struct PendingQuestion {
     pub title: String,
     pub question: String,
@@ -199,7 +199,7 @@ pub struct App {
     pub waiting: bool,
     pub spinner: usize,
     pub pending: Option<PendingApproval>,
-    /// Open `ask_user` dialog, if any.
+    /// Open question dialog (`submit_plan`), if any.
     pub question: Option<PendingQuestion>,
     /// Context size (input tokens) of the latest completion request.
     pub ctx_tokens: u64,
@@ -457,7 +457,7 @@ impl App {
             return;
         }
 
-        // The ask_user dialog captures navigation keys while open.
+        // The question dialog captures navigation keys while open.
         if let Some(q) = &mut self.question {
             let count = q.options.len();
             match key.code {
@@ -1478,7 +1478,7 @@ impl App {
         self.follow = new_top >= max_top;
     }
 
-    /// Close the ask_user dialog: `Some(selected)` on Enter, `None` on Esc.
+    /// Close the question dialog: `Some(selected)` on Enter, `None` on Esc.
     /// The tool call turns the answer into the tool result for the model.
     fn resolve_question(&mut self, accept: bool) {
         if let Some(q) = self.question.take() {
@@ -1666,7 +1666,7 @@ impl App {
             AgentEvent::Cancelled => {
                 self.waiting = false;
                 self.close_blocks();
-                // A cancelled stream drops the ask_user tool future, so an
+                // A cancelled stream drops the questioning tool future, so an
                 // open dialog can no longer deliver its answer — close it.
                 self.question = None;
                 self.push(EntryKind::Notice, "Generation stopped (Esc)".to_string());
@@ -1743,20 +1743,14 @@ impl App {
                 .and_then(|v| v.as_str())
         };
         if name == "edit_file"
-            && let (Some(path), Some(old), Some(new)) =
-                (get("path"), get("old_string"), get("new_string"))
+            && let (Some(path), Some(new)) = (get("path"), get("new_string"))
         {
+            // Without old_string the call is a whole-file create/overwrite,
+            // which diffs as pure additions.
+            let old = get("old_string").unwrap_or_default();
             self.push(EntryKind::Tool, format!("{name} {path}"));
             let diff = crate::highlight::diff_lines(old, new).join("\n");
             self.push_diff(clamp_lines(&diff, DIFF_MAX_LINES), path);
-            return;
-        }
-        if name == "write_file"
-            && let (Some(path), Some(content)) = (get("path"), get("content"))
-        {
-            self.push(EntryKind::Tool, format!("{name} {path}"));
-            let diff: Vec<String> = content.lines().map(|l| format!("+ {l}")).collect();
-            self.push_diff(clamp_lines(&diff.join("\n"), DIFF_MAX_LINES), path);
             return;
         }
         self.push(

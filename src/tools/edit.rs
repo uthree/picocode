@@ -9,7 +9,8 @@ use super::{ToolError, resolve};
 #[derive(Deserialize)]
 pub struct EditArgs {
     path: String,
-    old_string: String,
+    #[serde(default)]
+    old_string: Option<String>,
     new_string: String,
 }
 
@@ -30,8 +31,11 @@ impl Tool for EditFile {
     type Output = String;
 
     fn description(&self) -> String {
-        "Replace an exact string in a file. `old_string` must appear exactly once; \
-         include surrounding lines to make it unique. Read the file first."
+        "Edit or create a file. With `old_string`: replace it with `new_string`; \
+         it must appear exactly once, so include surrounding lines to make it \
+         unique, and read the file first. Without `old_string`: create the file \
+         (or overwrite it entirely) with `new_string` as the full content; \
+         parent directories are created automatically."
             .to_string()
     }
 
@@ -39,37 +43,45 @@ impl Tool for EditFile {
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "File path to edit" },
-                "old_string": { "type": "string", "description": "Exact text to replace (must be unique in the file)" },
-                "new_string": { "type": "string", "description": "Replacement text" }
+                "path": { "type": "string", "description": "File path to edit or create" },
+                "old_string": { "type": "string", "description": "Exact text to replace (must be unique in the file). Omit to create or overwrite the whole file." },
+                "new_string": { "type": "string", "description": "Replacement text, or the full file content when old_string is omitted" }
             },
-            "required": ["path", "old_string", "new_string"]
+            "required": ["path", "new_string"]
         })
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = resolve(&self.root, &args.path)?;
+
+        // No old_string: whole-file create/overwrite (the former write_file).
+        let old_string = match args.old_string {
+            None => return write_whole_file(&path, &args.new_string).await,
+            Some(s) if s.is_empty() => return write_whole_file(&path, &args.new_string).await,
+            Some(s) => s,
+        };
+
         let content = tokio::fs::read_to_string(&path)
             .await
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;
 
-        if args.old_string == args.new_string {
+        if old_string == args.new_string {
             return Err(ToolError::new("old_string and new_string are identical"));
         }
-        let count = content.matches(&args.old_string).count();
+        let count = content.matches(&old_string).count();
         match count {
             0 => Err(ToolError::new(
                 "old_string was not found in the file. Re-read the file and copy the text exactly.",
             )),
             1 => {
-                let updated = content.replacen(&args.old_string, &args.new_string, 1);
+                let updated = content.replacen(&old_string, &args.new_string, 1);
                 tokio::fs::write(&path, &updated).await.map_err(|e| {
                     ToolError::new(format!("failed to write {}: {e}", path.display()))
                 })?;
                 Ok(format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
-                    args.old_string.lines().count(),
+                    old_string.lines().count(),
                     args.new_string.lines().count()
                 ))
             }
@@ -78,6 +90,24 @@ impl Tool for EditFile {
             ))),
         }
     }
+}
+
+/// Create or overwrite `path` with `content`, creating parent directories.
+async fn write_whole_file(path: &std::path::Path, content: &str) -> Result<String, ToolError> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ToolError::new(format!("failed to create {}: {e}", parent.display())))?;
+    }
+    tokio::fs::write(path, content)
+        .await
+        .map_err(|e| ToolError::new(format!("failed to write {}: {e}", path.display())))?;
+    Ok(format!(
+        "Wrote {} bytes ({} lines) to {}",
+        content.len(),
+        content.lines().count(),
+        path.display()
+    ))
 }
 
 #[cfg(test)]
@@ -96,7 +126,7 @@ mod tests {
         let (dir, tool) = setup("foo\nbar\nbaz\n");
         tool.call(EditArgs {
             path: "f.txt".into(),
-            old_string: "bar".into(),
+            old_string: Some("bar".into()),
             new_string: "BAR".into(),
         })
         .await
@@ -113,7 +143,7 @@ mod tests {
         let err = tool
             .call(EditArgs {
                 path: "f.txt".into(),
-                old_string: "x".into(),
+                old_string: Some("x".into()),
                 new_string: "y".into(),
             })
             .await
@@ -127,11 +157,43 @@ mod tests {
         let err = tool
             .call(EditArgs {
                 path: "f.txt".into(),
-                old_string: "zzz".into(),
+                old_string: Some("zzz".into()),
                 new_string: "y".into(),
             })
             .await
             .unwrap_err();
         assert!(err.0.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn omitted_old_string_creates_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = EditFile::new(dir.path().to_path_buf());
+        let out = tool
+            .call(EditArgs {
+                path: "sub/dir/x.txt".into(),
+                old_string: None,
+                new_string: "hi\n".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.contains("Wrote 3 bytes"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/dir/x.txt")).unwrap(),
+            "hi\n"
+        );
+
+        // An empty old_string is treated the same as omitting it: overwrite.
+        tool.call(EditArgs {
+            path: "sub/dir/x.txt".into(),
+            old_string: Some(String::new()),
+            new_string: "bye\n".into(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("sub/dir/x.txt")).unwrap(),
+            "bye\n"
+        );
     }
 }

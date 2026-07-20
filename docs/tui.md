@@ -49,11 +49,11 @@ on macOS ones).
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned).
   Fenced code blocks are syntax-highlighted (via syntect, language taken
   from the ```` ```lang ```` tag).
-- **Diffs**: `edit_file` shows a line diff (and `write_file` its added lines)
-  both in the approval dialog and in the transcript, so changes are visible
-  even in modes that skip the confirmation. Additions/removals are marked by
-  the background color (delta-style) while the text keeps its syntax
-  highlighting, picked from the file extension.
+- **Diffs**: `edit_file` shows a line diff (all additions when it creates a
+  file) both in the approval dialog and in the transcript, so changes are
+  visible even in modes that skip the confirmation. Additions/removals are
+  marked by the background color (delta-style) while the text keeps its
+  syntax highlighting, picked from the file extension.
 - **Reasoning**: model reasoning is collapsed to a one-liner by default;
   `Ctrl+T` expands it.
 - **Scrolling**: while scrolled up, the view is anchored so streaming output
@@ -81,6 +81,6 @@ on macOS ones).
   being killed; the status bar shows `⏳ N bg` while jobs are running. When
   a job finishes, a notice with its output appears and the model is
   prompted with the result automatically so it responds to it.
-- **User questions**: the model can present concrete choices (`ask_user`); a
-  dialog opens — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the
+- **Plan approval**: in plan mode the model submits its plan (`submit_plan`)
+  through a dialog — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the
   model is told and proceeds on its own).

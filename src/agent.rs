@@ -35,7 +35,8 @@ pub fn spawn(
         ($client:expr) => {{
             let client = $client;
             let root = cfg.root.clone();
-            let agent = client
+            let enabled = |name: &str| !cfg.disable_tools.iter().any(|t| t == name);
+            let mut builder = client
                 .agent(&cfg.model)
                 .preamble(&system_prompt(&cfg))
                 .tool(tools::ReadFile::new(
@@ -45,19 +46,20 @@ pub fn spawn(
                 ))
                 .tool(tools::ListFiles::new(root.clone()))
                 .tool(tools::Grep::new(root.clone()))
-                .tool(tools::WriteFile::new(root.clone()))
                 .tool(tools::EditFile::new(root.clone()))
                 .tool(tools::Bash::new(
                     root,
                     cfg.bash_timeout.clone(),
                     event_tx.clone(),
                 ))
-                .tool(tools::WebFetch::new())
-                .tool(tools::WebSearch::new(cfg.search.clone()))
-                .tool(tools::AskUser::new(event_tx.clone()))
-                .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()))
-                .max_tokens(8192)
-                .build();
+                .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()));
+            if enabled(tools::WebSearch::NAME) {
+                builder = builder.tool(tools::WebSearch::new(cfg.search.clone()));
+            }
+            if enabled(tools::WebFetch::NAME) {
+                builder = builder.tool(tools::WebFetch::new());
+            }
+            let agent = builder.max_tokens(8192).build();
             // A second, tool-less agent used by /compact: it only ever needs
             // to read the history and write a summary.
             let compactor = client
@@ -122,29 +124,37 @@ fn system_prompt(cfg: &Config) -> String {
 }
 
 fn default_system_prompt(cfg: &Config) -> String {
+    let tool_names: Vec<&str> = crate::tools::ALL_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| !cfg.disable_tools.iter().any(|t| t == name))
+        .collect();
+    let web_rule = if tool_names.contains(&"web_search") && tool_names.contains(&"web_fetch") {
+        "- Use web_search to look things up on the web, and web_fetch to read a URL the \
+         user shares or a search result you want in full.\n"
+    } else {
+        ""
+    };
     format!(
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
          \n\
-         Available tools: read_file, list_files, grep, write_file, edit_file, bash, \
-         web_search, web_fetch, ask_user, submit_plan.\n\
+         Available tools: {tools}.\n\
          \n\
          Workflow:\n\
          1. Explore first: use list_files and grep to locate relevant files, and read_file \
          before editing anything.\n\
-         2. Edit with edit_file (the old_string must match exactly once) or create files \
-         with write_file.\n\
+         2. Edit with edit_file: pass old_string (it must match exactly once) to replace \
+         it, or omit old_string to create a file with new_string as its content.\n\
          3. Verify your changes with bash (build, test) when appropriate.\n\
          \n\
          Rules:\n\
          - Use the tools instead of guessing about the project.\n\
-         - Use web_search to look things up on the web, and web_fetch to read a URL the \
-         user shares or a search result you want in full.\n\
-         - When you need the user to decide between a few concrete alternatives, call \
-         ask_user with short options instead of asking in plain text.\n\
+         {web_rule}\
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
-        root = cfg.root.display()
+        root = cfg.root.display(),
+        tools = tool_names.join(", "),
     )
 }
 
@@ -286,7 +296,7 @@ async fn run_once<M>(
             "{prompt}\n\n[picocode plan mode is active: investigate with the read-only \
              tools and put together a concise implementation plan — goal, steps, files \
              to touch, and how to verify. Do not modify files or run state-changing \
-             commands; write_file/edit_file/bash are blocked. When the plan is ready, \
+             commands; edit_file/bash are blocked. When the plan is ready, \
              call submit_plan with the full plan text to ask the user for approval — \
              if approved you are switched to edit mode and must execute it.]"
         )
@@ -444,6 +454,7 @@ mod tests {
                 max_results: 5,
                 api_key: None,
             }),
+            disable_tools: Vec::new(),
             system_prompt: None,
             instructions: Vec::new(),
             config_files: Vec::new(),
@@ -460,6 +471,20 @@ mod tests {
         assert!(p.contains("/tmp/proj"));
         assert!(p.contains("Project instructions from AGENTS.md"));
         assert!(p.contains("be nice"));
+    }
+
+    #[test]
+    fn default_prompt_reflects_disabled_tools() {
+        let cfg = test_cfg();
+        let p = system_prompt(&cfg);
+        assert!(p.contains("web_search"));
+        assert!(p.contains("Use web_search"));
+
+        let mut cfg = test_cfg();
+        cfg.disable_tools = vec!["web_search".into(), "web_fetch".into()];
+        let p = system_prompt(&cfg);
+        assert!(!p.contains("web_search"));
+        assert!(!p.contains("web_fetch"));
     }
 
     #[test]

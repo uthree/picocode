@@ -1,6 +1,5 @@
 //! Built-in tools exposed to the agent.
 
-mod ask;
 mod bash;
 mod edit;
 mod fetch;
@@ -9,9 +8,7 @@ mod list;
 mod plan;
 mod read;
 mod search;
-mod write;
 
-pub use ask::AskUser;
 pub use bash::{Bash, BashArgs};
 pub use edit::EditFile;
 pub use fetch::WebFetch;
@@ -20,7 +17,6 @@ pub use list::ListFiles;
 pub use plan::SubmitPlan;
 pub use read::ReadFile;
 pub use search::WebSearch;
-pub use write::WriteFile;
 
 use std::path::{Path, PathBuf};
 
@@ -31,30 +27,28 @@ pub const ALL_TOOLS: &[&str] = &[
     ReadFile::NAME,
     ListFiles::NAME,
     Grep::NAME,
-    WriteFile::NAME,
     EditFile::NAME,
     Bash::NAME,
     WebSearch::NAME,
     WebFetch::NAME,
-    AskUser::NAME,
     SubmitPlan::NAME,
 ];
 
 /// Tools that need approval by default: everything that changes state or
 /// sends data off the machine. The rest (local reads, dialogs) always runs.
-pub const DESTRUCTIVE_TOOLS: &[&str] = &[
-    Bash::NAME,
-    WriteFile::NAME,
-    EditFile::NAME,
-    WebSearch::NAME,
-    WebFetch::NAME,
-];
+pub const DESTRUCTIVE_TOOLS: &[&str] =
+    &[Bash::NAME, EditFile::NAME, WebSearch::NAME, WebFetch::NAME];
 
 /// Tools that modify the local system; plan mode denies exactly these.
-pub const MUTATING_TOOLS: &[&str] = &[Bash::NAME, WriteFile::NAME, EditFile::NAME];
+pub const MUTATING_TOOLS: &[&str] = &[Bash::NAME, EditFile::NAME];
 
 /// Tools that only write project files (auto-approved in edit mode).
-pub const WRITE_TOOLS: &[&str] = &[WriteFile::NAME, EditFile::NAME];
+pub const WRITE_TOOLS: &[&str] = &[EditFile::NAME];
+
+/// Tools whose registration can be turned off entirely via `disable_tools`
+/// in the config file (their schemas are then never sent to the model).
+/// Restricted to the web tools: everything else is part of the core loop.
+pub const OPTIONAL_TOOLS: &[&str] = &[WebSearch::NAME, WebFetch::NAME];
 
 /// Common error type for all tools. The message is fed back to the model.
 #[derive(Debug, thiserror::Error)]

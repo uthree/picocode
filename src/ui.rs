@@ -610,7 +610,7 @@ fn draw_settings(f: &mut Frame, app: &App) {
     render_dialog(f, "Settings (this session)", Color::Cyan, area, lines);
 }
 
-// ----- ask_user dialog -----------------------------------------------------
+// ----- question dialog -----------------------------------------------------
 
 fn draw_question(f: &mut Frame, q: &PendingQuestion) {
     let screen = f.area();
@@ -681,8 +681,9 @@ impl BodyLine {
 }
 
 /// Render tool arguments as something a human can review at a glance:
-/// bash as the command line, edit_file as a diff, write_file as path plus
-/// content. Unknown tools fall back to `key: value` lines instead of JSON.
+/// bash as the command line, edit_file as a diff (all additions when
+/// old_string is omitted, i.e. a file create/overwrite). Unknown tools fall
+/// back to `key: value` lines instead of JSON.
 fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(args) else {
         return vec![BodyLine::plain(args)];
@@ -697,23 +698,6 @@ fn approval_body(name: &str, args: &str) -> Vec<BodyLine> {
             .enumerate()
             .map(|(i, l)| BodyLine::plain(format!("{}{l}", if i == 0 { "$ " } else { "  " })))
             .collect();
-    }
-    if name == "write_file"
-        && let Some(path) = get("path")
-    {
-        let mut out = vec![BodyLine::new(format!("path: {path}"), Style::new().bold())];
-        if let Some(content) = get("content") {
-            out.push(BodyLine::new(
-                format!("content ({} lines):", content.lines().count().max(1)),
-                Style::new().fg(Color::DarkGray),
-            ));
-            out.extend(
-                crate::highlight::highlight(content, path)
-                    .into_iter()
-                    .map(BodyLine::from_spans),
-            );
-        }
-        return out;
     }
     if name == "edit_file"
         && let Some(path) = get("path")
@@ -852,12 +836,12 @@ mod tests {
     }
 
     #[test]
-    fn write_file_shows_path_and_content() {
-        let args = r#"{"path":"a.txt","content":"hello\nworld"}"#;
-        let t = texts("write_file", args);
-        assert_eq!(t[0], "path: a.txt");
-        assert_eq!(t[1], "content (2 lines):");
-        assert_eq!(&t[2..], ["hello", "world"]);
+    fn edit_file_without_old_string_renders_all_additions() {
+        let args = r#"{"path":"a.txt","new_string":"hello\nworld"}"#;
+        assert_eq!(
+            texts("edit_file", args),
+            vec!["path: a.txt", "+ hello", "+ world"]
+        );
     }
 
     #[test]

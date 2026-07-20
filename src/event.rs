@@ -19,9 +19,9 @@ pub enum AgentEvent {
         args: String,
         respond: oneshot::Sender<bool>,
     },
-    /// The model asked the user to pick one of several options (`ask_user`,
-    /// `submit_plan`). The answer is the selected index, or `None` if
-    /// dismissed with Esc. `title` names the dialog box.
+    /// The model asked the user a question via a dialog (`submit_plan`'s
+    /// approval). The answer is the selected index, or `None` if dismissed
+    /// with Esc. `title` names the dialog box.
     UserQuestion {
         title: String,
         question: String,

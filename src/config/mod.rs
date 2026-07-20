@@ -90,6 +90,9 @@ struct FileConfig {
     /// Context usage (percent of the window) at which the conversation is
     /// compacted automatically after a turn; 0 disables (default 85).
     auto_compact: Option<u64>,
+    /// Tools to leave unregistered entirely (schemas never sent to the
+    /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
+    disable_tools: Option<Vec<String>>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
@@ -278,6 +281,14 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         auto_compact: project.auto_compact.or(global.auto_compact),
+        // Like the approval lists: a project can add disables, not re-enable.
+        disable_tools: match (global.disable_tools, project.disable_tools) {
+            (Some(mut g), Some(p)) => {
+                g.extend(p);
+                Some(g)
+            }
+            (g, p) => p.or(g),
+        },
         approval,
         search: SearchFileConfig {
             provider: project.search.provider.or(global.search.provider),
@@ -342,6 +353,9 @@ pub struct Config {
     /// Web-search settings, shared with the tool and editable at runtime
     /// (`/config`: provider and result count).
     pub search: SearchHandle,
+    /// Tools left unregistered entirely (only web tools; from `disable_tools`
+    /// in the config file, so a change requires a restart).
+    pub disable_tools: Vec<String>,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Instruction files that were found: (file name, content).
@@ -399,6 +413,17 @@ impl Config {
         let auto_compact = file.auto_compact.unwrap_or(DEFAULT_AUTO_COMPACT);
         if auto_compact > 99 {
             anyhow::bail!("auto_compact must be 0 (off) to 99 (percent of the context window)");
+        }
+        let mut disable_tools = file.disable_tools.unwrap_or_default();
+        disable_tools.sort();
+        disable_tools.dedup();
+        for name in &disable_tools {
+            if !crate::tools::OPTIONAL_TOOLS.contains(&name.as_str()) {
+                anyhow::bail!(
+                    "disable_tools: `{name}` cannot be disabled (only {} can)",
+                    crate::tools::OPTIONAL_TOOLS.join(", ")
+                );
+            }
         }
 
         // Startup model precedence: CLI flags > last-used state > config
@@ -458,6 +483,7 @@ impl Config {
                 Mode::default()
             }),
             search: SearchHandle::new(search),
+            disable_tools,
             system_prompt: file.system_prompt,
             instructions,
             config_files,
@@ -602,6 +628,23 @@ mod tests {
         let merged = merge(global, project);
         assert_eq!(merged.default_model.as_deref(), Some("b"));
         assert_eq!(merged.models.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn disable_tools_concatenates_and_never_reenables() {
+        let global: FileConfig = toml::from_str(r#"disable_tools = ["web_search"]"#).unwrap();
+        let project: FileConfig = toml::from_str(r#"disable_tools = ["web_fetch"]"#).unwrap();
+        assert_eq!(
+            merge(global, project).disable_tools.unwrap(),
+            vec!["web_search", "web_fetch"]
+        );
+
+        // A project without the key inherits the global disables.
+        let global: FileConfig = toml::from_str(r#"disable_tools = ["web_search"]"#).unwrap();
+        assert_eq!(
+            merge(global, FileConfig::default()).disable_tools.unwrap(),
+            vec!["web_search"]
+        );
     }
 
     #[test]

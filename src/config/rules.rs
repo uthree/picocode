@@ -491,10 +491,6 @@ mod tests {
     fn edit_mode_allows_file_writes_but_not_bash() {
         let r = ApprovalRules::default();
         assert_eq!(
-            r.decide(Mode::Edit, "write_file", None, true),
-            Decision::Allow
-        );
-        assert_eq!(
             r.decide(Mode::Edit, "edit_file", None, true),
             Decision::Allow
         );
@@ -504,7 +500,7 @@ mod tests {
         );
         // In read-only the same writes ask.
         assert_eq!(
-            r.decide(Mode::ReadOnly, "write_file", None, true),
+            r.decide(Mode::ReadOnly, "edit_file", None, true),
             Decision::Ask
         );
     }
@@ -534,7 +530,7 @@ mod tests {
     fn bypass_mode_allows_everything_except_deny_rules() {
         let r = ApprovalRules::default();
         assert_eq!(
-            r.decide(Mode::Bypass, "write_file", None, true),
+            r.decide(Mode::Bypass, "edit_file", None, true),
             Decision::Allow
         );
         assert_eq!(
@@ -550,12 +546,8 @@ mod tests {
     #[test]
     fn plan_mode_denies_mutations_but_not_research() {
         // Even allow-listed writes/commands are denied with a plan-mode reason.
-        let r = rules(&["write_file"], &[], &["cargo"], &[]);
-        for (tool, cmd) in [
-            ("write_file", None),
-            ("edit_file", None),
-            ("bash", Some("cargo build")),
-        ] {
+        let r = rules(&["edit_file"], &[], &["cargo"], &[]);
+        for (tool, cmd) in [("edit_file", None), ("bash", Some("cargo build"))] {
             match r.decide(Mode::Plan, tool, cmd, true) {
                 Decision::Deny(reason) => assert!(reason.contains("plan mode")),
                 other => panic!("expected Deny, got {other:?}"),
