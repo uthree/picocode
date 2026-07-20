@@ -50,11 +50,16 @@ fn main() -> anyhow::Result<()> {
         // the input's Enter action flagged as secondary — the multi-line
         // input inserts the newline either way, and the chat view only
         // submits on a non-secondary PressEnter.
-        cx.bind_keys([gpui::KeyBinding::new(
-            "shift-enter",
-            gpui_component::input::Enter { secondary: true },
-            Some("Input"),
-        )]);
+        cx.bind_keys([
+            gpui::KeyBinding::new(
+                "shift-enter",
+                gpui_component::input::Enter { secondary: true },
+                Some("Input"),
+            ),
+            // Tab cycles the slash-command completion instead of indenting
+            // (registered after gpui_component::init, so it wins).
+            gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
+        ]);
 
         let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
         let options = WindowOptions {

@@ -241,5 +241,6 @@ highlighted code blocks, tool calls, colored `edit_file` diffs, y/n/always
 approvals, plan approval, `/clear` and `/compact`) plus mode and model
 switching (click the chips in the status bar, or `/model <name>` etc.),
 a context-usage gauge, session autosave with `/resume` (sessions are
-shared with the TUI, so either front end can resume the other's), and a
-`/config` settings dialog.
+shared with the TUI, so either front end can resume the other's), a
+`/config` settings dialog, `/status` and `/permissions`, and a
+slash-command completion popup (Tab cycles, click fills).

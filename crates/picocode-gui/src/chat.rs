@@ -19,6 +19,31 @@ use picocode_core::{agent, approval, models, session, state};
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
 
+gpui::actions!(picocode_gui, [AcceptCompletion]);
+
+/// Slash commands the GUI supports, with a short description for the
+/// completion popup.
+const COMMANDS: &[(&str, &str)] = &[
+    ("/clear", "Clear conversation history"),
+    ("/compact", "Summarize history to free context"),
+    ("/model", "Pick a model (menu) or switch: /model <name>"),
+    ("/resume", "Pick a saved session to resume"),
+    ("/read-only", "Mode: reads only, every write asks"),
+    ("/edit", "Mode: file writes run freely"),
+    ("/plan", "Mode: investigate and plan, writes blocked"),
+    (
+        "/bypass",
+        "Mode: run EVERYTHING unconfirmed (isolated envs)",
+    ),
+    ("/permissions", "Show the effective permission rules"),
+    ("/config", "Edit settings in a dialog"),
+    ("/settings", "Alias of /config"),
+    ("/status", "Show model, token usage and session info"),
+    ("/usage", "Alias of /status"),
+    ("/quit", "Exit picocode"),
+    ("/exit", "Exit picocode"),
+];
+
 /// Diff row backgrounds (translucent, so they read on both themes).
 const DIFF_ADD_BG: u32 = 0x3fb95033;
 const DIFF_DEL_BG: u32 = 0xf8514933;
@@ -71,6 +96,12 @@ pub struct ChatView {
     settings_open: bool,
     /// Show reasoning entries in full, or collapsed to one line.
     show_reasoning: bool,
+    /// Completion prefix locked at the first Tab press, so cycling keeps
+    /// the full candidate list even after the input holds a full match.
+    comp_prefix: Option<String>,
+    /// Set while Tab fills the input, so the resulting Change event doesn't
+    /// reset `comp_prefix`.
+    completing: bool,
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
@@ -133,6 +164,8 @@ impl ChatView {
             session_picker: None,
             settings_open: false,
             show_reasoning: true,
+            comp_prefix: None,
+            completing: false,
             tokens_in: 0,
             tokens_out: 0,
             scroll: ScrollHandle::new(),
@@ -383,6 +416,102 @@ impl ChatView {
         cx.notify();
     }
 
+    /// `/status` (alias `/usage`): one-shot overview of the model, token
+    /// usage, permission mode and session.
+    fn show_status(&mut self) {
+        let entry = match &self.cfg.active_model {
+            Some(name) => format!(" — [[models]] entry `{name}`"),
+            None => String::new(),
+        };
+        let endpoint = models::base_url(self.cfg.provider, self.cfg.base_url.as_deref());
+        let pct = (self.context_ratio() * 100.0).round() as u64;
+        let prompts = self
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::User)
+            .count();
+        let saved = match &self.sessions_dir {
+            Some(dir) => format!("autosaved under {}", dir.display()),
+            None => "not saved (no home directory)".to_string(),
+        };
+        let config = if self.cfg.config_files.is_empty() {
+            "(built-in defaults)".to_string()
+        } else {
+            self.cfg.config_files.join(", ")
+        };
+        let instructions = if self.cfg.instructions.is_empty() {
+            "(none found)".to_string()
+        } else {
+            let names: Vec<&str> = self
+                .cfg
+                .instructions
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
+            names.join(", ")
+        };
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Status\n\
+                 model         {}{entry}\n\
+                 endpoint      {endpoint}\n\
+                 mode          {} — /permissions shows the rules\n\
+                 context       {} of {} tokens ({pct}%)\n\
+                 output        {} tokens (last reported)\n\
+                 session       {} — {prompts} prompts, {saved}\n\
+                 project       {}\n\
+                 config        {config}\n\
+                 instructions  {instructions}",
+                self.cfg.model_label(),
+                self.cfg.mode.get().label(),
+                self.tokens_in,
+                self.cfg.context_window,
+                self.tokens_out,
+                self.session_id,
+                self.cfg.root.display(),
+            ),
+        );
+    }
+
+    /// `/permissions`: show what the current mode and config rules do.
+    fn show_permissions(&mut self) {
+        let mode = self.cfg.mode.get();
+        let mode_line = match mode {
+            Mode::ReadOnly => "destructive calls ask unless allow-listed",
+            Mode::Edit => "file writes run freely; other destructive calls ask unless allow-listed",
+            Mode::Plan => "bash and file writes are denied; web tools ask unless allow-listed",
+            Mode::Bypass => "EVERYTHING runs without confirmation (deny rules still apply)",
+        };
+        let rules = self.cfg.approval.snapshot();
+        let list = |xs: &[String]| {
+            if xs.is_empty() {
+                "(none)".to_string()
+            } else {
+                xs.join(", ")
+            }
+        };
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Permissions — precedence: deny > mode (plan/bypass) > allow > ask\n\
+                 mode         [{}] {mode_line}\n\
+                 deny_tools   {}\n\
+                 deny_bash    {}\n\
+                 allow_tools  {}\n\
+                 allow_bash   {}\n\
+                 Local reads (read_file, list_files, grep) always run; file tools are \
+                 confined to {}. Commands with $( ), backticks or > never auto-run.",
+                mode.label(),
+                list(&rules.deny_tools),
+                list(&rules.deny_bash),
+                list(&rules.allow_tools),
+                list(&rules.allow_bash),
+                self.cfg.root.display(),
+            ),
+        );
+    }
+
     /// A `/config` row change. Every change applies immediately (max turns
     /// from the next prompt on). Mirrors the TUI's `/config` dialog.
     fn adjust_setting(&mut self, row: usize, delta: i64, cx: &mut Context<Self>) {
@@ -498,19 +627,69 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Plain Enter submits; a secondary Enter (Shift+Enter, Cmd+Enter)
-        // keeps the newline the multi-line input just inserted.
-        if let InputEvent::PressEnter { secondary: false } = ev {
-            self.submit(window, cx);
+        match ev {
+            // Plain Enter submits; a secondary Enter (Shift+Enter, Cmd+Enter)
+            // keeps the newline the multi-line input just inserted.
+            InputEvent::PressEnter { secondary: false } => self.submit(window, cx),
+            // Typing anything resets the Tab-cycling anchor (unless the
+            // change came from Tab itself filling the input).
+            InputEvent::Change => {
+                if self.completing {
+                    self.completing = false;
+                } else {
+                    self.comp_prefix = None;
+                }
+                cx.notify();
+            }
+            _ => {}
         }
     }
 
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.approval.is_some()
+    /// Tab in the input: fill the first matching slash command, or cycle
+    /// through the matches of the prefix locked at the first press.
+    fn accept_completion(
+        &mut self,
+        _: &AcceptCompletion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() {
+            return;
+        }
+        let value = self.input.read(cx).value().to_string();
+        if !value.starts_with('/') || value.contains(char::is_whitespace) {
+            return;
+        }
+        let prefix = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
+        let matches: Vec<&str> = COMMANDS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| name.starts_with(&prefix))
+            .collect();
+        if matches.is_empty() {
+            self.comp_prefix = None;
+            return;
+        }
+        let next = match matches.iter().position(|name| *name == value) {
+            Some(i) => matches[(i + 1) % matches.len()],
+            None => matches[0],
+        };
+        self.comp_prefix = Some(prefix);
+        self.completing = true;
+        self.input
+            .update(cx, |state, cx| state.set_value(next, window, cx));
+        cx.notify();
+    }
+
+    fn dialog_open(&self) -> bool {
+        self.approval.is_some()
             || self.question.is_some()
             || self.session_picker.is_some()
             || self.settings_open
-        {
+    }
+
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
@@ -546,6 +725,8 @@ impl ChatView {
             "/model" => self.toggle_menu(Menu::Model, cx),
             "/resume" => self.open_session_picker(cx),
             "/config" | "/settings" => self.settings_open = true,
+            "/status" | "/usage" => self.show_status(),
+            "/permissions" => self.show_permissions(),
             _ if text.starts_with("/model ") => {
                 let name = text["/model ".len()..].trim().to_string();
                 self.switch_model(&name, cx);
@@ -957,6 +1138,76 @@ impl ChatView {
                             ),
                         )),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// Completion popup: matching slash commands, shown above the input
+    /// while it holds a bare `/command` prefix. Click fills; Tab cycles.
+    fn render_completions(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.dialog_open() {
+            return None;
+        }
+        let value = self.input.read(cx).value().to_string();
+        if !value.starts_with('/') || value.contains(char::is_whitespace) {
+            return None;
+        }
+        let prefix = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
+        let matches: Vec<(&str, &str)> = COMMANDS
+            .iter()
+            .filter(|(name, _)| name.starts_with(&prefix))
+            .copied()
+            .collect();
+        if matches.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let mono = theme.mono_font_family.clone();
+        let mut list = div()
+            .id("completions")
+            .v_flex()
+            .max_h(px(240.))
+            .overflow_y_scroll();
+        for (name, desc) in matches {
+            let fill = name.to_string();
+            let active = name == value;
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("comp-{name}")))
+                    .cursor_pointer()
+                    .h_flex()
+                    .justify_between()
+                    .gap_4()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .when(active, |s| s.bg(theme.muted))
+                    .hover(|s| s.bg(theme.muted))
+                    .child(div().font_family(mono.clone()).child(name))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(desc),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.completing = true;
+                        this.input
+                            .update(cx, |state, cx| state.set_value(&fill, window, cx));
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(
+            div()
+                .mx_3()
+                .p_1()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .text_sm()
+                .child(list)
                 .into_any_element(),
         )
     }
@@ -1384,6 +1635,7 @@ impl Render for ChatView {
             .relative()
             .size_full()
             .bg(background)
+            .on_action(cx.listener(Self::accept_completion))
             .child(
                 div()
                     .id("transcript")
@@ -1393,6 +1645,7 @@ impl Render for ChatView {
                     .p_4()
                     .child(div().v_flex().gap_2().children(items)),
             )
+            .children(self.render_completions(cx))
             .child(
                 div()
                     .h_flex()
