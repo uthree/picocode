@@ -46,6 +46,15 @@ fn main() -> anyhow::Result<()> {
 
     Application::new().run(move |cx: &mut App| {
         gpui_component::init(cx);
+        // Shift+Enter inserts a newline instead of submitting: route it to
+        // the input's Enter action flagged as secondary — the multi-line
+        // input inserts the newline either way, and the chat view only
+        // submits on a non-secondary PressEnter.
+        cx.bind_keys([gpui::KeyBinding::new(
+            "shift-enter",
+            gpui_component::input::Enter { secondary: true },
+            Some("Input"),
+        )]);
 
         let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
         let options = WindowOptions {

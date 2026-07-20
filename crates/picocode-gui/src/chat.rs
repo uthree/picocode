@@ -78,8 +78,11 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Type a message — Enter to send"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .auto_grow(1, 8)
+                .placeholder("Type a message — Enter to send, Shift+Enter for a newline")
+        });
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe_in(&input, window, Self::on_input_event)
             .detach();
@@ -284,7 +287,9 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let InputEvent::PressEnter { .. } = ev {
+        // Plain Enter submits; a secondary Enter (Shift+Enter, Cmd+Enter)
+        // keeps the newline the multi-line input just inserted.
+        if let InputEvent::PressEnter { secondary: false } = ev {
             self.submit(window, cx);
         }
     }
@@ -294,11 +299,14 @@ impl ChatView {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
+        // Clear even when only whitespace remains — the multi-line input
+        // inserts the newline before PressEnter arrives, and empty Enters
+        // must not accumulate blank lines.
+        self.input
+            .update(cx, |state, cx| state.set_value("", window, cx));
         if text.is_empty() {
             return;
         }
-        self.input
-            .update(cx, |state, cx| state.set_value("", window, cx));
 
         match text.as_str() {
             "/clear" => {
