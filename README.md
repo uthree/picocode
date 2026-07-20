@@ -198,14 +198,18 @@ each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 ```
 src/
   main.rs      — entry point (+ --smoke headless debug mode)
-  config.rs    — CLI args, config file, approval rules
+  config/      — CLI args and config file (mod), permission modes and
+                 approval rules (rules), web-search settings (search)
   app.rs       — application state and event loop
-  ui.rs        — ratatui rendering (transcript / input / status bar / approval modal)
+  ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
+  input.rs     — input thread, paste detection, input-box cursor math
+  history.rs   — shell-style ↑/↓ input history
   agent.rs     — rig agent construction and the streaming worker
   approval.rs  — approval gate for destructive tools (rig AgentHook)
   highlight.rs — syntax highlighting (syntect) and line diffs (similar)
   markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
   models.rs    — provider model-list queries backing /model
+  session.rs   — session autosave/load backing /resume
   state.rs     — per-project persisted state (last-used model)
   tools/       — built-in tool implementations
 ```
