@@ -8,6 +8,7 @@
 mod assets;
 mod chat;
 mod math;
+mod settings;
 mod tex;
 
 // UI strings live in locales/{en,ja}.yml; the locale is picked from the

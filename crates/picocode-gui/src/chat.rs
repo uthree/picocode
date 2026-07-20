@@ -21,6 +21,8 @@ use picocode_core::event::{AgentEvent, WorkerCmd};
 use picocode_core::transcript::{Entry, EntryKind, diff_lines};
 use picocode_core::{agent, approval, models, session, state};
 
+use crate::settings::{self, GuiSettings, ThemeSetting};
+
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
 
@@ -57,20 +59,12 @@ enum Menu {
     Model,
 }
 
-/// Color-theme preference (`/config`): follow the system, or force one.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ThemePref {
-    System,
-    Light,
-    Dark,
-}
-
-impl ThemePref {
+impl ThemeSetting {
     fn label(self) -> String {
         match self {
-            ThemePref::System => t!("theme_system").to_string(),
-            ThemePref::Light => t!("theme_light").to_string(),
-            ThemePref::Dark => t!("theme_dark").to_string(),
+            ThemeSetting::System => t!("theme_system").to_string(),
+            ThemeSetting::Light => t!("theme_light").to_string(),
+            ThemeSetting::Dark => t!("theme_dark").to_string(),
         }
     }
 }
@@ -117,7 +111,10 @@ pub struct ChatView {
     /// Show reasoning entries in full, or collapsed to one line.
     show_reasoning: bool,
     /// Color theme: follow the system (default), or forced light/dark.
-    theme_pref: ThemePref,
+    theme_pref: ThemeSetting,
+    /// Sparse overlay of `/config` values the user changed, persisted to
+    /// disk and re-applied on the next start.
+    saved: GuiSettings,
     /// Completion prefix locked at the first Tab press, so cycling keeps
     /// the full candidate list even after the input holds a full match.
     comp_prefix: Option<String>,
@@ -162,7 +159,7 @@ impl ChatView {
                 let this = cx.entity().downgrade();
                 move |window, cx| {
                     if let Some(this) = this.upgrade()
-                        && this.read(cx).theme_pref == ThemePref::System
+                        && this.read(cx).theme_pref == ThemeSetting::System
                     {
                         Theme::sync_system_appearance(Some(window), cx);
                     }
@@ -186,6 +183,35 @@ impl ChatView {
         })
         .detach();
 
+        // Re-apply the settings saved by earlier runs' /config changes
+        // (a sparse overlay — untouched values keep following the config
+        // file). The runtime handles are shared with the worker, so setting
+        // them here is enough.
+        let saved = settings::load();
+        if let Some(v) = saved.max_turns {
+            cfg.max_turns.set(v);
+        }
+        if let Some(v) = saved.bash_timeout {
+            cfg.bash_timeout.set(v);
+        }
+        if let Some(v) = saved.read_max_lines {
+            cfg.read_max_lines.set(v);
+        }
+        if let Some(v) = saved.read_max_line_bytes {
+            cfg.read_max_line_bytes.set(v);
+        }
+        if let Some(v) = saved.auto_compact {
+            cfg.auto_compact.set(v);
+        }
+        if let Some(p) = saved.search_provider {
+            cfg.search.set_provider(p);
+        }
+        if let Some(n) = saved.search_max_results {
+            cfg.search.set_max_results(n);
+        }
+        let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
+        Self::apply_theme(theme_pref, cx);
+
         let sessions_dir = session::sessions_dir(&cfg.root);
         let view = Self {
             cfg,
@@ -204,8 +230,9 @@ impl ChatView {
             sessions_dir,
             session_picker: None,
             settings_open: false,
-            show_reasoning: true,
-            theme_pref: ThemePref::System,
+            show_reasoning: saved.show_reasoning.unwrap_or(true),
+            theme_pref,
+            saved,
             comp_prefix: None,
             completing: false,
             tokens_in: 0,
@@ -216,6 +243,14 @@ impl ChatView {
         };
         view.save_last_model();
         view
+    }
+
+    fn apply_theme(pref: ThemeSetting, cx: &mut Context<Self>) {
+        match pref {
+            ThemeSetting::System => Theme::sync_system_appearance(None, cx),
+            ThemeSetting::Light => Theme::change(ThemeMode::Light, None, cx),
+            ThemeSetting::Dark => Theme::change(ThemeMode::Dark, None, cx),
+        }
     }
 
     /// Remember the active model (best-effort) so the next start in this
@@ -555,7 +590,11 @@ impl ChatView {
 
     /// Cycle the theme preference and apply it.
     fn cycle_theme(&mut self, delta: i64, cx: &mut Context<Self>) {
-        const CYCLE: [ThemePref; 3] = [ThemePref::System, ThemePref::Light, ThemePref::Dark];
+        const CYCLE: [ThemeSetting; 3] = [
+            ThemeSetting::System,
+            ThemeSetting::Light,
+            ThemeSetting::Dark,
+        ];
         let i = CYCLE
             .iter()
             .position(|t| *t == self.theme_pref)
@@ -565,11 +604,8 @@ impl ChatView {
         } else {
             CYCLE[(i + 1) % CYCLE.len()]
         };
-        match self.theme_pref {
-            ThemePref::System => Theme::sync_system_appearance(None, cx),
-            ThemePref::Light => Theme::change(ThemeMode::Light, None, cx),
-            ThemePref::Dark => Theme::change(ThemeMode::Dark, None, cx),
-        }
+        self.saved.theme = Some(self.theme_pref);
+        Self::apply_theme(self.theme_pref, cx);
     }
 
     /// A `/config` row change. Every change applies immediately (max turns
@@ -589,29 +625,40 @@ impl ChatView {
                 };
                 self.cfg.mode.set(next);
             }
-            2 => self.show_reasoning = !self.show_reasoning,
+            2 => {
+                self.show_reasoning = !self.show_reasoning;
+                self.saved.show_reasoning = Some(self.show_reasoning);
+            }
             3 => {
                 let turns = self.cfg.max_turns.get() as i64 + delta * 10;
                 self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
+                self.saved.max_turns = Some(self.cfg.max_turns.get());
             }
             4 => {
                 let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
                 self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
+                self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
             }
             5 => {
                 let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
                 self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
+                self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
             }
             6 => {
                 let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
                 self.cfg
                     .read_max_line_bytes
                     .set(bytes.clamp(100, 5000) as u64);
+                self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
             }
-            7 => self.cfg.search.cycle_provider(delta),
+            7 => {
+                self.cfg.search.cycle_provider(delta);
+                self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
+            }
             8 => {
                 let n = self.cfg.search.snapshot().max_results as i64 + delta;
                 self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
+                self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
             // ±5% between 50 and 95; stepping below 50 turns it off.
             9 => {
@@ -624,6 +671,7 @@ impl ChatView {
                     (cur + 5).min(95)
                 };
                 self.cfg.auto_compact.set(next as u64);
+                self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
             10 => {
@@ -632,6 +680,9 @@ impl ChatView {
             }
             _ => {}
         }
+        // Persist every touched value (the mode and model rows change
+        // nothing in `saved`; rewriting the small file is harmless).
+        settings::save(&self.saved);
         cx.notify();
     }
 

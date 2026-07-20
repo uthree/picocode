@@ -54,7 +54,9 @@ pub fn sessions_dir(root: &Path) -> Option<PathBuf> {
 
 /// Base directory for picocode's data: `$XDG_DATA_HOME`, defaulting to
 /// `~/.local/share` (with `%USERPROFILE%` as the home on Windows).
-pub(crate) fn data_dir() -> Option<PathBuf> {
+/// Public so front ends can keep their own persisted files next to the
+/// sessions and state (e.g. the GUI's settings).
+pub fn data_dir() -> Option<PathBuf> {
     match std::env::var_os("XDG_DATA_HOME") {
         Some(x) => Some(PathBuf::from(x)),
         None => Some(crate::config::home_dir()?.join(".local/share")),

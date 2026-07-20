@@ -36,7 +36,13 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
 - **Theme**: follows the system light/dark appearance live by default; the
-  `/config` theme row forces light or dark for the session.
+  `/config` theme row forces light or dark.
+- **Persistence**: `/config` changes are saved to
+  `$XDG_DATA_HOME/picocode/gui-settings.json` and re-applied on the next
+  start, as a sparse overlay — untouched values keep following
+  `picocode.toml`, a saved value wins over later config-file edits. The
+  permission mode is deliberately not persisted; the model is already
+  remembered per project.
 - **i18n**: UI strings localize to the system language (English and
   Japanese so far — `crates/picocode-gui/locales/*.yml`, via rust-i18n).
 

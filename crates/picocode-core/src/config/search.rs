@@ -1,12 +1,12 @@
 //! Web-search configuration: providers, the `[search]` file section,
 //! and the runtime-shared handle.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ----- web search -----------------------------------------------------------
 
 /// Web search backends selectable in the `[search]` config section.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SearchProvider {
     /// DuckDuckGo's HTML endpoint. No API key needed (default).
@@ -111,6 +111,14 @@ impl SearchHandle {
     }
 
     /// Step to the previous/next usable provider (`/config` ←/→).
+    /// Set the provider directly if its requirements are met (front ends
+    /// restoring a saved preference); unavailable providers are ignored.
+    pub fn set_provider(&self, provider: SearchProvider) {
+        if self.available_providers().contains(&provider) {
+            self.0.write().unwrap().provider = provider;
+        }
+    }
+
     pub fn cycle_provider(&self, delta: i64) {
         let choices = self.available_providers();
         let mut cfg = self.0.write().unwrap();
