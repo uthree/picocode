@@ -889,7 +889,7 @@ impl ChatView {
         } else {
             self.push(
                 EntryKind::Notice,
-                t!("mode_changed", mode = mode.label()).to_string(),
+                t!("mode_changed", mode = mode_name(mode)).to_string(),
             );
         }
         cx.notify();
@@ -1623,10 +1623,7 @@ impl ChatView {
         let search = self.cfg.search.snapshot();
         let rows: [(String, String); 11] = [
             (t!("row_theme").to_string(), self.theme_pref.label()),
-            (
-                t!("row_mode").to_string(),
-                self.cfg.mode.get().label().to_string(),
-            ),
+            (t!("row_mode").to_string(), mode_name(self.cfg.mode.get())),
             (
                 t!("row_reasoning").to_string(),
                 if self.show_reasoning {
@@ -1818,7 +1815,7 @@ impl ChatView {
             .bg(mode_color(mode))
             .text_color(gpui::white())
             .hover(|s| s.opacity(0.85))
-            .child(mode.label().to_string())
+            .child(mode_name(mode))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Mode, cx)));
         let model_chip = div()
             .id("model-chip")
@@ -1879,7 +1876,7 @@ impl ChatView {
                     panel = panel.child(
                         menu_row(
                             SharedString::from(format!("mode-{}", mode.label())),
-                            mode.label(),
+                            mode_name(mode),
                             t!(desc).to_string(),
                             active,
                             theme,
@@ -2091,6 +2088,17 @@ fn tool_style(name: &str) -> (&'static str, gpui::Hsla) {
         _ => ("icons/wrench.svg", 0x8b949e),
     };
     (icon, gpui::rgb(rgb).into())
+}
+
+/// Localized display name for a permission mode (the technical /status
+/// and /permissions blocks keep the English names).
+fn mode_name(mode: Mode) -> String {
+    match mode {
+        Mode::ReadOnly => t!("mode_name_read_only").to_string(),
+        Mode::Edit => t!("mode_name_edit").to_string(),
+        Mode::Plan => t!("mode_name_plan").to_string(),
+        Mode::Bypass => t!("mode_name_bypass").to_string(),
+    }
 }
 
 /// Status-bar color per permission mode (mirrors the TUI's palette).
