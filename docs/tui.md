@@ -11,7 +11,7 @@ For setup, permissions and configuration, see the [README](../README.md).
 | `\` + `Enter` (or `Alt+Enter` / `Ctrl+J`) | Insert a newline (pasting multi-line text works too) |
 | `Tab` | Command completion (popup appears on `/`; repeat to cycle) |
 | `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
-| `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input |
+| `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input; at the top/bottom line, recall previously submitted messages (shell-style input history) |
 | `y` / `n` | Approve / deny a tool call |
 | `a` | Approve and don't ask again for similar calls this session (the dialog shows the allow rule it adds) |
 | `Esc` | Stop the generation in progress, or a running `!` shell command (the process is killed) |
@@ -63,6 +63,11 @@ on macOS ones).
 
 - **Multi-line input**: the input box grows with the text (up to 8 lines);
   `↑`/`↓` move between lines, plain `Enter` sends.
+- **Input history**: `↑` at the input's first line recalls previously
+  submitted messages (newest first), `↓` at the last line walks forward
+  again — past the newest entry, the unsubmitted text you were typing is
+  restored. Editing a recalled message makes it the current input, like in
+  a shell. The history is per run and consecutive duplicates collapse.
 - **Paste handling**: pasting multi-line text inserts it as one block — via
   bracketed paste, or, on terminals without it, by treating a burst of
   simultaneous keystrokes around an Enter as a paste instead of a

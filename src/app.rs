@@ -133,6 +133,68 @@ pub struct ModelPicker {
     pub selected: usize,
 }
 
+/// Shell-style input history: `↑`/`↓` in the input box recall previously
+/// submitted messages.
+#[derive(Default)]
+pub struct InputHistory {
+    entries: Vec<String>,
+    /// Position while browsing (None = not browsing).
+    index: Option<usize>,
+    /// The unsubmitted input stashed when browsing starts, restored when
+    /// stepping forward past the newest entry.
+    stash: String,
+}
+
+impl InputHistory {
+    /// Record a submitted message (consecutive duplicates collapse).
+    pub fn push(&mut self, text: &str) {
+        if self.entries.last().map(String::as_str) != Some(text) {
+            self.entries.push(text.to_string());
+        }
+        self.index = None;
+    }
+
+    pub fn browsing(&self) -> bool {
+        self.index.is_some()
+    }
+
+    /// An edit ends browsing; the recalled text stays in the input.
+    pub fn stop(&mut self) {
+        self.index = None;
+    }
+
+    /// Step to the previous (older) entry; `current` is stashed when
+    /// browsing starts. None = already at the oldest entry (or no history).
+    pub fn prev(&mut self, current: &str) -> Option<String> {
+        let i = match self.index {
+            None if !self.entries.is_empty() => {
+                self.stash = current.to_string();
+                self.entries.len() - 1
+            }
+            Some(i) if i > 0 => i - 1,
+            _ => return None,
+        };
+        self.index = Some(i);
+        Some(self.entries[i].clone())
+    }
+
+    /// Step to the next (newer) entry; past the newest one the stashed
+    /// input is restored. None = not browsing.
+    pub fn next(&mut self) -> Option<String> {
+        match self.index {
+            Some(i) if i + 1 < self.entries.len() => {
+                self.index = Some(i + 1);
+                Some(self.entries[i + 1].clone())
+            }
+            Some(_) => {
+                self.index = None;
+                Some(std::mem::take(&mut self.stash))
+            }
+            None => None,
+        }
+    }
+}
+
 /// State of the `/config` settings dialog. The rows are fixed; the values
 /// are read live from the app so external changes (Shift+Tab, Ctrl+T) show
 /// up while the dialog is open.
@@ -173,6 +235,8 @@ pub struct App {
     /// Filter prefix locked at the first Tab / arrow press, so cycling keeps
     /// the full candidate list even after the input is filled with a match.
     comp_prefix: Option<String>,
+    /// Shell-style `↑`/`↓` recall of previously submitted messages.
+    input_history: InputHistory,
     /// Number of prompts submitted but not yet completed.
     pub running: usize,
     /// True while a completion request is in flight but no tokens have
@@ -242,6 +306,7 @@ impl App {
             show_reasoning: false,
             comp_selected: 0,
             comp_prefix: None,
+            input_history: InputHistory::default(),
             running: 0,
             waiting: false,
             spinner: 0,
@@ -537,14 +602,17 @@ impl App {
                     self.complete(true);
                 }
             }
-            // Arrows drive the completion popup when it's open; in a
-            // multi-line input they move the cursor between lines.
+            // Arrows drive the completion popup when it's open; otherwise
+            // they move between lines in a multi-line input and, at its top
+            // or bottom line, recall previously submitted messages
+            // (shell-style history). While browsing the history, arrows keep
+            // browsing even when a recalled command matches the popup.
             KeyCode::Up | KeyCode::Down => {
                 let up = key.code == KeyCode::Up;
-                if !self.completions().is_empty() {
+                if !self.input_history.browsing() && !self.completions().is_empty() {
                     self.move_completion(up);
-                } else if self.input.contains('\n') {
-                    self.move_input_line(up);
+                } else {
+                    self.move_line_or_history(up);
                 }
             }
             KeyCode::Char(c) if !ctrl => {
@@ -589,6 +657,7 @@ impl App {
         if text.is_empty() {
             return;
         }
+        self.input_history.push(&text);
         self.input.clear();
         self.cursor = 0;
         self.reset_completion();
@@ -1096,6 +1165,35 @@ impl App {
     fn reset_completion(&mut self) {
         self.comp_selected = 0;
         self.comp_prefix = None;
+        // Called on every edit — an edit also ends history browsing (the
+        // recalled text stays and becomes the current input).
+        self.input_history.stop();
+    }
+
+    /// `↑`/`↓` outside the completion popup: move between input lines when
+    /// the cursor can, otherwise step through the submitted-message history.
+    fn move_line_or_history(&mut self, up: bool) {
+        let (row, _) = line_col(&self.input, self.cursor);
+        let rows = self.input.split('\n').count();
+        if up && row > 0 {
+            self.move_input_line(true);
+        } else if !up && row + 1 < rows {
+            self.move_input_line(false);
+        } else {
+            let recalled = if up {
+                self.input_history.prev(&self.input)
+            } else {
+                self.input_history.next()
+            };
+            if let Some(text) = recalled {
+                self.cursor = text.chars().count();
+                self.input = text;
+                // Not reset_completion(): that would end the browsing that
+                // just moved here.
+                self.comp_selected = 0;
+                self.comp_prefix = None;
+            }
+        }
     }
 
     /// Shift+Tab: cycle the permission mode. Takes effect immediately, even
@@ -1924,6 +2022,41 @@ pub fn cursor_at(text: &str, row: usize, col: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_history_recalls_like_a_shell() {
+        let mut h = InputHistory::default();
+        // Nothing to recall yet.
+        assert_eq!(h.prev("typing"), None);
+        assert_eq!(h.next(), None);
+
+        h.push("first");
+        h.push("second");
+        h.push("second"); // consecutive duplicate collapses
+        h.push("third");
+
+        // ↑ stashes the in-progress input and walks back…
+        assert_eq!(h.prev("typing").as_deref(), Some("third"));
+        assert_eq!(h.prev("ignored").as_deref(), Some("second"));
+        assert_eq!(h.prev("ignored").as_deref(), Some("first"));
+        // …and stops at the oldest entry.
+        assert_eq!(h.prev("ignored"), None);
+        assert!(h.browsing());
+
+        // ↓ walks forward and restores the stashed input past the newest.
+        assert_eq!(h.next().as_deref(), Some("second"));
+        assert_eq!(h.next().as_deref(), Some("third"));
+        assert_eq!(h.next().as_deref(), Some("typing"));
+        assert!(!h.browsing());
+        assert_eq!(h.next(), None);
+
+        // An edit ends browsing; the next ↑ starts from the newest again.
+        assert_eq!(h.prev("").as_deref(), Some("third"));
+        h.stop();
+        assert!(!h.browsing());
+        assert_eq!(h.prev("edited").as_deref(), Some("third"));
+        assert_eq!(h.next().as_deref(), Some("edited"));
+    }
 
     #[test]
     fn line_col_tracks_newlines() {
