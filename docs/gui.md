@@ -1,0 +1,47 @@
+# GUI reference
+
+An experimental native front end built on [gpui](https://gpui.rs) and
+[gpui-component](https://github.com/longbridge/gpui-component), running the
+same engine (`picocode-core`) as the TUI.
+
+```sh
+cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
+```
+
+## Features
+
+- **Chat**: streaming replies rendered as markdown with syntax-highlighted
+  code blocks; reasoning shown dimmed (collapsible via `/config`); tool
+  calls with per-tool icons and accent colors, outputs as attached blocks;
+  colored `edit_file` line diffs in the transcript and the approval dialog.
+- **TeX math**: display equations (`$$…$$`, `\[…\]`) are typeset by
+  [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color;
+  inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).
+- **Approvals**: y/n/always dialog for destructive tools (bash commands
+  shown bare, edits as diffs), plan-approval dialog for `submit_plan`.
+- **Status bar**: clickable mode chip (left) opening the mode menu;
+  context-usage gauge colored by pressure and a clickable model chip
+  (right) opening the model menu — configured `[[models]]` entries plus
+  whatever the provider reports serving, with the conversation carried
+  over on switch.
+- **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
+  Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
+  slash-command completion popup — Tab fills and cycles, click fills.
+- **Copying**: assistant text is selectable (Cmd+C copies the selection),
+  every code block has a copy button in its top-right corner, and
+  right-clicking any transcript entry opens a "Copy text" menu.
+- **Commands**: `/clear`, `/compact`, `/model`, `/resume`, the mode
+  commands, `/config` (settings dialog with the same rows as the TUI),
+  `/status`, `/permissions`, `/quit`.
+- **Sessions**: autosaved after each turn to the same per-project store as
+  the TUI, so either front end can resume the other's conversations.
+
+## Build notes
+
+- gpui is built with its `runtime_shaders` feature, so a full Xcode
+  install (the `metal` CLI) is not required on macOS.
+- `--smoke <prompt>` auto-sends the prompt once the window opens — a debug
+  aid that exercises the whole worker ⇄ view bridge on launch.
+- The icons gpui-component references are embedded in
+  `crates/picocode-gui/src/assets.rs` (Lucide, ISC license); add new
+  entries there when using more icon-bearing components.

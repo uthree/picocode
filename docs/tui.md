@@ -1,7 +1,8 @@
 # TUI reference
 
 Key bindings, slash commands, and the finer points of the picocode TUI.
-For setup, permissions and configuration, see the [README](../README.md).
+For setup see the [README](../README.md); for models, permissions and the
+config file see [configuration.md](configuration.md).
 
 ## Keys
 
