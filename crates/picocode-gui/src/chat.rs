@@ -26,7 +26,7 @@ use crate::settings::{self, GuiSettings, ThemeSetting};
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
 
-gpui::actions!(picocode_gui, [AcceptCompletion]);
+gpui::actions!(picocode_gui, [AcceptCompletion, SubmitPrompt]);
 
 /// Slash commands the GUI supports, paired with the locale key of their
 /// description for the completion popup.
@@ -794,8 +794,10 @@ impl ChatView {
         cx: &mut Context<Self>,
     ) {
         match ev {
-            // Plain Enter submits; a secondary Enter (Shift+Enter, Cmd+Enter)
-            // keeps the newline the multi-line input just inserted.
+            // Plain Enter is rebound to SubmitPrompt and never reaches the
+            // input (see main.rs), so this only fires for stray paths; a
+            // secondary Enter (Shift+Enter, Cmd+Enter) keeps the newline the
+            // multi-line input inserted.
             InputEvent::PressEnter { secondary: false } => self.submit(window, cx),
             // Typing anything resets the Tab-cycling anchor (unless the
             // change came from Tab itself filling the input).
@@ -809,6 +811,14 @@ impl ChatView {
             }
             _ => {}
         }
+    }
+
+    /// Plain Enter in the input: submit. Bound directly to this action so
+    /// the multi-line input never inserts a newline at the cursor first
+    /// (its own Enter handling inserts, then emits PressEnter — which left
+    /// a stray newline in the submitted text when the cursor sat mid-line).
+    fn on_submit_prompt(&mut self, _: &SubmitPrompt, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit(window, cx);
     }
 
     /// Tab in the input: fill the first matching slash command, or cycle
@@ -859,9 +869,8 @@ impl ChatView {
             return;
         }
         let text = self.input.read(cx).value().trim().to_string();
-        // Clear even when only whitespace remains — the multi-line input
-        // inserts the newline before PressEnter arrives, and empty Enters
-        // must not accumulate blank lines.
+        // Clear even when only whitespace remains, so empty submits can't
+        // leave blank lines behind.
         self.input
             .update(cx, |state, cx| state.set_value("", window, cx));
         if text.is_empty() {
@@ -2359,6 +2368,7 @@ impl Render for ChatView {
             .size_full()
             .bg(background)
             .on_action(cx.listener(Self::accept_completion))
+            .on_action(cx.listener(Self::on_submit_prompt))
             .child(
                 div()
                     .id("transcript")

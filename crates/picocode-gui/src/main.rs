@@ -66,18 +66,19 @@ fn main() -> anyhow::Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
-            // Shift+Enter inserts a newline instead of submitting: route it to
-            // the input's Enter action flagged as secondary — the multi-line
-            // input inserts the newline either way, and the chat view only
-            // submits on a non-secondary PressEnter.
+            // Registered after gpui_component::init, so these win over the
+            // input's own bindings. Plain Enter goes straight to the chat
+            // view's submit action — bypassing the input's Enter handling,
+            // which would first insert a newline at the cursor. Shift+Enter
+            // keeps the input's secondary Enter (inserts the newline), and
+            // Tab cycles the slash-command completion instead of indenting.
             cx.bind_keys([
+                gpui::KeyBinding::new("enter", chat::SubmitPrompt, Some("Input")),
                 gpui::KeyBinding::new(
                     "shift-enter",
                     gpui_component::input::Enter { secondary: true },
                     Some("Input"),
                 ),
-                // Tab cycles the slash-command completion instead of indenting
-                // (registered after gpui_component::init, so it wins).
                 gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
             ]);
 
