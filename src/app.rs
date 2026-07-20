@@ -12,14 +12,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::config::Config;
 use crate::event::{AgentEvent, WorkerCmd};
+use crate::history::InputHistory;
+use crate::input::{cursor_at, expand_pastes, line_col, paste_placeholder, spawn_input_thread};
 use crate::session;
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
-/// Pastes at least this many lines (or chars) long are collapsed into a
-/// `[Pasted text #n +N lines]` placeholder in the input box.
-const PASTE_COLLAPSE_LINES: usize = 6;
-const PASTE_COLLAPSE_CHARS: usize = 500;
 
 pub const LOGO: &str = r"            ███                                          █████
            ░░░                                          ░░███
@@ -131,68 +129,6 @@ pub struct ModelChoice {
 pub struct ModelPicker {
     pub items: Vec<ModelChoice>,
     pub selected: usize,
-}
-
-/// Shell-style input history: `↑`/`↓` in the input box recall previously
-/// submitted messages.
-#[derive(Default)]
-pub struct InputHistory {
-    entries: Vec<String>,
-    /// Position while browsing (None = not browsing).
-    index: Option<usize>,
-    /// The unsubmitted input stashed when browsing starts, restored when
-    /// stepping forward past the newest entry.
-    stash: String,
-}
-
-impl InputHistory {
-    /// Record a submitted message (consecutive duplicates collapse).
-    pub fn push(&mut self, text: &str) {
-        if self.entries.last().map(String::as_str) != Some(text) {
-            self.entries.push(text.to_string());
-        }
-        self.index = None;
-    }
-
-    pub fn browsing(&self) -> bool {
-        self.index.is_some()
-    }
-
-    /// An edit ends browsing; the recalled text stays in the input.
-    pub fn stop(&mut self) {
-        self.index = None;
-    }
-
-    /// Step to the previous (older) entry; `current` is stashed when
-    /// browsing starts. None = already at the oldest entry (or no history).
-    pub fn prev(&mut self, current: &str) -> Option<String> {
-        let i = match self.index {
-            None if !self.entries.is_empty() => {
-                self.stash = current.to_string();
-                self.entries.len() - 1
-            }
-            Some(i) if i > 0 => i - 1,
-            _ => return None,
-        };
-        self.index = Some(i);
-        Some(self.entries[i].clone())
-    }
-
-    /// Step to the next (newer) entry; past the newest one the stashed
-    /// input is restored. None = not browsing.
-    pub fn next(&mut self) -> Option<String> {
-        match self.index {
-            Some(i) if i + 1 < self.entries.len() => {
-                self.index = Some(i + 1);
-                Some(self.entries[i + 1].clone())
-            }
-            Some(_) => {
-                self.index = None;
-                Some(std::mem::take(&mut self.stash))
-            }
-            None => None,
-        }
-    }
 }
 
 /// State of the `/config` settings dialog. The rows are fixed; the values
@@ -717,11 +653,7 @@ impl App {
             "/compact" => {
                 self.close_blocks();
                 if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
-                    self.running += 1;
-                    self.waiting = true;
-                    self.follow = true;
-                    self.turn_out = 0;
-                    self.delta_est = 0;
+                    self.begin_turn();
                     self.push(EntryKind::Notice, "Compacting conversation…".to_string());
                 } else {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
@@ -752,6 +684,34 @@ impl App {
         }
     }
 
+    /// Bookkeeping for a run the worker accepted (or will accept): the
+    /// status bar switches to waiting and the per-turn output counters
+    /// restart. Balanced by `TurnComplete`.
+    fn begin_turn(&mut self) {
+        self.running += 1;
+        self.waiting = true;
+        self.follow = true;
+        self.turn_out = 0;
+        self.delta_est = 0;
+    }
+
+    /// Queue a worker command from sync code after `begin_turn()`: sent in a
+    /// task; a dead worker surfaces an error and closes the turn.
+    fn send_worker_bg(&self, cmd: WorkerCmd) {
+        let cmd_tx = self.cmd_tx.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            if cmd_tx.send(cmd).await.is_err() {
+                let _ = event_tx
+                    .send(AgentEvent::Error(
+                        "The agent worker has stopped".to_string(),
+                    ))
+                    .await;
+                let _ = event_tx.send(AgentEvent::TurnComplete).await;
+            }
+        });
+    }
+
     /// Send a user prompt to the agent worker. `display` is what the
     /// transcript shows (paste placeholders kept), `prompt` what the model
     /// receives (pastes expanded).
@@ -761,11 +721,7 @@ impl App {
         self.auto_compact_tried = false;
         self.push(EntryKind::User, display);
         if self.cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_ok() {
-            self.running += 1;
-            self.waiting = true;
-            self.follow = true;
-            self.turn_out = 0;
-            self.delta_est = 0;
+            self.begin_turn();
         } else {
             self.push(EntryKind::Error, "The agent worker has stopped".to_string());
         }
@@ -1464,11 +1420,7 @@ impl App {
         }
         self.auto_compact_tried = true;
         self.close_blocks();
-        self.running += 1;
-        self.waiting = true;
-        self.follow = true;
-        self.turn_out = 0;
-        self.delta_est = 0;
+        self.begin_turn();
         self.push(
             EntryKind::Notice,
             format!(
@@ -1477,18 +1429,7 @@ impl App {
                 pct.round()
             ),
         );
-        let cmd_tx = self.cmd_tx.clone();
-        let event_tx = self.event_tx.clone();
-        tokio::spawn(async move {
-            if cmd_tx.send(WorkerCmd::Compact).await.is_err() {
-                let _ = event_tx
-                    .send(AgentEvent::Error(
-                        "The agent worker has stopped".to_string(),
-                    ))
-                    .await;
-                let _ = event_tx.send(AgentEvent::TurnComplete).await;
-            }
-        });
+        self.send_worker_bg(WorkerCmd::Compact);
     }
 
     /// Current permission mode, for the status bar.
@@ -1696,29 +1637,13 @@ impl App {
                 // Prompt the model with the result so it reacts on its own
                 // (this also records the result in the history). Runs after
                 // the current turn if one is streaming.
-                self.running += 1;
-                self.waiting = true;
-                self.follow = true;
-                self.turn_out = 0;
-                self.delta_est = 0;
-                let prompt = format!(
+                self.begin_turn();
+                self.send_worker_bg(WorkerCmd::Prompt(format!(
                     "The bash command that was moved to background job #{id} has \
                      finished:\n$ {command}\n\nOutput:\n{output}\n\n\
                      Briefly report the result to the user and continue anything \
                      that was waiting on it."
-                );
-                let cmd_tx = self.cmd_tx.clone();
-                let event_tx = self.event_tx.clone();
-                tokio::spawn(async move {
-                    if cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_err() {
-                        let _ = event_tx
-                            .send(AgentEvent::Error(
-                                "The agent worker has stopped".to_string(),
-                            ))
-                            .await;
-                        let _ = event_tx.send(AgentEvent::TurnComplete).await;
-                    }
-                });
+                )));
             }
             AgentEvent::Cancelled => {
                 self.waiting = false;
@@ -1917,102 +1842,6 @@ impl App {
     }
 }
 
-fn spawn_input_thread() -> mpsc::Receiver<Event> {
-    let (tx, rx) = mpsc::channel(64);
-    std::thread::spawn(move || {
-        use ratatui::crossterm::event;
-        // Key releases (reported on Windows) are ignored by the app and
-        // would break the paste-run detection below, so drop them here.
-        let release = |ev: &Event| matches!(ev, Event::Key(k) if k.kind == KeyEventKind::Release);
-        loop {
-            let Ok(first) = event::read() else {
-                return;
-            };
-            if release(&first) {
-                continue;
-            }
-            // Drain everything already queued: a clipboard paste delivers its
-            // characters in one burst, while human keystrokes arrive one per
-            // read. The batch lets `coalesce_paste` tell the two apart on
-            // terminals without bracketed paste.
-            let mut batch = vec![first];
-            while batch.len() < 4096 && event::poll(Duration::ZERO).unwrap_or(false) {
-                match event::read() {
-                    Ok(ev) if release(&ev) => {}
-                    Ok(ev) => batch.push(ev),
-                    Err(_) => return,
-                }
-            }
-            for ev in coalesce_paste(batch) {
-                if tx.blocking_send(ev).is_err() {
-                    return;
-                }
-            }
-        }
-    });
-    rx
-}
-
-/// The text a key event would type, if any: plain character, Enter and Tab
-/// presses, and bracketed-paste events.
-fn textual(ev: &Event) -> Option<String> {
-    match ev {
-        Event::Key(k) if k.kind == KeyEventKind::Press => {
-            let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
-            match k.code {
-                KeyCode::Char(c) if plain => Some(c.to_string()),
-                KeyCode::Enter if plain => Some("\n".to_string()),
-                KeyCode::Tab if plain => Some("\t".to_string()),
-                _ => None,
-            }
-        }
-        Event::Paste(s) => Some(s.clone()),
-        _ => None,
-    }
-}
-
-/// Paste detection for terminals without bracketed paste: within a burst of
-/// simultaneously-arriving events, a run of plain text keys with a newline
-/// *inside* it can only be a multi-line paste. Such runs are replaced by a
-/// single `Event::Paste` so the newlines are inserted instead of each Enter
-/// submitting a message. Runs whose only newlines trail at the end (text
-/// then Enter — e.g. keystrokes bunched up by a laggy connection, or a
-/// scripted command) replay as normal key presses so the Enter still
-/// submits. Anything else passes through unchanged.
-fn coalesce_paste(batch: Vec<Event>) -> Vec<Event> {
-    if batch.len() < 2 {
-        return batch;
-    }
-
-    fn flush(out: &mut Vec<Event>, run: &mut Vec<Event>, text: &mut String) {
-        if text.trim_end_matches('\n').contains('\n') {
-            run.clear();
-            out.push(Event::Paste(std::mem::take(text)));
-        } else {
-            out.append(run);
-            text.clear();
-        }
-    }
-
-    let mut out: Vec<Event> = Vec::new();
-    let mut run: Vec<Event> = Vec::new();
-    let mut text = String::new();
-    for ev in batch {
-        match textual(&ev) {
-            Some(t) => {
-                text.push_str(&t);
-                run.push(ev);
-            }
-            None => {
-                flush(&mut out, &mut run, &mut text);
-                out.push(ev);
-            }
-        }
-    }
-    flush(&mut out, &mut run, &mut text);
-    out
-}
-
 /// Collapse a JSON args string into a single display line.
 fn compact_one_line(s: &str, max_chars: usize) -> String {
     let s: String = s.chars().map(|c| if c == '\n' { '␤' } else { c }).collect();
@@ -2033,44 +1862,6 @@ fn clamp_lines(s: &str, max: usize) -> String {
         out.push_str(&format!("\n… (+{} lines)", lines.len() - max));
         out
     }
-}
-
-/// Placeholder for the n-th pasted block, or None when the paste is short
-/// enough to go into the input verbatim.
-fn paste_placeholder(text: &str, n: usize) -> Option<String> {
-    let lines = text.lines().count().max(1);
-    if lines < PASTE_COLLAPSE_LINES && text.chars().count() < PASTE_COLLAPSE_CHARS {
-        return None;
-    }
-    let plural = if lines == 1 { "line" } else { "lines" };
-    Some(format!("[Pasted text #{n} +{lines} {plural}]"))
-}
-
-/// Replace every paste placeholder in a submitted message with its full text.
-/// Placeholders the user edited no longer match and are sent as-is.
-fn expand_pastes(text: &str, pasted: &[(String, String)]) -> String {
-    let mut out = text.to_string();
-    for (placeholder, content) in pasted {
-        if out.contains(placeholder.as_str()) {
-            out = out.replace(placeholder.as_str(), content);
-        }
-    }
-    out
-}
-
-/// (row, column) of a char cursor within a multi-line string, in chars.
-pub fn line_col(text: &str, cursor: usize) -> (usize, usize) {
-    let mut row = 0;
-    let mut col = 0;
-    for c in text.chars().take(cursor) {
-        if c == '\n' {
-            row += 1;
-            col = 0;
-        } else {
-            col += 1;
-        }
-    }
-    (row, col)
 }
 
 /// Rows for the `/model` dialog: the configured `[[models]]` entries first,
@@ -2114,79 +1905,9 @@ fn model_choices(
     items
 }
 
-/// Char cursor for a (row, column) position, clamping the column to the
-/// line's length (used by Up/Down in the input box).
-pub fn cursor_at(text: &str, row: usize, col: usize) -> usize {
-    let mut cursor = 0;
-    for (i, line) in text.split('\n').enumerate() {
-        let len = line.chars().count();
-        if i == row {
-            return cursor + col.min(len);
-        }
-        cursor += len + 1;
-    }
-    text.chars().count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn input_history_recalls_like_a_shell() {
-        let mut h = InputHistory::default();
-        // Nothing to recall yet.
-        assert_eq!(h.prev("typing"), None);
-        assert_eq!(h.next(), None);
-
-        h.push("first");
-        h.push("second");
-        h.push("second"); // consecutive duplicate collapses
-        h.push("third");
-
-        // ↑ stashes the in-progress input and walks back…
-        assert_eq!(h.prev("typing").as_deref(), Some("third"));
-        assert_eq!(h.prev("ignored").as_deref(), Some("second"));
-        assert_eq!(h.prev("ignored").as_deref(), Some("first"));
-        // …and stops at the oldest entry.
-        assert_eq!(h.prev("ignored"), None);
-        assert!(h.browsing());
-
-        // ↓ walks forward and restores the stashed input past the newest.
-        assert_eq!(h.next().as_deref(), Some("second"));
-        assert_eq!(h.next().as_deref(), Some("third"));
-        assert_eq!(h.next().as_deref(), Some("typing"));
-        assert!(!h.browsing());
-        assert_eq!(h.next(), None);
-
-        // An edit ends browsing; the next ↑ starts from the newest again.
-        assert_eq!(h.prev("").as_deref(), Some("third"));
-        h.stop();
-        assert!(!h.browsing());
-        assert_eq!(h.prev("edited").as_deref(), Some("third"));
-        assert_eq!(h.next().as_deref(), Some("edited"));
-    }
-
-    #[test]
-    fn line_col_tracks_newlines() {
-        assert_eq!(line_col("abc", 2), (0, 2));
-        assert_eq!(line_col("ab\ncd", 3), (1, 0));
-        assert_eq!(line_col("ab\ncd", 5), (1, 2));
-        assert_eq!(line_col("", 0), (0, 0));
-        // Multi-byte chars count as one column.
-        assert_eq!(line_col("あい\nう", 4), (1, 1));
-    }
-
-    #[test]
-    fn cursor_at_clamps_to_line_length() {
-        let text = "long line\nab\nmiddle";
-        assert_eq!(cursor_at(text, 0, 4), 4);
-        // Column clamped to the shorter line.
-        assert_eq!(cursor_at(text, 1, 7), 12);
-        assert_eq!(cursor_at(text, 2, 0), 13);
-        // A row past the end lands at the end of the text.
-        assert_eq!(cursor_at(text, 9, 0), text.chars().count());
-    }
 
     #[test]
     fn model_choices_merge_config_and_served_models() {
@@ -2236,101 +1957,5 @@ mod tests {
         );
         assert!(items.iter().any(|c| c.name == "qwen3:0.6b" && c.active));
         assert!(items.iter().all(|c| c.name != "local" || !c.active));
-    }
-
-    #[test]
-    fn long_pastes_collapse_into_placeholders() {
-        // Short pastes stay verbatim.
-        assert_eq!(paste_placeholder("one\ntwo", 1), None);
-        assert_eq!(paste_placeholder("short", 3), None);
-        // Collapse by line count…
-        let six_lines = "a\nb\nc\nd\ne\nf";
-        assert_eq!(
-            paste_placeholder(six_lines, 1).as_deref(),
-            Some("[Pasted text #1 +6 lines]")
-        );
-        // …or by size, even on a single line.
-        let big = "x".repeat(600);
-        assert_eq!(
-            paste_placeholder(&big, 2).as_deref(),
-            Some("[Pasted text #2 +1 line]")
-        );
-
-        let pasted = vec![
-            (
-                "[Pasted text #1 +6 lines]".to_string(),
-                six_lines.to_string(),
-            ),
-            ("[Pasted text #2 +1 line]".to_string(), big.clone()),
-        ];
-        // Expansion swaps every placeholder for its full text.
-        assert_eq!(
-            expand_pastes("see [Pasted text #1 +6 lines] end", &pasted),
-            format!("see {six_lines} end")
-        );
-        assert_eq!(
-            expand_pastes(
-                "[Pasted text #1 +6 lines]\n[Pasted text #2 +1 line]",
-                &pasted
-            ),
-            format!("{six_lines}\n{big}")
-        );
-        // Edited placeholders no longer match and are left alone.
-        assert_eq!(
-            expand_pastes("[Pasted text #1 +6 line]", &pasted),
-            "[Pasted text #1 +6 line]"
-        );
-    }
-
-    #[test]
-    fn paste_bursts_coalesce_into_paste_events() {
-        let key = |c: char| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-        let enter = || Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let up = || Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-
-        // A burst with a newline inside the text can only be a paste.
-        let out = coalesce_paste(vec![key('a'), key('b'), enter(), key('c')]);
-        assert!(matches!(&out[..], [Event::Paste(s)] if s.as_str() == "ab\nc"));
-
-        // A lone Enter keeps submitting.
-        let out = coalesce_paste(vec![enter()]);
-        assert!(matches!(&out[..], [Event::Key(_)]));
-
-        // A fast burst without newlines passes through unchanged.
-        let out = coalesce_paste(vec![key('h'), key('i')]);
-        assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|e| matches!(e, Event::Key(_))));
-
-        // Text with only a trailing Enter is a typed command bunched up in
-        // transit (or a scripted one) — it replays and still submits.
-        let out = coalesce_paste(vec![key('l'), key('s'), enter()]);
-        assert_eq!(out.len(), 3);
-        assert!(out.iter().all(|e| matches!(e, Event::Key(_))));
-
-        // Non-text events break the run.
-        let out = coalesce_paste(vec![key('a'), enter(), key('b'), up(), key('c')]);
-        assert_eq!(out.len(), 3);
-        assert!(matches!(&out[0], Event::Paste(s) if s.as_str() == "a\nb"));
-        assert!(matches!(&out[1], Event::Key(k) if k.code == KeyCode::Up));
-        assert!(matches!(&out[2], Event::Key(k) if k.code == KeyCode::Char('c')));
-
-        // A bracketed-paste event merges with keys from the same burst.
-        let out = coalesce_paste(vec![Event::Paste("x\ny".into()), key('z')]);
-        assert!(matches!(&out[..], [Event::Paste(s)] if s.as_str() == "x\nyz"));
-
-        // Modified keys (e.g. Ctrl+C in a burst) are never swallowed.
-        let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        let out = coalesce_paste(vec![key('a'), enter(), ctrl_c]);
-        assert_eq!(out.len(), 3);
-        assert!(matches!(&out[2], Event::Key(k) if k.modifiers == KeyModifiers::CONTROL));
-    }
-
-    #[test]
-    fn line_col_and_cursor_at_roundtrip() {
-        let text = "one\ntwo three\nよん";
-        for cursor in 0..=text.chars().count() {
-            let (row, col) = line_col(text, cursor);
-            assert_eq!(cursor_at(text, row, col), cursor);
-        }
     }
 }

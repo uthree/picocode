@@ -314,7 +314,7 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let (cursor_row, cursor_col) = crate::app::line_col(&app.input, app.cursor);
+    let (cursor_row, cursor_col) = crate::input::line_col(&app.input, app.cursor);
     let lines: Vec<&str> = app.input.split('\n').collect();
     // Vertical window: keep the cursor's row visible (relevant only when
     // there are more lines than the box's growth cap).
@@ -448,24 +448,60 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-// ----- session picker ------------------------------------------------------
+// ----- dialog building blocks ----------------------------------------------
 
-fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
-    let screen = f.area();
-    let width = screen.width.saturating_sub(6).clamp(30, 90);
-    // rows + borders + hint line, capped to the screen.
-    let height = (picker.sessions.len() as u16 + 3)
-        .min(screen.height.saturating_sub(4))
-        .max(5);
-    let area = Rect {
+/// Centered dialog rectangle: width clamped to `(min, max)`, height capped
+/// to the screen (both leave a margin).
+fn dialog_area(screen: Rect, (min_width, max_width): (u16, u16), height: u16) -> Rect {
+    let width = screen.width.saturating_sub(6).clamp(min_width, max_width);
+    let height = height.min(screen.height.saturating_sub(4));
+    Rect {
         x: screen.x + (screen.width.saturating_sub(width)) / 2,
         y: screen.y + (screen.height.saturating_sub(height)) / 2,
         width,
         height,
-    };
+    }
+}
 
-    let inner_width = width.saturating_sub(2) as usize;
-    let visible = height.saturating_sub(3) as usize;
+/// One row of a selection list: clipped to the width and rendered as the
+/// full-width selection bar when selected, in `style` otherwise.
+fn list_line(text: String, selected: bool, inner_width: usize, style: Style) -> Line<'static> {
+    let text: String = text.chars().take(inner_width).collect();
+    if selected {
+        Line::from(Span::styled(
+            format!("{text:<inner_width$}"),
+            Style::new().fg(Color::Black).bg(Color::Cyan),
+        ))
+    } else {
+        Line::from(Span::styled(text, style))
+    }
+}
+
+/// The dim key-hint line at the bottom of a dialog.
+fn hint_line(text: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.to_string(),
+        Style::new().fg(Color::DarkGray),
+    ))
+}
+
+/// Clear the area and render a bordered dialog around the lines.
+fn render_dialog(f: &mut Frame, title: &str, border: Color, area: Rect, lines: Vec<Line>) {
+    let block = Block::bordered()
+        .title(format!(" {title} "))
+        .border_style(Style::new().fg(border));
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+// ----- session picker ------------------------------------------------------
+
+fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
+    let screen = f.area();
+    // rows + borders + hint line, capped to the screen.
+    let area = dialog_area(screen, (30, 90), (picker.sessions.len() as u16 + 3).max(5));
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let visible = area.height.saturating_sub(3) as usize;
     // Keep the selection inside the window when the list is long.
     let offset = (picker.selected + 1).saturating_sub(visible);
 
@@ -488,81 +524,52 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
             s.messages,
             s.model,
         );
-        let text: String = text.chars().take(inner_width).collect();
-        lines.push(if i == picker.selected {
-            Line::from(Span::styled(
-                format!("{text:<inner_width$}"),
-                Style::new().fg(Color::Black).bg(Color::Cyan),
-            ))
-        } else {
-            Line::from(Span::raw(text))
-        });
+        lines.push(list_line(
+            text,
+            i == picker.selected,
+            inner_width,
+            Style::new(),
+        ));
     }
-    lines.push(Line::from(Span::styled(
-        " ↑↓ select · Enter resume · Esc cancel",
-        Style::new().fg(Color::DarkGray),
-    )));
-
-    let block = Block::bordered()
-        .title(" Resume session ")
-        .border_style(Style::new().fg(Color::Cyan));
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    lines.push(hint_line(" ↑↓ select · Enter resume · Esc cancel"));
+    render_dialog(f, "Resume session", Color::Cyan, area, lines);
 }
 
 // ----- model picker --------------------------------------------------------
 
 fn draw_model_picker(f: &mut Frame, picker: &ModelPicker) {
     let screen = f.area();
-    let width = screen.width.saturating_sub(6).clamp(30, 70);
     // rows + borders + hint line, capped to the screen.
-    let height = (picker.items.len().max(1) as u16 + 3)
-        .min(screen.height.saturating_sub(4))
-        .max(5);
-    let area = Rect {
-        x: screen.x + (screen.width.saturating_sub(width)) / 2,
-        y: screen.y + (screen.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
-
-    let inner_width = width.saturating_sub(2) as usize;
-    let visible = height.saturating_sub(3) as usize;
+    let area = dialog_area(
+        screen,
+        (30, 70),
+        (picker.items.len().max(1) as u16 + 3).max(5),
+    );
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let visible = area.height.saturating_sub(3) as usize;
     // Keep the selection inside the window when the list is long.
     let offset = (picker.selected + 1).saturating_sub(visible);
 
     let mut lines: Vec<Line> = Vec::new();
     if picker.items.is_empty() {
-        lines.push(Line::from(Span::styled(
-            " fetching the provider's model list…",
-            Style::new().fg(Color::DarkGray),
-        )));
+        lines.push(hint_line(" fetching the provider's model list…"));
     }
     for (i, item) in picker.items.iter().enumerate().skip(offset).take(visible) {
         let marker = if item.active { "▸" } else { " " };
-        let text = format!("{marker} {} — {}", item.name, item.detail);
-        let text: String = text.chars().take(inner_width).collect();
-        lines.push(if i == picker.selected {
-            Line::from(Span::styled(
-                format!("{text:<inner_width$}"),
-                Style::new().fg(Color::Black).bg(Color::Cyan),
-            ))
-        } else if item.active {
-            Line::from(Span::styled(text, Style::new().fg(Color::Cyan)))
+        let style = if item.active {
+            Style::new().fg(Color::Cyan)
         } else {
-            Line::from(Span::raw(text))
-        });
+            Style::new()
+        };
+        lines.push(list_line(
+            format!("{marker} {} — {}", item.name, item.detail),
+            i == picker.selected,
+            inner_width,
+            style,
+        ));
     }
-    lines.push(Line::from(Span::styled(
-        " ↑↓ select · Enter switch · Esc cancel",
-        Style::new().fg(Color::DarkGray),
-    )));
-
-    let block = Block::bordered()
-        .title(" Select model ")
-        .border_style(Style::new().fg(Color::Cyan));
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    lines.push(hint_line(" ↑↓ select · Enter switch · Esc cancel"));
+    render_dialog(f, "Select model", Color::Cyan, area, lines);
 }
 
 // ----- settings dialog -----------------------------------------------------
@@ -571,17 +578,10 @@ fn draw_settings(f: &mut Frame, app: &App) {
     let Some(menu) = &app.settings else { return };
     let rows = app.settings_rows();
     let screen = f.area();
-    let width = screen.width.saturating_sub(6).clamp(30, 60);
     // rows + borders + hint line.
-    let height = (rows.len() as u16 + 3).min(screen.height.saturating_sub(4));
-    let area = Rect {
-        x: screen.x + (screen.width.saturating_sub(width)) / 2,
-        y: screen.y + (screen.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
+    let area = dialog_area(screen, (30, 60), rows.len() as u16 + 3);
+    let inner_width = area.width.saturating_sub(2) as usize;
 
-    let inner_width = width.saturating_sub(2) as usize;
     let mut lines: Vec<Line> = Vec::new();
     for (i, (name, value, hint)) in rows.iter().enumerate() {
         let value = if *hint == "← →" {
@@ -590,13 +590,11 @@ fn draw_settings(f: &mut Frame, app: &App) {
             value.clone()
         };
         let text = format!(" {name:<SETTING_NAME_COL$} {value}");
-        let text: String = text.chars().take(inner_width).collect();
         lines.push(if i == menu.selected {
-            Line::from(Span::styled(
-                format!("{text:<inner_width$}"),
-                Style::new().fg(Color::Black).bg(Color::Cyan),
-            ))
+            list_line(text, true, inner_width, Style::new())
         } else {
+            // Unselected rows dim the name column.
+            let text: String = text.chars().take(inner_width).collect();
             Line::from(vec![
                 Span::styled(
                     format!(" {name:<SETTING_NAME_COL$} "),
@@ -606,16 +604,10 @@ fn draw_settings(f: &mut Frame, app: &App) {
             ])
         });
     }
-    lines.push(Line::from(Span::styled(
+    lines.push(hint_line(
         " ↑↓ select · ←→ change · Enter pick model · Esc close",
-        Style::new().fg(Color::DarkGray),
-    )));
-
-    let block = Block::bordered()
-        .title(" Settings (this session) ")
-        .border_style(Style::new().fg(Color::Cyan));
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    ));
+    render_dialog(f, "Settings (this session)", Color::Cyan, area, lines);
 }
 
 // ----- ask_user dialog -----------------------------------------------------
@@ -643,10 +635,7 @@ fn draw_question(f: &mut Frame, q: &PendingQuestion) {
     if lines.len() > q_budget {
         let hidden = lines.len() + 1 - q_budget;
         lines.truncate(q_budget.saturating_sub(1));
-        lines.push(Line::from(Span::styled(
-            format!(" … (+{hidden} more lines)"),
-            Style::new().fg(Color::DarkGray),
-        )));
+        lines.push(hint_line(&format!(" … (+{hidden} more lines)")));
     }
     lines.push(Line::default());
 
@@ -655,33 +644,17 @@ fn draw_question(f: &mut Frame, q: &PendingQuestion) {
     let visible = q.options.len().min(budget.max(1));
     let offset = (q.selected + 1).saturating_sub(visible);
     for (i, opt) in q.options.iter().enumerate().skip(offset).take(visible) {
-        let text: String = format!(" {opt}").chars().take(inner_width).collect();
-        lines.push(if i == q.selected {
-            Line::from(Span::styled(
-                format!("{text:<inner_width$}"),
-                Style::new().fg(Color::Black).bg(Color::Cyan),
-            ))
-        } else {
-            Line::from(Span::raw(text))
-        });
+        lines.push(list_line(
+            format!(" {opt}"),
+            i == q.selected,
+            inner_width,
+            Style::new(),
+        ));
     }
-    lines.push(Line::from(Span::styled(
-        " ↑↓ select · Enter answer · Esc dismiss",
-        Style::new().fg(Color::DarkGray),
-    )));
+    lines.push(hint_line(" ↑↓ select · Enter answer · Esc dismiss"));
 
-    let height = (lines.len() as u16 + 2).min(max_height as u16);
-    let area = Rect {
-        x: screen.x + (screen.width.saturating_sub(width)) / 2,
-        y: screen.y + (screen.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
-    let block = Block::bordered()
-        .title(format!(" {} ", q.title))
-        .border_style(Style::new().fg(Color::Cyan));
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    let area = dialog_area(screen, (30, 80), lines.len() as u16 + 2);
+    render_dialog(f, &q.title, Color::Cyan, area, lines);
 }
 
 // ----- approval modal ------------------------------------------------------
@@ -813,12 +786,7 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         )));
     }
 
-    let area = Rect {
-        x: screen.x + (screen.width.saturating_sub(width)) / 2,
-        y: screen.y + (screen.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    };
+    let area = dialog_area(screen, (20, 80), height);
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
@@ -848,11 +816,7 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
         Span::raw(" deny"),
     ]));
 
-    let block = Block::bordered()
-        .title(" Tool approval ")
-        .border_style(Style::new().fg(Color::Yellow));
-    f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    render_dialog(f, "Tool approval", Color::Yellow, area, lines);
 }
 
 #[cfg(test)]
