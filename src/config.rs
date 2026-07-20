@@ -83,6 +83,10 @@ struct FileConfig {
     system_prompt: Option<String>,
     /// Seconds before a bash command is moved to the background (default 120).
     bash_timeout: Option<u64>,
+    /// Max lines a single read_file call returns (default 2000).
+    read_max_lines: Option<u64>,
+    /// Bytes per line before read_file truncates it (default 500).
+    read_max_line_bytes: Option<u64>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
@@ -91,6 +95,9 @@ struct FileConfig {
 
 /// Default bash timeout in seconds.
 pub const DEFAULT_BASH_TIMEOUT: u64 = 120;
+/// Default read_file output limits.
+pub const DEFAULT_READ_MAX_LINES: u64 = 2000;
+pub const DEFAULT_READ_MAX_LINE_BYTES: u64 = 500;
 
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
@@ -221,6 +228,16 @@ pub enum SearchProvider {
     Brave,
 }
 
+impl SearchProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            SearchProvider::Duckduckgo => "duckduckgo",
+            SearchProvider::Searxng => "searxng",
+            SearchProvider::Brave => "brave",
+        }
+    }
+}
+
 /// `[search]` section of the config file.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -249,19 +266,18 @@ fn resolve_search(
     if provider == SearchProvider::Searxng && file.base_url.is_none() {
         anyhow::bail!("[search] provider \"searxng\" requires base_url in the config");
     }
-    let api_key = match provider {
-        SearchProvider::Brave => Some(brave_key.ok_or_else(|| {
-            anyhow::anyhow!(
-                "[search] provider \"brave\" requires the BRAVE_API_KEY environment variable"
-            )
-        })?),
-        _ => None,
-    };
+    // The key is kept even when another provider starts selected, so `/config`
+    // can switch to brave at runtime.
+    if provider == SearchProvider::Brave && brave_key.is_none() {
+        anyhow::bail!(
+            "[search] provider \"brave\" requires the BRAVE_API_KEY environment variable"
+        );
+    }
     Ok(SearchConfig {
         provider,
         base_url: file.base_url,
         max_results: file.max_results.unwrap_or(5).clamp(1, 20),
-        api_key,
+        api_key: brave_key,
     })
 }
 
@@ -337,44 +353,76 @@ impl ModeHandle {
     }
 }
 
-/// Shared, runtime-adjustable bash timeout in seconds: the `/config` dialog
-/// changes it while the bash tool reads it per call, so a change applies to
-/// the next command. On timeout the command is not killed but moved to the
-/// background; its output is posted to the conversation when it finishes.
+/// Shared, runtime-adjustable numeric setting: the `/config` dialog writes
+/// it while the worker or a tool reads it per use, so a change applies to
+/// the next prompt / tool call. Used for the turn limit, the bash timeout
+/// and the read_file output limits.
 #[derive(Clone, Debug)]
-pub struct TimeoutHandle(std::sync::Arc<std::sync::atomic::AtomicU64>);
+pub struct NumHandle(std::sync::Arc<std::sync::atomic::AtomicU64>);
 
-impl TimeoutHandle {
-    pub fn new(secs: u64) -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(secs)))
+impl NumHandle {
+    pub fn new(n: u64) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU64::new(n)))
     }
 
     pub fn get(&self) -> u64 {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn set(&self, secs: u64) {
-        self.0.store(secs, std::sync::atomic::Ordering::Relaxed);
+    pub fn set(&self, n: u64) {
+        self.0.store(n, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
-/// Shared, runtime-adjustable turn limit (tool-call rounds per prompt): the
-/// `/config` dialog changes it while the worker reads it per prompt, so a
-/// change applies from the next prompt on.
+/// Shared, runtime-editable web-search settings: the `/config` dialog
+/// switches the provider / result count while the web_search tool takes a
+/// snapshot per call.
 #[derive(Clone, Debug)]
-pub struct TurnsHandle(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+pub struct SearchHandle(std::sync::Arc<std::sync::RwLock<SearchConfig>>);
 
-impl TurnsHandle {
-    pub fn new(n: usize) -> Self {
-        Self(std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(n)))
+impl SearchHandle {
+    pub fn new(cfg: SearchConfig) -> Self {
+        Self(std::sync::Arc::new(std::sync::RwLock::new(cfg)))
     }
 
-    pub fn get(&self) -> usize {
-        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    /// Copy of the current settings (one consistent view per search call).
+    pub fn snapshot(&self) -> SearchConfig {
+        self.0.read().unwrap().clone()
     }
 
-    pub fn set(&self, n: usize) {
-        self.0.store(n, std::sync::atomic::Ordering::Relaxed);
+    pub fn set_max_results(&self, n: usize) {
+        self.0.write().unwrap().max_results = n;
+    }
+
+    /// Providers usable right now: searxng needs a configured base_url and
+    /// brave a BRAVE_API_KEY; duckduckgo always works.
+    pub fn available_providers(&self) -> Vec<SearchProvider> {
+        let cfg = self.0.read().unwrap();
+        [
+            SearchProvider::Duckduckgo,
+            SearchProvider::Searxng,
+            SearchProvider::Brave,
+        ]
+        .into_iter()
+        .filter(|p| match p {
+            SearchProvider::Duckduckgo => true,
+            SearchProvider::Searxng => cfg.base_url.is_some(),
+            SearchProvider::Brave => cfg.api_key.is_some(),
+        })
+        .collect()
+    }
+
+    /// Step to the previous/next usable provider (`/config` ←/→).
+    pub fn cycle_provider(&self, delta: i64) {
+        let choices = self.available_providers();
+        let mut cfg = self.0.write().unwrap();
+        let n = choices.len();
+        let next = match choices.iter().position(|p| *p == cfg.provider) {
+            Some(i) if delta < 0 => choices[(i + n - 1) % n],
+            Some(i) => choices[(i + 1) % n],
+            None => choices[0],
+        };
+        cfg.provider = next;
     }
 }
 
@@ -662,6 +710,8 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         instructions: project.instructions.or(global.instructions),
         system_prompt: project.system_prompt.or(global.system_prompt),
         bash_timeout: project.bash_timeout.or(global.bash_timeout),
+        read_max_lines: project.read_max_lines.or(global.read_max_lines),
+        read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         approval,
         search: SearchFileConfig {
             provider: project.search.provider.or(global.search.provider),
@@ -706,17 +756,23 @@ pub struct Config {
     pub model_note: Option<String>,
     /// Turn limit per prompt, shared with the worker and adjustable at
     /// runtime (`/config`).
-    pub max_turns: TurnsHandle,
+    pub max_turns: NumHandle,
     /// Bash timeout in seconds, shared with the bash tool and adjustable at
     /// runtime (`/config`).
-    pub bash_timeout: TimeoutHandle,
+    pub bash_timeout: NumHandle,
+    /// read_file output limits, shared with the tool and adjustable at
+    /// runtime (`/config`).
+    pub read_max_lines: NumHandle,
+    pub read_max_line_bytes: NumHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
     pub approval: RulesHandle,
     /// Current permission mode, shared with the approval hook.
     pub mode: ModeHandle,
-    pub search: SearchConfig,
+    /// Web-search settings, shared with the tool and editable at runtime
+    /// (`/config`: provider and result count).
+    pub search: SearchHandle,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Instruction files that were found: (file name, content).
@@ -764,6 +820,13 @@ impl Config {
         if bash_timeout == 0 {
             anyhow::bail!("bash_timeout must be at least 1 second");
         }
+        let read_max_lines = file.read_max_lines.unwrap_or(DEFAULT_READ_MAX_LINES);
+        let read_max_line_bytes = file
+            .read_max_line_bytes
+            .unwrap_or(DEFAULT_READ_MAX_LINE_BYTES);
+        if read_max_lines == 0 || read_max_line_bytes == 0 {
+            anyhow::bail!("read_max_lines and read_max_line_bytes must be at least 1");
+        }
 
         // Startup model precedence: CLI flags > last-used state > config
         // default_model / first entry > empty (main() picks the first model
@@ -809,8 +872,10 @@ impl Config {
             models,
             active_model,
             model_note,
-            max_turns: TurnsHandle::new(args.max_turns),
-            bash_timeout: TimeoutHandle::new(bash_timeout),
+            max_turns: NumHandle::new(args.max_turns as u64),
+            bash_timeout: NumHandle::new(bash_timeout),
+            read_max_lines: NumHandle::new(read_max_lines),
+            read_max_line_bytes: NumHandle::new(read_max_line_bytes),
             root,
             approval: RulesHandle::new(file.approval),
             mode: ModeHandle::new(if args.bypass {
@@ -818,7 +883,7 @@ impl Config {
             } else {
                 Mode::default()
             }),
-            search,
+            search: SearchHandle::new(search),
             system_prompt: file.system_prompt,
             instructions,
             config_files,
@@ -882,27 +947,64 @@ mod tests {
     }
 
     #[test]
-    fn turns_handle_shares_runtime_changes() {
-        let handle = TurnsHandle::new(50);
+    fn num_handle_shares_runtime_changes() {
+        let handle = NumHandle::new(50);
         let worker_side = handle.clone();
         handle.set(120);
         assert_eq!(worker_side.get(), 120);
     }
 
     #[test]
-    fn bash_timeout_parses_shares_and_merges() {
-        let handle = TimeoutHandle::new(120);
-        let tool_side = handle.clone();
-        handle.set(300);
-        assert_eq!(tool_side.get(), 300);
-
-        let global: FileConfig = toml::from_str("bash_timeout = 60").unwrap();
+    fn tool_limits_parse_and_merge() {
+        let global: FileConfig =
+            toml::from_str("bash_timeout = 60\nread_max_lines = 100\nread_max_line_bytes = 200")
+                .unwrap();
         assert_eq!(global.bash_timeout, Some(60));
+        assert_eq!(global.read_max_lines, Some(100));
+        assert_eq!(global.read_max_line_bytes, Some(200));
         // Project value wins; a global one fills in.
         let project: FileConfig = toml::from_str("bash_timeout = 240").unwrap();
-        assert_eq!(merge(global, project).bash_timeout, Some(240));
-        let global: FileConfig = toml::from_str("bash_timeout = 60").unwrap();
-        assert_eq!(merge(global, FileConfig::default()).bash_timeout, Some(60));
+        let merged = merge(global, project);
+        assert_eq!(merged.bash_timeout, Some(240));
+        assert_eq!(merged.read_max_lines, Some(100));
+        assert_eq!(merged.read_max_line_bytes, Some(200));
+    }
+
+    #[test]
+    fn search_handle_switches_between_available_providers() {
+        let handle = SearchHandle::new(SearchConfig {
+            provider: SearchProvider::Duckduckgo,
+            base_url: None,
+            max_results: 5,
+            api_key: None,
+        });
+        // Neither searxng (no base_url) nor brave (no key) is available.
+        assert_eq!(handle.available_providers(), [SearchProvider::Duckduckgo]);
+        handle.cycle_provider(1);
+        assert_eq!(handle.snapshot().provider, SearchProvider::Duckduckgo);
+
+        // The tool side sees runtime changes.
+        let tool_side = handle.clone();
+        handle.set_max_results(9);
+        assert_eq!(tool_side.snapshot().max_results, 9);
+
+        // With a key, brave joins the cycle.
+        let handle = SearchHandle::new(SearchConfig {
+            provider: SearchProvider::Duckduckgo,
+            base_url: None,
+            max_results: 5,
+            api_key: Some("k".into()),
+        });
+        assert_eq!(
+            handle.available_providers(),
+            [SearchProvider::Duckduckgo, SearchProvider::Brave]
+        );
+        handle.cycle_provider(1);
+        assert_eq!(handle.snapshot().provider, SearchProvider::Brave);
+        handle.cycle_provider(1);
+        assert_eq!(handle.snapshot().provider, SearchProvider::Duckduckgo);
+        handle.cycle_provider(-1);
+        assert_eq!(handle.snapshot().provider, SearchProvider::Brave);
     }
 
     #[test]

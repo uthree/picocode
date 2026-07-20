@@ -38,7 +38,11 @@ pub fn spawn(
             let agent = client
                 .agent(&cfg.model)
                 .preamble(&system_prompt(&cfg))
-                .tool(tools::ReadFile::new(root.clone()))
+                .tool(tools::ReadFile::new(
+                    root.clone(),
+                    cfg.read_max_lines.clone(),
+                    cfg.read_max_line_bytes.clone(),
+                ))
                 .tool(tools::ListFiles::new(root.clone()))
                 .tool(tools::Grep::new(root.clone()))
                 .tool(tools::WriteFile::new(root.clone()))
@@ -292,7 +296,7 @@ async fn run_once<M>(
     let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
-        .max_turns(cfg.max_turns.get())
+        .max_turns(cfg.max_turns.get() as usize)
         .add_hook(hook)
         .await;
 
@@ -426,17 +430,19 @@ mod tests {
             models: Vec::new(),
             active_model: None,
             model_note: None,
-            max_turns: crate::config::TurnsHandle::new(50),
-            bash_timeout: crate::config::TimeoutHandle::new(120),
+            max_turns: crate::config::NumHandle::new(50),
+            bash_timeout: crate::config::NumHandle::new(120),
+            read_max_lines: crate::config::NumHandle::new(2000),
+            read_max_line_bytes: crate::config::NumHandle::new(500),
             root: PathBuf::from("/tmp/proj"),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),
-            search: SearchConfig {
+            search: crate::config::SearchHandle::new(SearchConfig {
                 provider: SearchProvider::Duckduckgo,
                 base_url: None,
                 max_results: 5,
                 api_key: None,
-            },
+            }),
             system_prompt: None,
             instructions: Vec::new(),
             config_files: Vec::new(),

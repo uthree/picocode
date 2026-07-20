@@ -9,7 +9,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use super::{ToolError, truncate_output};
-use crate::config::TimeoutHandle;
+use crate::config::NumHandle;
 use crate::event::AgentEvent;
 
 const MAX_OUTPUT_BYTES: usize = 20_000;
@@ -25,13 +25,13 @@ pub struct BashArgs {
 pub struct Bash {
     root: PathBuf,
     /// Timeout in seconds, shared with the `/config` dialog.
-    timeout: TimeoutHandle,
+    timeout: NumHandle,
     /// Where backgrounded commands report their completion.
     notify: mpsc::Sender<AgentEvent>,
 }
 
 impl Bash {
-    pub fn new(root: PathBuf, timeout: TimeoutHandle, notify: mpsc::Sender<AgentEvent>) -> Self {
+    pub fn new(root: PathBuf, timeout: NumHandle, notify: mpsc::Sender<AgentEvent>) -> Self {
         Self {
             root,
             timeout,
@@ -212,10 +212,7 @@ mod tests {
 
     fn tool(root: &std::path::Path, secs: u64) -> (Bash, mpsc::Receiver<AgentEvent>) {
         let (tx, rx) = mpsc::channel(8);
-        (
-            Bash::new(root.to_path_buf(), TimeoutHandle::new(secs), tx),
-            rx,
-        )
+        (Bash::new(root.to_path_buf(), NumHandle::new(secs), tx), rx)
     }
 
     #[tokio::test]

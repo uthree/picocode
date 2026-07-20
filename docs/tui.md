@@ -31,7 +31,7 @@ on macOS ones).
 | `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly |
 | `/permissions` | Show the current mode and the effective allow/deny rules |
-| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, max turns per prompt and bash timeout (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter` |
+| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, max turns, bash timeout, read_file limits (lines / bytes per line) and web search provider / result count (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter`. Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |
 | `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config |
 | `/compact` | Compact the conversation into a summary |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |

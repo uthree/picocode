@@ -203,8 +203,8 @@ pub struct SettingsMenu {
 }
 
 /// Number of rows in the `/config` dialog (mode, reasoning, max turns,
-/// bash timeout, model).
-pub const SETTINGS_ROWS: usize = 5;
+/// bash timeout, read limits, web search provider/results, model).
+pub const SETTINGS_ROWS: usize = 9;
 
 /// State of the `ask_user` / `submit_plan` option dialog.
 pub struct PendingQuestion {
@@ -1280,6 +1280,26 @@ impl App {
                 format!("{}s", self.cfg.bash_timeout.get()),
                 "← →",
             ),
+            (
+                "read lines",
+                self.cfg.read_max_lines.get().to_string(),
+                "← →",
+            ),
+            (
+                "line bytes",
+                self.cfg.read_max_line_bytes.get().to_string(),
+                "← →",
+            ),
+            (
+                "web search",
+                self.cfg.search.snapshot().provider.label().to_string(),
+                "← →",
+            ),
+            (
+                "results",
+                self.cfg.search.snapshot().max_results.to_string(),
+                "← →",
+            ),
             ("model", self.model_label.clone(), "Enter"),
         ]
     }
@@ -1303,11 +1323,26 @@ impl App {
             1 => self.show_reasoning = !self.show_reasoning,
             2 => {
                 let turns = self.cfg.max_turns.get() as i64 + delta * 10;
-                self.cfg.max_turns.set(turns.clamp(10, 200) as usize);
+                self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
             }
             3 => {
                 let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
                 self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
+            }
+            4 => {
+                let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
+                self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
+            }
+            5 => {
+                let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
+                self.cfg
+                    .read_max_line_bytes
+                    .set(bytes.clamp(100, 5000) as u64);
+            }
+            6 => self.cfg.search.cycle_provider(delta),
+            7 => {
+                let n = self.cfg.search.snapshot().max_results as i64 + delta;
+                self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
             }
             _ => {}
         }

@@ -120,6 +120,10 @@ instructions = ["AGENTS.md"]
 # also adjustable at runtime in /config)
 bash_timeout = 120
 
+# read_file output limits (defaults shown; also adjustable in /config)
+read_max_lines = 2000        # max lines per call
+read_max_line_bytes = 500    # bytes per line before truncation
+
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.
 system_prompt = """
@@ -155,7 +159,8 @@ deny_bash   = ["sudo", "rm -rf"]  # always denied, even in bypass mode
 
 [search]
 provider = "duckduckgo"           # default; no API key needed
-max_results = 5
+max_results = 5                   # provider and max_results are also
+                                  # switchable at runtime in /config
 # provider = "searxng"            # self-hosted metasearch
 # base_url = "http://localhost:8888"   # required; enable `format: json` server-side
 # provider = "brave"              # Brave Search API; needs BRAVE_API_KEY

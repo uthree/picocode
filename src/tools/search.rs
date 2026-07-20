@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{ToolError, truncate_output};
-use crate::config::{SearchConfig, SearchProvider};
+use crate::config::{SearchConfig, SearchHandle, SearchProvider};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_OUTPUT_BYTES: usize = 16_000;
@@ -27,12 +27,12 @@ struct SearchResult {
 }
 
 pub struct WebSearch {
-    cfg: SearchConfig,
+    cfg: SearchHandle,
     client: reqwest::Client,
 }
 
 impl WebSearch {
-    pub fn new(cfg: SearchConfig) -> Self {
+    pub fn new(cfg: SearchHandle) -> Self {
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .user_agent(concat!("picocode/", env!("CARGO_PKG_VERSION")))
@@ -42,15 +42,22 @@ impl WebSearch {
     }
 
     async fn search(&self, query: &str) -> Result<Vec<SearchResult>, ToolError> {
-        match self.cfg.provider {
-            SearchProvider::Duckduckgo => self.search_duckduckgo(query).await,
-            SearchProvider::Searxng => self.search_searxng(query).await,
-            SearchProvider::Brave => self.search_brave(query).await,
+        // One consistent snapshot per call; `/config` changes apply to the
+        // next search.
+        let cfg = self.cfg.snapshot();
+        match cfg.provider {
+            SearchProvider::Duckduckgo => self.search_duckduckgo(&cfg, query).await,
+            SearchProvider::Searxng => self.search_searxng(&cfg, query).await,
+            SearchProvider::Brave => self.search_brave(&cfg, query).await,
         }
     }
 
-    async fn search_duckduckgo(&self, query: &str) -> Result<Vec<SearchResult>, ToolError> {
-        let base = self.cfg.base_url.as_deref().unwrap_or(DUCKDUCKGO_ENDPOINT);
+    async fn search_duckduckgo(
+        &self,
+        cfg: &SearchConfig,
+        query: &str,
+    ) -> Result<Vec<SearchResult>, ToolError> {
+        let base = cfg.base_url.as_deref().unwrap_or(DUCKDUCKGO_ENDPOINT);
         let body = self
             .get(
                 &format!("{}/html/", base.trim_end_matches('/')),
@@ -58,12 +65,17 @@ impl WebSearch {
                 None,
             )
             .await?;
-        Ok(parse_duckduckgo(&body, self.cfg.max_results))
+        Ok(parse_duckduckgo(&body, cfg.max_results))
     }
 
-    async fn search_searxng(&self, query: &str) -> Result<Vec<SearchResult>, ToolError> {
-        // base_url presence is validated at config load.
-        let base = self.cfg.base_url.as_deref().unwrap_or_default();
+    async fn search_searxng(
+        &self,
+        cfg: &SearchConfig,
+        query: &str,
+    ) -> Result<Vec<SearchResult>, ToolError> {
+        // base_url presence is validated at config load (and the runtime
+        // provider cycle only offers searxng when it is set).
+        let base = cfg.base_url.as_deref().unwrap_or_default();
         let body = self
             .get(
                 &format!("{}/search", base.trim_end_matches('/')),
@@ -71,20 +83,24 @@ impl WebSearch {
                 None,
             )
             .await?;
-        parse_searxng(&body, self.cfg.max_results)
+        parse_searxng(&body, cfg.max_results)
     }
 
-    async fn search_brave(&self, query: &str) -> Result<Vec<SearchResult>, ToolError> {
-        let base = self.cfg.base_url.as_deref().unwrap_or(BRAVE_ENDPOINT);
-        let count = self.cfg.max_results.to_string();
+    async fn search_brave(
+        &self,
+        cfg: &SearchConfig,
+        query: &str,
+    ) -> Result<Vec<SearchResult>, ToolError> {
+        let base = cfg.base_url.as_deref().unwrap_or(BRAVE_ENDPOINT);
+        let count = cfg.max_results.to_string();
         let body = self
             .get(
                 &format!("{}/res/v1/web/search", base.trim_end_matches('/')),
                 &[("q", query), ("count", count.as_str())],
-                self.cfg.api_key.as_deref(),
+                cfg.api_key.as_deref(),
             )
             .await?;
-        parse_brave(&body, self.cfg.max_results)
+        parse_brave(&body, cfg.max_results)
     }
 
     async fn get(
@@ -372,7 +388,7 @@ mod tests {
             max_results: 5,
             api_key: None,
         };
-        let err = WebSearch::new(cfg)
+        let err = WebSearch::new(SearchHandle::new(cfg))
             .call(SearchArgs { query: "  ".into() })
             .await
             .unwrap_err();
