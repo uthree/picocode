@@ -384,7 +384,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     }
     if app.background_jobs > 0 {
         left.push(Span::styled(
-            format!("  ⏳ {} bg", app.background_jobs),
+            format!(" {} bg", app.background_jobs),
             Style::new().fg(Color::Yellow),
         ));
     }
