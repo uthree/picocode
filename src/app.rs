@@ -191,6 +191,9 @@ pub struct App {
     /// Streamed deltas since the last usage report — a live estimate of
     /// decoded tokens between usage updates.
     pub delta_est: u64,
+    /// Backgrounded (timed-out) bash commands still running, shown in the
+    /// status bar.
+    pub background_jobs: usize,
     pub model_label: String,
     /// Collapsed pasted blocks as (placeholder, full text); the placeholder
     /// sits in the input and is expanded when the message is submitted.
@@ -248,6 +251,7 @@ impl App {
             turn_out: 0,
             total_out: 0,
             delta_est: 0,
+            background_jobs: 0,
             model_label: cfg.model_label(),
             pasted: Vec::new(),
             available_models: Vec::new(),
@@ -1463,11 +1467,15 @@ impl App {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
             }
+            AgentEvent::BackgroundStarted { .. } => {
+                self.background_jobs += 1;
+            }
             AgentEvent::BackgroundDone {
                 id,
                 command,
                 output,
             } => {
+                self.background_jobs = self.background_jobs.saturating_sub(1);
                 self.close_blocks();
                 self.push(
                     EntryKind::Notice,
@@ -1480,17 +1488,31 @@ impl App {
                 if !text.is_empty() {
                     self.push(EntryKind::ToolOut, text);
                 }
-                // Record it in the history so the model sees the result on
-                // its next turn.
-                let tx = self.cmd_tx.clone();
+                // Prompt the model with the result so it reacts on its own
+                // (this also records the result in the history). Runs after
+                // the current turn if one is streaming.
+                self.running += 1;
+                self.waiting = true;
+                self.follow = true;
+                self.turn_out = 0;
+                self.delta_est = 0;
+                let prompt = format!(
+                    "The bash command that was moved to background job #{id} has \
+                     finished:\n$ {command}\n\nOutput:\n{output}\n\n\
+                     Briefly report the result to the user and continue anything \
+                     that was waiting on it."
+                );
+                let cmd_tx = self.cmd_tx.clone();
+                let event_tx = self.event_tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx
-                        .send(WorkerCmd::BackgroundRecord {
-                            id,
-                            command,
-                            output,
-                        })
-                        .await;
+                    if cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_err() {
+                        let _ = event_tx
+                            .send(AgentEvent::Error(
+                                "The agent worker has stopped".to_string(),
+                            ))
+                            .await;
+                        let _ = event_tx.send(AgentEvent::TurnComplete).await;
+                    }
                 });
             }
             AgentEvent::Cancelled => {

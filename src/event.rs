@@ -42,8 +42,11 @@ pub enum AgentEvent {
     Compacted { messages: usize, summary: String },
     /// Output of a user-typed `!` shell command.
     ShellOutput { output: String },
-    /// A bash command that timed out and kept running in the background has
-    /// finished. The App displays the output and records it in the history.
+    /// A bash command hit its timeout and was moved to the background
+    /// (counted in the status bar).
+    BackgroundStarted { id: u64 },
+    /// A backgrounded bash command finished. The App displays the output and
+    /// prompts the model with it so it reacts to the result.
     BackgroundDone {
         id: u64,
         command: String,
@@ -68,13 +71,6 @@ pub enum WorkerCmd {
     /// Record a user-run `!` shell command and its output in the history so
     /// the model has it as context.
     ShellRecord { command: String, output: String },
-    /// Record the finished output of a backgrounded (timed-out) bash command
-    /// in the history so the model sees it on its next turn.
-    BackgroundRecord {
-        id: u64,
-        command: String,
-        output: String,
-    },
     /// Send a copy of the history back (used when switching models).
     TakeHistory(oneshot::Sender<Vec<Message>>),
     /// Replace the history (seeds a freshly spawned worker on model switch).

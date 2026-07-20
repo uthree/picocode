@@ -177,16 +177,6 @@ async fn worker<M>(
                      $ {command}\n\nOutput:\n{output}"
                 )));
             }
-            WorkerCmd::BackgroundRecord {
-                id,
-                command,
-                output,
-            } => {
-                history.push(Message::user(format!(
-                    "The bash command that timed out and was moved to background \
-                     job #{id} has finished:\n$ {command}\n\nOutput:\n{output}"
-                )));
-            }
             WorkerCmd::TakeHistory(tx) => {
                 let _ = tx.send(history.clone());
             }

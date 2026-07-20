@@ -73,8 +73,9 @@ on macOS ones).
 - **Direct shell**: the input box turns yellow while typing a `!` command.
 - **Long-running commands**: a bash command (model-invoked or `!`) still
   running after the configured timeout becomes a background job instead of
-  being killed; a notice with its output appears — and is added to the
-  model's context — when it finishes.
+  being killed; the status bar shows `⏳ N bg` while jobs are running. When
+  a job finishes, a notice with its output appears and the model is
+  prompted with the result automatically so it responds to it.
 - **User questions**: the model can present concrete choices (`ask_user`); a
   dialog opens — pick with `↑`/`↓` and `Enter`, or `Esc` to dismiss (the
   model is told and proceeds on its own).

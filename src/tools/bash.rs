@@ -134,6 +134,9 @@ impl Tool for Bash {
                 let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
                 let command = args.command.clone();
                 let notify = self.notify.clone();
+                // Status-bar job counter; the matching decrement rides on
+                // `BackgroundDone` below.
+                let _ = notify.send(AgentEvent::BackgroundStarted { id }).await;
                 tokio::spawn(async move {
                     let output = match task.await {
                         Ok(Ok(text)) => text,
@@ -254,7 +257,11 @@ mod tests {
             .unwrap();
         assert!(out.contains("moved to background as job #"), "{out}");
 
-        // The job keeps running and reports its output when done.
+        // Going to the background is announced (status-bar counter)…
+        let ev = rx.recv().await.expect("background start event");
+        assert!(matches!(ev, AgentEvent::BackgroundStarted { .. }));
+
+        // …and the job keeps running and reports its output when done.
         let ev = rx.recv().await.expect("background completion event");
         match ev {
             AgentEvent::BackgroundDone {

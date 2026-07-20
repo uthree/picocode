@@ -163,9 +163,10 @@ max_results = 5
 
 The `bash` tool runs commands via `sh -c` (`cmd /C` on Windows). A command
 still running after `bash_timeout` seconds is not killed but moved to a
-**background job**: the model is told right away, and the job's output is
-shown and added to the conversation when it finishes. `Esc` stops a command
-that is still in the foreground (the process is killed).
+**background job**: the model is told right away and the status bar counts
+the running jobs; when a job finishes, its output is shown and the model is
+prompted with it automatically so it reacts to the result. `Esc` stops a
+command that is still in the foreground (the process is killed).
 
 Bash rules
 split the command at `&&` `||` `;` `|` `&` and newlines, then match

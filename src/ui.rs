@@ -382,6 +382,12 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     if app.running > 0 {
         left.push(Span::styled("  Esc stop", Style::new().fg(Color::DarkGray)));
     }
+    if app.background_jobs > 0 {
+        left.push(Span::styled(
+            format!("  ⏳ {} bg", app.background_jobs),
+            Style::new().fg(Color::Yellow),
+        ));
+    }
     if !app.follow {
         left.push(Span::styled(
             "  ⇡ scrolled (PgDn to bottom)",
