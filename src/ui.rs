@@ -798,7 +798,7 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
     lines.extend(body);
     lines.push(Line::default());
     // What "always" adds; truncated to the dialog width (no wrapping here).
-    let mut rule = format!("a = {} (this session)", pending.always.label());
+    let mut rule = pending.always.describe();
     if rule.chars().count() > inner_width {
         rule = rule.chars().take(inner_width.saturating_sub(1)).collect();
         rule.push('…');

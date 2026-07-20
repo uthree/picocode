@@ -99,11 +99,29 @@ pub enum AlwaysAllow {
 }
 
 impl AlwaysAllow {
-    /// The addition, spelled as it would appear in picocode.toml.
+    /// The addition, spelled as it would appear in picocode.toml (shown in
+    /// the notice after `a`, ready to copy into `[approval]`).
     pub fn label(&self) -> String {
         match self {
             AlwaysAllow::Tool(name) => format!("allow_tools += {name}"),
             AlwaysAllow::Bash(patterns) => format!("allow_bash += {}", patterns.join(", ")),
+        }
+    }
+
+    /// Plain-language preview of what `a` whitelists (shown in the dialog).
+    pub fn describe(&self) -> String {
+        match self {
+            AlwaysAllow::Tool(name) => {
+                format!("a: don't ask again for {name} this session")
+            }
+            AlwaysAllow::Bash(patterns) => {
+                let list = patterns
+                    .iter()
+                    .map(|p| format!("\"{p} …\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("a: don't ask again for {list} commands this session")
+            }
         }
     }
 }
