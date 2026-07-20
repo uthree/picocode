@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     }
     // No model configured anywhere: use the first model Ollama serves.
     if cfg.model.is_empty() {
-        cfg.model = pick_ollama_model(&cfg).await?;
+        cfg.model = models::pick_ollama_model(&cfg).await?;
     }
 
     // Fail before entering the TUI if the provider client can't be built
@@ -60,28 +60,6 @@ async fn main() -> anyhow::Result<()> {
     );
     ratatui::restore();
     result
-}
-
-/// Pick the first model the Ollama server reports serving; when it can't,
-/// explain how to set up a model provider instead of starting broken.
-async fn pick_ollama_model(cfg: &config::Config) -> anyhow::Result<String> {
-    let base = models::base_url(config::Provider::Ollama, cfg.base_url.as_deref());
-    const HINT: &str = "configure a model provider instead:\n  \
-         - add a [[models]] entry to picocode.toml (see the README), or\n  \
-         - pass --provider and --model on the command line";
-    match models::fetch(config::Provider::Ollama, cfg.base_url.as_deref()).await {
-        Ok(list) => match list.into_iter().next() {
-            Some(model) => Ok(model),
-            None => anyhow::bail!(
-                "Ollama at {base} has no models pulled.\n\
-                 Pull one (e.g. `ollama pull qwen3:4b`), or {HINT}"
-            ),
-        },
-        Err(e) => anyhow::bail!(
-            "No model is configured and Ollama is not reachable at {base} ({e:#}).\n\
-             Install and start it (https://ollama.com/download), or {HINT}"
-        ),
-    }
 }
 
 /// Headless debug mode: run one prompt and print the event stream.

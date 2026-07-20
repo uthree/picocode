@@ -23,6 +23,8 @@ to Anthropic, OpenAI, or any OpenAI-compatible server (vLLM, etc.).
   resume** (`/resume`), **settings dialog** (`/config`)
 - **Direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),
   **pluggable web search** (DuckDuckGo / SearXNG / Brave)
+- **Experimental GUI** (`picocode-gui`, built on [gpui](https://gpui.rs)) —
+  the same engine in a native window; see [Layout](#layout)
 
 Key bindings, slash commands and display details: [docs/tui.md](docs/tui.md).
 
@@ -45,6 +47,7 @@ picocode --provider openai --model gpt-4o  # uses OPENAI_API_KEY
 picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b
                                            # OpenAI-compatible server (vLLM etc.)
 picocode --bypass                          # start in bypass mode (isolated envs)
+cargo run -p picocode-gui                  # experimental GUI (same flags)
 ```
 
 `--provider` / `--model` select an ad-hoc model and take precedence over the
@@ -202,11 +205,10 @@ each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
 
 ## Layout
 
-A two-crate workspace: everything UI-independent lives in `picocode-core`,
-and the TUI is one front end on top of it (a GUI could be another). The two
-sides talk exclusively through the `AgentEvent` / `WorkerCmd` channels and
-the plain data types in `transcript` — nothing in the core depends on a
-rendering library.
+A workspace: everything UI-independent lives in `picocode-core`, and each
+front end is a crate on top of it. Front ends talk to the core exclusively
+through the `AgentEvent` / `WorkerCmd` channels and the plain data types in
+`transcript` — nothing in the core depends on a rendering library.
 
 ```
 crates/
@@ -229,4 +231,11 @@ crates/
     history.rs   — shell-style ↑/↓ input history
     highlight.rs — syntax highlighting (syntect) and line diffs (similar)
     markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
+  picocode-gui/src/      — experimental gpui front end (binary `picocode-gui`)
+    main.rs      — window bootstrap, tokio ⇄ gpui bridge (+ --smoke auto-prompt)
+    chat.rs      — chat view: transcript, input, status bar, approval dialogs
 ```
+
+The GUI covers the core chat loop (streaming replies with markdown, tool
+calls, y/n/always approvals, plan approval, `/clear` and `/compact`); mode
+switching, model switching and `/resume` are still TUI-only.

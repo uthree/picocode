@@ -1,0 +1,20 @@
+[package]
+name = "picocode-gui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "picocode-gui"
+path = "src/main.rs"
+
+[dependencies]
+picocode-core.workspace = true
+
+# runtime_shaders: compile the Metal shaders at runtime instead of via the
+# `metal` CLI, which is only available with a full Xcode install.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+gpui-component = "0.5"
+tokio.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/picocode-core", "crates/picocode-tui"]
+members = ["crates/picocode-core", "crates/picocode-tui", "crates/picocode-gui"]
 default-members = ["crates/picocode-tui"]
 
 [workspace.package]

@@ -7,6 +7,29 @@ use anyhow::Context;
 
 use crate::config::Provider;
 
+/// Pick the first model the Ollama server reports serving (the startup
+/// fallback when no model is configured anywhere); when it can't, explain
+/// how to set up a model provider instead of starting broken.
+pub async fn pick_ollama_model(cfg: &crate::config::Config) -> anyhow::Result<String> {
+    let base = base_url(Provider::Ollama, cfg.base_url.as_deref());
+    const HINT: &str = "configure a model provider instead:\n  \
+         - add a [[models]] entry to picocode.toml (see the README), or\n  \
+         - pass --provider and --model on the command line";
+    match fetch(Provider::Ollama, cfg.base_url.as_deref()).await {
+        Ok(list) => match list.into_iter().next() {
+            Some(model) => Ok(model),
+            None => anyhow::bail!(
+                "Ollama at {base} has no models pulled.\n\
+                 Pull one (e.g. `ollama pull qwen3:4b`), or {HINT}"
+            ),
+        },
+        Err(e) => anyhow::bail!(
+            "No model is configured and Ollama is not reachable at {base} ({e:#}).\n\
+             Install and start it (https://ollama.com/download), or {HINT}"
+        ),
+    }
+}
+
 /// The base URL the model-list request goes to, resolved the same way the rig
 /// clients resolve theirs: explicit config > provider env var > default.
 pub fn base_url(provider: Provider, configured: Option<&str>) -> String {

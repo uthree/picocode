@@ -1,0 +1,76 @@
+//! picocode-gui: a gpui front end on top of picocode-core.
+//!
+//! The core is UI-agnostic: it exposes the agent through the
+//! `AgentEvent` / `WorkerCmd` channels. This binary spawns the same worker
+//! the TUI uses (on a manually created tokio runtime, since gpui brings its
+//! own executor) and renders the event stream in a gpui window.
+
+mod chat;
+
+use clap::Parser;
+use gpui::{
+    App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size,
+};
+use gpui_component::Root;
+use picocode_core::{agent, config, models};
+
+fn main() -> anyhow::Result<()> {
+    let args = config::Args::parse();
+    // In the GUI, --smoke auto-sends the prompt once the window opens
+    // (debug aid: exercises the whole worker ⇄ view bridge on launch).
+    let smoke = args.smoke.clone();
+    let mut cfg = config::Config::from_args(args)?;
+
+    // The agent worker and tools are tokio-based; gpui has its own executor,
+    // so run a tokio runtime beside it. The runtime must outlive the app and
+    // must not be dropped from within an async context — leak it.
+    let rt = Box::leak(Box::new(tokio::runtime::Runtime::new()?));
+
+    // No model configured anywhere: use the first model Ollama serves.
+    if cfg.model.is_empty() {
+        cfg.model = rt.block_on(models::pick_ollama_model(&cfg))?;
+    }
+
+    // Fail before opening a window if the provider client can't be built
+    // (e.g. a missing API key).
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
+    let cmd_tx = {
+        let _guard = rt.enter();
+        agent::spawn(&cfg, event_tx, cancel_rx)?
+    };
+
+    Application::new().run(move |cx: &mut App| {
+        gpui_component::init(cx);
+
+        let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("picocode".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cx.open_window(options, |window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = chat::ChatView::new(cfg, event_rx, cmd_tx, cancel_tx, window, cx);
+                if let Some(prompt) = smoke {
+                    view.send_prompt(prompt);
+                }
+                view
+            });
+            cx.new(|cx| Root::new(view, window, cx))
+        })
+        .expect("failed to open the picocode window");
+
+        cx.activate(true);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+    });
+    Ok(())
+}
