@@ -304,9 +304,12 @@ async fn run_once<M>(
         prompt
     };
     let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
+    // rig's multi-turn driver needs some bound, but picocode doesn't cap
+    // turns itself: the context window (with auto-compact) is the real
+    // limit, so pass an effectively-unlimited value.
     let mut stream = agent
         .stream_chat(prompt.clone(), history.clone())
-        .max_turns(cfg.max_turns.get() as usize)
+        .max_turns(usize::MAX)
         .add_hook(hook)
         .await;
 
@@ -440,7 +443,6 @@ mod tests {
             models: Vec::new(),
             active_model: None,
             model_note: None,
-            max_turns: crate::config::NumHandle::new(50),
             bash_timeout: crate::config::NumHandle::new(120),
             read_max_lines: crate::config::NumHandle::new(2000),
             read_max_line_bytes: crate::config::NumHandle::new(500),

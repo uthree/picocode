@@ -118,10 +118,9 @@ pub struct SettingsMenu {
     pub selected: usize,
 }
 
-/// Number of rows in the `/config` dialog (mode, reasoning, max turns,
-/// bash timeout, read limits, web search provider/results, auto-compact,
-/// model).
-pub const SETTINGS_ROWS: usize = 10;
+/// Number of rows in the `/config` dialog (mode, reasoning, bash timeout,
+/// read limits, web search provider/results, auto-compact, model).
+pub const SETTINGS_ROWS: usize = 9;
 
 /// State of the `submit_plan` approval (question) dialog.
 pub struct PendingQuestion {
@@ -1223,7 +1222,6 @@ impl App {
                 },
                 "← →",
             ),
-            ("max turns", self.cfg.max_turns.get().to_string(), "← →"),
             (
                 "bash timeout",
                 format!("{}s", self.cfg.bash_timeout.get()),
@@ -1262,7 +1260,7 @@ impl App {
     }
 
     /// ←/→ on a `/config` row: change the value in place. Every change
-    /// applies immediately (max turns from the next prompt on).
+    /// applies immediately.
     fn adjust_setting(&mut self, delta: i64) {
         let Some(menu) = &self.settings else { return };
         match menu.selected {
@@ -1279,30 +1277,26 @@ impl App {
             }
             1 => self.show_reasoning = !self.show_reasoning,
             2 => {
-                let turns = self.cfg.max_turns.get() as i64 + delta * 10;
-                self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
-            }
-            3 => {
                 let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
                 self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
             }
-            4 => {
+            3 => {
                 let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
                 self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
             }
-            5 => {
+            4 => {
                 let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
                 self.cfg
                     .read_max_line_bytes
                     .set(bytes.clamp(100, 5000) as u64);
             }
-            6 => self.cfg.search.cycle_provider(delta),
-            7 => {
+            5 => self.cfg.search.cycle_provider(delta),
+            6 => {
                 let n = self.cfg.search.snapshot().max_results as i64 + delta;
                 self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
             }
             // ±5% between 50 and 95; stepping below 50 turns it off.
-            8 => {
+            7 => {
                 let cur = self.cfg.auto_compact.get() as i64;
                 let next = if delta < 0 {
                     if cur <= 50 { 0 } else { cur - 5 }

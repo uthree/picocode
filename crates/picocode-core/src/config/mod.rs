@@ -55,10 +55,6 @@ pub struct Args {
     #[arg(long)]
     pub bypass: bool,
 
-    /// Maximum model turns (tool-call rounds) per user prompt.
-    #[arg(long, default_value_t = 50)]
-    pub max_turns: usize,
-
     /// Headless mode for debugging: run one prompt without the TUI and print
     /// events to stdout. Implies bypass mode.
     #[arg(long, hide = true)]
@@ -331,9 +327,6 @@ pub struct Config {
     /// Where the startup model came from, when worth mentioning
     /// ("last used", "first model served by Ollama").
     pub model_note: Option<String>,
-    /// Turn limit per prompt, shared with the worker and adjustable at
-    /// runtime (`/config`).
-    pub max_turns: NumHandle,
     /// Bash timeout in seconds, shared with the bash tool and adjustable at
     /// runtime (`/config`).
     pub bash_timeout: NumHandle,
@@ -470,7 +463,6 @@ impl Config {
             models,
             active_model,
             model_note,
-            max_turns: NumHandle::new(args.max_turns as u64),
             bash_timeout: NumHandle::new(bash_timeout),
             read_max_lines: NumHandle::new(read_max_lines),
             read_max_line_bytes: NumHandle::new(read_max_line_bytes),

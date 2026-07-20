@@ -258,9 +258,6 @@ impl ChatView {
     /// Apply the persisted /config overlay onto a config's shared handles
     /// (used at startup and when switching working directories).
     fn apply_saved(saved: &GuiSettings, cfg: &Config) {
-        if let Some(v) = saved.max_turns {
-            cfg.max_turns.set(v);
-        }
         if let Some(v) = saved.bash_timeout {
             cfg.bash_timeout.set(v);
         }
@@ -673,9 +670,8 @@ impl ChatView {
         Self::apply_theme(self.theme_pref, cx);
     }
 
-    /// A `/config` row change. Every change applies immediately (max turns
-    /// from the next prompt on). Mirrors the TUI's `/config` dialog, plus
-    /// the GUI-only theme row.
+    /// A `/config` row change. Every change applies immediately. Mirrors
+    /// the TUI's `/config` dialog, plus the GUI-only theme row.
     fn adjust_setting(&mut self, row: usize, delta: i64, cx: &mut Context<Self>) {
         match row {
             0 => self.cycle_theme(delta, cx),
@@ -698,38 +694,33 @@ impl ChatView {
                 self.reset_list();
             }
             3 => {
-                let turns = self.cfg.max_turns.get() as i64 + delta * 10;
-                self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
-                self.saved.max_turns = Some(self.cfg.max_turns.get());
-            }
-            4 => {
                 let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
                 self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
                 self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
             }
-            5 => {
+            4 => {
                 let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
                 self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
                 self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
             }
-            6 => {
+            5 => {
                 let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
                 self.cfg
                     .read_max_line_bytes
                     .set(bytes.clamp(100, 5000) as u64);
                 self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
             }
-            7 => {
+            6 => {
                 self.cfg.search.cycle_provider(delta);
                 self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
             }
-            8 => {
+            7 => {
                 let n = self.cfg.search.snapshot().max_results as i64 + delta;
                 self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
                 self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
             // ±5% between 50 and 95; stepping below 50 turns it off.
-            9 => {
+            8 => {
                 let cur = self.cfg.auto_compact.get() as i64;
                 let next = if delta < 0 {
                     if cur <= 50 { 0 } else { cur - 5 }
@@ -742,7 +733,7 @@ impl ChatView {
                 self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
-            10 => {
+            9 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, cx);
             }
@@ -1168,7 +1159,6 @@ impl ChatView {
             model: None,
             base_url: None,
             bypass: false,
-            max_turns: 50,
             smoke: None,
         };
         let mut new_cfg = match config::Config::from_args(args) {
@@ -1900,7 +1890,7 @@ impl ChatView {
         }
         let theme = cx.theme();
         let search = self.cfg.search.snapshot();
-        let rows: [(String, String); 11] = [
+        let rows: [(String, String); 10] = [
             (t!("row_theme").to_string(), self.theme_pref.label()),
             (t!("row_mode").to_string(), mode_name(self.cfg.mode.get())),
             (
@@ -1910,10 +1900,6 @@ impl ChatView {
                 } else {
                     t!("reasoning_collapsed").to_string()
                 },
-            ),
-            (
-                t!("row_max_turns").to_string(),
-                self.cfg.max_turns.get().to_string(),
             ),
             (
                 t!("row_bash_timeout").to_string(),

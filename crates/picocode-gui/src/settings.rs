@@ -22,8 +22,6 @@ pub struct GuiSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_reasoning: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_turns: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bash_timeout: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_max_lines: Option<u64>,
@@ -82,12 +80,12 @@ mod tests {
     fn roundtrips_and_stays_sparse() {
         let mut s = GuiSettings {
             theme: Some(ThemeSetting::Dark),
-            max_turns: Some(50),
+            bash_timeout: Some(120),
             ..Default::default()
         };
         let json = serde_json::to_string(&s).unwrap();
         // Untouched settings are absent, not null.
-        assert!(!json.contains("bash_timeout"), "{json}");
+        assert!(!json.contains("read_max_lines"), "{json}");
         let back: GuiSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
 
@@ -95,9 +93,11 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains("\"brave\""), "{json}");
 
-        // Unknown fields from a newer version don't break loading.
+        // Unknown fields — from a newer version, or removed ones like the
+        // old max_turns — don't break loading.
         let back: GuiSettings =
-            serde_json::from_str("{\"max_turns\":30,\"future_field\":1}").unwrap();
-        assert_eq!(back.max_turns, Some(30));
+            serde_json::from_str("{\"bash_timeout\":60,\"max_turns\":30,\"future_field\":1}")
+                .unwrap();
+        assert_eq!(back.bash_timeout, Some(60));
     }
 }
