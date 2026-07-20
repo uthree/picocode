@@ -43,8 +43,9 @@ pub enum AgentEvent {
     /// Output of a user-typed `!` shell command.
     ShellOutput { output: String },
     /// A bash command hit its timeout and was moved to the background
-    /// (counted in the status bar).
-    BackgroundStarted { id: u64 },
+    /// (counted in the status bar; the GUI shows `command` in its
+    /// background-jobs popup).
+    BackgroundStarted { id: u64, command: String },
     /// A backgrounded bash command finished. The App displays the output and
     /// prompts the model with it so it reacts to the result.
     BackgroundDone {

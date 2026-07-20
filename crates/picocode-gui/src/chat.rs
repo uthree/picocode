@@ -57,6 +57,10 @@ const DIFF_DEL_BG: u32 = 0xf8514933;
 enum Menu {
     Mode,
     Model,
+    /// Details of running bash background jobs.
+    Background,
+    /// Context / token usage details.
+    Context,
 }
 
 impl ThemeSetting {
@@ -124,9 +128,10 @@ pub struct ChatView {
     /// Set while Tab fills the input, so the resulting Change event doesn't
     /// reset `comp_prefix`.
     completing: bool,
-    /// Backgrounded (timed-out) bash commands still running, shown in the
-    /// status bar.
-    background_jobs: usize,
+    /// Backgrounded (timed-out) bash commands still running:
+    /// (id, command, start time). Shown in the status bar; clicking opens
+    /// a details popup.
+    bg_jobs: Vec<(u64, String, std::time::Instant)>,
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
@@ -242,7 +247,7 @@ impl ChatView {
             saved,
             comp_prefix: None,
             completing: false,
-            background_jobs: 0,
+            bg_jobs: Vec::new(),
             tokens_in: 0,
             tokens_out: 0,
             math_cache: crate::tex::MathCache::new(),
@@ -357,8 +362,8 @@ impl ChatView {
                 self.autosave();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
-            AgentEvent::BackgroundStarted { id } => {
-                self.background_jobs += 1;
+            AgentEvent::BackgroundStarted { id, command } => {
+                self.bg_jobs.push((id, command, std::time::Instant::now()));
                 self.push(EntryKind::Notice, t!("bg_started", id = id).to_string());
             }
             AgentEvent::BackgroundDone {
@@ -366,7 +371,10 @@ impl ChatView {
                 command,
                 output,
             } => {
-                self.background_jobs = self.background_jobs.saturating_sub(1);
+                self.bg_jobs.retain(|(job_id, _, _)| *job_id != id);
+                if self.bg_jobs.is_empty() && self.menu == Some(Menu::Background) {
+                    self.menu = None;
+                }
                 self.push(EntryKind::Notice, t!("bg_done", id = id).to_string());
                 self.push(EntryKind::ToolOut, clip(&output, TOOL_OUTPUT_MAX_LINES));
                 // Prompt the model with the result so it reacts to it, like
@@ -1802,6 +1810,12 @@ impl ChatView {
         };
         const GAUGE_W: f32 = 96.;
         let gauge = div()
+            .id("context-gauge")
+            .cursor_pointer()
+            .rounded_md()
+            .px_1()
+            .hover(|s| s.bg(theme.muted))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Context, cx)))
             .h_flex()
             .gap_2()
             .items_center()
@@ -1883,10 +1897,20 @@ impl ChatView {
                     .gap_3()
                     .child(mode_chip)
                     .child(state)
-                    .children((self.background_jobs > 0).then(|| {
+                    .children((!self.bg_jobs.is_empty()).then(|| {
                         div()
+                            .id("bg-jobs")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .px_1()
+                            .hover(|s| s.bg(theme.muted))
                             .text_color(theme.warning)
-                            .child(t!("bg_jobs", n = self.background_jobs).to_string())
+                            .child(t!("bg_jobs", n = self.bg_jobs.len()).to_string())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.toggle_menu(Menu::Background, cx)
+                                }),
+                            )
                     })),
             )
             .child(
@@ -1980,6 +2004,90 @@ impl ChatView {
                 }
                 panel = panel.child(list);
             }
+            Menu::Background => {
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .font_bold()
+                        .child(t!("bg_title").to_string()),
+                );
+                for (id, command, started) in &self.bg_jobs {
+                    let secs = started.elapsed().as_secs();
+                    let elapsed = if secs >= 60 {
+                        format!("{}m{:02}s", secs / 60, secs % 60)
+                    } else {
+                        format!("{secs}s")
+                    };
+                    panel = panel.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap_2()
+                                    .justify_between()
+                                    .child(format!("#{id}"))
+                                    .child(
+                                        div()
+                                            .text_color(theme.muted_foreground)
+                                            .text_sm()
+                                            .child(t!("bg_elapsed", elapsed = elapsed).to_string()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_sm()
+                                    .text_color(theme.muted_foreground)
+                                    .truncate()
+                                    .child(command.clone()),
+                            ),
+                    );
+                }
+            }
+            Menu::Context => {
+                let pct = (self.context_ratio() * 100.0).round() as u64;
+                let rows: [(String, String); 5] = [
+                    (t!("ctx_model").to_string(), self.cfg.model_label()),
+                    (
+                        t!("ctx_window").to_string(),
+                        format!("{}", self.cfg.context_window),
+                    ),
+                    (
+                        t!("ctx_used").to_string(),
+                        format!("{} ({pct}%)", self.tokens_in),
+                    ),
+                    (t!("ctx_output").to_string(), self.tokens_out.to_string()),
+                    (
+                        t!("row_auto_compact").to_string(),
+                        match self.cfg.auto_compact.get() {
+                            0 => t!("auto_compact_off").to_string(),
+                            p => format!("{p}%"),
+                        },
+                    ),
+                ];
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .font_bold()
+                        .child(t!("ctx_title").to_string()),
+                );
+                for (label, value) in rows {
+                    panel = panel.child(
+                        div()
+                            .h_flex()
+                            .gap_3()
+                            .justify_between()
+                            .px_2()
+                            .py_0p5()
+                            .child(div().text_color(theme.muted_foreground).child(label))
+                            .child(value),
+                    );
+                }
+            }
         }
 
         Some(
@@ -1999,8 +2107,8 @@ impl ChatView {
                 .child({
                     let anchored = div().absolute().bottom(px(36.)).occlude();
                     match menu {
-                        Menu::Mode => anchored.left(px(12.)),
-                        Menu::Model => anchored.right(px(12.)),
+                        Menu::Mode | Menu::Background => anchored.left(px(12.)),
+                        Menu::Model | Menu::Context => anchored.right(px(12.)),
                     }
                     .child(panel)
                 })

@@ -136,7 +136,12 @@ impl Tool for Bash {
                 let notify = self.notify.clone();
                 // Status-bar job counter; the matching decrement rides on
                 // `BackgroundDone` below.
-                let _ = notify.send(AgentEvent::BackgroundStarted { id }).await;
+                let _ = notify
+                    .send(AgentEvent::BackgroundStarted {
+                        id,
+                        command: command.clone(),
+                    })
+                    .await;
                 tokio::spawn(async move {
                     let output = match task.await {
                         Ok(Ok(text)) => text,

@@ -100,7 +100,7 @@ async fn run_smoke(
                 println!("\n[compacted] {messages} messages\n{summary}");
             }
             AgentEvent::ShellOutput { output } => println!("[shell]\n{output}"),
-            AgentEvent::BackgroundStarted { id } => println!("[background job #{id} started]"),
+            AgentEvent::BackgroundStarted { id, .. } => println!("[background job #{id} started]"),
             AgentEvent::BackgroundDone { id, output, .. } => {
                 println!("[background job #{id} done]\n{output}");
             }
