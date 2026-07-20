@@ -10,7 +10,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::text::TextView;
-use gpui_component::{ActiveTheme, StyledExt, Theme, ThemeMode};
+use gpui_component::{ActiveTheme, Sizable, StyledExt, Theme, ThemeMode};
 use rust_i18n::t;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -95,6 +95,9 @@ pub struct ChatView {
     /// provider requests (model lists) and model switches.
     rt: tokio::runtime::Handle,
     running: bool,
+    /// True while a completion request is in flight but no tokens have
+    /// arrived yet — the status bar shows "waiting" instead of "generating".
+    waiting: bool,
     approval: Option<Approval>,
     question: Option<Question>,
     /// Which status-bar menu is open, if any.
@@ -225,6 +228,7 @@ impl ChatView {
             cancel_tx,
             rt,
             running: false,
+            waiting: false,
             approval: None,
             question: None,
             menu: None,
@@ -282,9 +286,18 @@ impl ChatView {
         // down resumes following.
         let follow = self.is_scrolled_to_bottom();
         match ev {
-            AgentEvent::TextDelta(s) => self.append(EntryKind::Assistant, &s),
-            AgentEvent::ReasoningDelta(s) => self.append(EntryKind::Reasoning, &s),
-            AgentEvent::ToolCall { name, args } => self.push_tool_call(&name, &args),
+            AgentEvent::TextDelta(s) => {
+                self.waiting = false;
+                self.append(EntryKind::Assistant, &s);
+            }
+            AgentEvent::ReasoningDelta(s) => {
+                self.waiting = false;
+                self.append(EntryKind::Reasoning, &s);
+            }
+            AgentEvent::ToolCall { name, args } => {
+                self.waiting = false;
+                self.push_tool_call(&name, &args);
+            }
             AgentEvent::ToolResult { output } => {
                 self.push(EntryKind::ToolOut, clip(&output, TOOL_OUTPUT_MAX_LINES));
             }
@@ -293,6 +306,7 @@ impl ChatView {
                 args,
                 respond,
             } => {
+                self.waiting = false;
                 self.approval = Some(Approval {
                     name,
                     args,
@@ -361,14 +375,19 @@ impl ChatView {
                     format!("[background job #{id} finished] `{command}` output:\n{output}");
                 if self.cmd_tx.try_send(WorkerCmd::Prompt(prompt)).is_ok() {
                     self.running = true;
+                    self.waiting = true;
                 }
             }
             AgentEvent::Cancelled => self.push(EntryKind::Notice, t!("cancelled").to_string()),
             AgentEvent::TurnComplete => {
                 self.running = false;
+                self.waiting = false;
                 self.autosave();
             }
-            AgentEvent::Error(e) => self.push(EntryKind::Error, e),
+            AgentEvent::Error(e) => {
+                self.waiting = false;
+                self.push(EntryKind::Error, e);
+            }
         }
         if follow {
             self.scroll.scroll_to_bottom();
@@ -835,6 +854,7 @@ impl ChatView {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
                 self.push(EntryKind::Notice, t!("compacting").to_string());
                 self.running = true;
+                self.waiting = true;
             }
             "/quit" | "/exit" => cx.quit(),
             "/read-only" => self.select_mode(Mode::ReadOnly, cx),
@@ -874,6 +894,7 @@ impl ChatView {
         self.push(EntryKind::User, text.clone());
         let _ = self.cmd_tx.try_send(WorkerCmd::Prompt(text));
         self.running = true;
+        self.waiting = true;
     }
 
     fn stop(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1805,10 +1826,27 @@ impl ChatView {
                 self.tokens_out
             ));
 
-        let state = if self.running {
-            t!("running").to_string()
+        // Animated spinner while a turn runs; "waiting" until the first
+        // token arrives (like the TUI), "generating" after.
+        let state: AnyElement = if self.running {
+            let label = if self.waiting {
+                t!("waiting")
+            } else {
+                t!("generating")
+            };
+            div()
+                .h_flex()
+                .gap_1()
+                .items_center()
+                .child(
+                    gpui_component::spinner::Spinner::new()
+                        .icon(gpui_component::Icon::default().path("icons/loader-circle.svg"))
+                        .xsmall(),
+                )
+                .child(label.to_string())
+                .into_any_element()
         } else {
-            t!("idle").to_string()
+            div().child(t!("idle").to_string()).into_any_element()
         };
 
         // Button-like pill: mode color as the fill, like the Send button.

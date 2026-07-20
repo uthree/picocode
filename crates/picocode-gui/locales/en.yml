@@ -15,7 +15,8 @@ settings_note: "Changes apply immediately and are saved for future runs (mode an
 fetching_models: "Fetching the provider's model list…"
 copy_text: "Copy text"
 greeting: "picocode — %{model} in %{root}"
-running: "● running"
+generating: "generating"
+waiting: "waiting…"
 idle: "● idle"
 bg_jobs: "⏳ %{n} bg"
 

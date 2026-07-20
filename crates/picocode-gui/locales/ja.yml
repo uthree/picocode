@@ -15,7 +15,8 @@ settings_note: "変更は即時反映され、次回起動にも引き継がれ�
 fetching_models: "プロバイダのモデル一覧を取得中…"
 copy_text: "テキストをコピー"
 greeting: "picocode — %{model} @ %{root}"
-running: "● 生成中"
+generating: "生成中"
+waiting: "応答待ち…"
 idle: "● 待機中"
 bg_jobs: "⏳ バックグラウンド %{n}"
 
