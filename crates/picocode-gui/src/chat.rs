@@ -729,8 +729,9 @@ impl ChatView {
         self.tokens_in as f64 / self.cfg.context_window.max(1) as f64
     }
 
-    /// Status bar: activity and the context gauge on the left; clickable
-    /// mode and model chips (each opens its menu) on the right.
+    /// Status bar, matching the TUI's layout: the clickable mode chip and
+    /// the activity state on the left; the context gauge and the clickable
+    /// model chip on the right.
     fn render_status_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let muted_fg = theme.muted_foreground;
@@ -803,13 +804,21 @@ impl ChatView {
             .pb_2()
             .text_sm()
             .text_color(muted_fg)
-            .child(div().h_flex().gap_3().child(state).child(gauge))
-            .child(div().h_flex().gap_2().child(mode_chip).child(model_chip))
+            .child(div().h_flex().gap_3().child(mode_chip).child(state))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(gauge)
+                    .child(model_chip),
+            )
             .into_any_element()
     }
 
-    /// The open status-bar menu (mode or model picker), anchored above the
-    /// bottom-right corner, with a click-away backdrop.
+    /// The open status-bar menu (mode or model picker), anchored above its
+    /// chip — mode bottom-left, model bottom-right — with a click-away
+    /// backdrop.
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu?;
         let theme = cx.theme();
@@ -903,14 +912,14 @@ impl ChatView {
                             cx.notify();
                         })),
                 )
-                .child(
-                    div()
-                        .absolute()
-                        .bottom(px(36.))
-                        .right(px(12.))
-                        .occlude()
-                        .child(panel),
-                )
+                .child({
+                    let anchored = div().absolute().bottom(px(36.)).occlude();
+                    match menu {
+                        Menu::Mode => anchored.left(px(12.)),
+                        Menu::Model => anchored.right(px(12.)),
+                    }
+                    .child(panel)
+                })
                 .into_any_element(),
         )
     }
