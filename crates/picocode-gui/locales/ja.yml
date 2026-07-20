@@ -78,7 +78,8 @@ model_list_failed: "%{label} のモデル一覧を取得できません: %{error
 cancelled: "キャンセルしました"
 bg_started: "bash がタイムアウトし、バックグラウンドジョブ #%{id} に移行しました"
 bg_done: "バックグラウンドジョブ #%{id} が完了しました"
-still_running: "生成中です — 完了を待つか、停止を押してください"
+queued_n: "%{n} 件待機中 — 生成が終わると順に送信されます"
+queued_restored: "停止しました — 待機中のメッセージを入力欄に戻しました"
 not_available: "%{cmd}: GUI では未対応です — TUI をお使いください"
 session_detail: "%{age} · %{n} メッセージ · %{model}"
 

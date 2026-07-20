@@ -42,6 +42,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills.
+  Messages sent while the agent is still generating are not rejected:
+  they queue above the input box and are sent one per completed turn;
+  pressing Stop returns them to the input box instead.
 - **Copying**: assistant text is selectable (Cmd+C copies the selection),
   every code block has a copy button in its top-right corner, and
   right-clicking any transcript entry opens a "Copy text" menu.

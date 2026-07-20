@@ -144,6 +144,9 @@ pub struct ChatView {
     tokens_out: u64,
     /// RaTeX-rendered display formulas, keyed by (scale, color, tex).
     math_cache: crate::tex::MathCache,
+    /// Prompts submitted while a turn was running, held back and sent one
+    /// per completed turn (Stop returns them to the input box instead).
+    queued: Vec<String>,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
     /// Virtualized-list state for the transcript: only visible entries are
@@ -246,6 +249,7 @@ impl ChatView {
             tokens_in: 0,
             tokens_out: 0,
             math_cache: crate::tex::MathCache::new(),
+            queued: Vec::new(),
             ctx_menu: None,
             // The overdraw pre-measures entries near the viewport so
             // scrolling doesn't pop items in.
@@ -305,7 +309,7 @@ impl ChatView {
 
     // ---------- events from the agent worker ----------
 
-    fn on_agent_event(&mut self, ev: AgentEvent, window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_agent_event(&mut self, ev: AgentEvent, window: &mut Window, cx: &mut Context<Self>) {
         // No explicit scroll-follow here: the bottom-aligned virtual list
         // sticks to the bottom on its own while the user hasn't scrolled up,
         // and pins the position (like the TUI) while they have.
@@ -382,6 +386,7 @@ impl ChatView {
                 }
                 self.running = false;
                 self.autosave();
+                self.flush_queued();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
             AgentEvent::BackgroundStarted { id, command } => {
@@ -408,13 +413,29 @@ impl ChatView {
                     self.waiting = true;
                 }
             }
-            AgentEvent::Cancelled => self.push(EntryKind::Notice, t!("cancelled").to_string()),
+            AgentEvent::Cancelled => {
+                self.push(EntryKind::Notice, t!("cancelled").to_string());
+                // Stop means stop: give held-back prompts to the input box
+                // instead of firing them on the TurnComplete that follows.
+                if !self.queued.is_empty() {
+                    let mut text = std::mem::take(&mut self.queued).join("\n");
+                    let existing = self.input.read(cx).value().to_string();
+                    if !existing.is_empty() {
+                        text.push('\n');
+                        text.push_str(&existing);
+                    }
+                    self.input
+                        .update(cx, |state, cx| state.set_value(text, window, cx));
+                    self.push(EntryKind::Notice, t!("queued_restored").to_string());
+                }
+            }
             AgentEvent::TurnComplete => {
                 self.running = false;
                 self.waiting = false;
                 // Tools may have switched branches during the turn.
                 self.git_branch = picocode_core::git::branch(&self.cfg.root);
                 self.autosave();
+                self.flush_queued();
             }
             AgentEvent::Error(e) => {
                 self.waiting = false;
@@ -550,6 +571,7 @@ impl ChatView {
         );
         self.entries.extend(saved.entries);
         self.session_id = id.to_string();
+        self.queued.clear();
         self.reset_list();
         cx.notify();
     }
@@ -896,6 +918,7 @@ impl ChatView {
             "/clear" => {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
                 self.entries.clear();
+                self.queued.clear();
                 self.tokens_in = 0;
                 self.tokens_out = 0;
                 // A cleared conversation starts a fresh session log.
@@ -933,9 +956,9 @@ impl ChatView {
                     t!("not_available", cmd = text).to_string(),
                 );
             }
-            _ if self.running => {
-                self.push(EntryKind::Notice, t!("still_running").to_string());
-            }
+            // Mid-turn prompts are held back (shown above the input box)
+            // and sent one per completed turn, instead of being rejected.
+            _ if self.running => self.queued.push(text),
             _ => self.send_prompt(text),
         }
         self.scroll_to_bottom();
@@ -948,6 +971,16 @@ impl ChatView {
         let _ = self.cmd_tx.try_send(WorkerCmd::Prompt(text));
         self.running = true;
         self.waiting = true;
+    }
+
+    /// Send the oldest held-back prompt, if any. Called when a turn ends;
+    /// one prompt per turn, so each gets its own response.
+    fn flush_queued(&mut self) {
+        if self.queued.is_empty() {
+            return;
+        }
+        let text = self.queued.remove(0);
+        self.send_prompt(text);
     }
 
     fn stop(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1206,6 +1239,7 @@ impl ChatView {
         self.git_branch = picocode_core::git::branch(&self.cfg.root);
         self.session_id = session::new_id();
         self.entries.clear();
+        self.queued.clear();
         self.tokens_in = 0;
         self.tokens_out = 0;
         self.available_models.clear();
@@ -1746,6 +1780,28 @@ impl ChatView {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// Prompts held back while a turn runs, listed above the input box so
+    /// it's clear they were accepted and will be sent, not dropped.
+    fn render_queued(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.queued.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let mut block = div()
+            .v_flex()
+            .gap_0p5()
+            .pl_2()
+            .border_l_2()
+            .border_color(theme.border)
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(t!("queued_n", n = self.queued.len()).to_string());
+        for text in &self.queued {
+            block = block.child(format!("⏳ {}", one_line(text, 100)));
+        }
+        Some(block.into_any_element())
     }
 
     /// Completion popup: matching slash commands, shown above the input
@@ -2409,6 +2465,7 @@ impl Render for ChatView {
                     .p_3()
                     .border_t_1()
                     .border_color(border)
+                    .children(self.render_queued(cx))
                     .child(
                         div()
                             .h_flex()
