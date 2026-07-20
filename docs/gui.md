@@ -35,6 +35,10 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   `/status`, `/permissions`, `/quit`.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
+- **Theme**: follows the system light/dark appearance live by default; the
+  `/config` theme row forces light or dark for the session.
+- **i18n**: UI strings localize to the system language (English and
+  Japanese so far — `crates/picocode-gui/locales/*.yml`, via rust-i18n).
 
 ## Build notes
 

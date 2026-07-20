@@ -10,7 +10,8 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::clipboard::Clipboard;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::text::TextView;
-use gpui_component::{ActiveTheme, StyledExt};
+use gpui_component::{ActiveTheme, StyledExt, Theme, ThemeMode};
+use rust_i18n::t;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use std::path::PathBuf;
@@ -25,27 +26,24 @@ const DIFF_MAX_LINES: usize = 30;
 
 gpui::actions!(picocode_gui, [AcceptCompletion]);
 
-/// Slash commands the GUI supports, with a short description for the
-/// completion popup.
+/// Slash commands the GUI supports, paired with the locale key of their
+/// description for the completion popup.
 const COMMANDS: &[(&str, &str)] = &[
-    ("/clear", "Clear conversation history"),
-    ("/compact", "Summarize history to free context"),
-    ("/model", "Pick a model (menu) or switch: /model <name>"),
-    ("/resume", "Pick a saved session to resume"),
-    ("/read-only", "Mode: reads only, every write asks"),
-    ("/edit", "Mode: file writes run freely"),
-    ("/plan", "Mode: investigate and plan, writes blocked"),
-    (
-        "/bypass",
-        "Mode: run EVERYTHING unconfirmed (isolated envs)",
-    ),
-    ("/permissions", "Show the effective permission rules"),
-    ("/config", "Edit settings in a dialog"),
-    ("/settings", "Alias of /config"),
-    ("/status", "Show model, token usage and session info"),
-    ("/usage", "Alias of /status"),
-    ("/quit", "Exit picocode"),
-    ("/exit", "Exit picocode"),
+    ("/clear", "cmd_clear"),
+    ("/compact", "cmd_compact"),
+    ("/model", "cmd_model"),
+    ("/resume", "cmd_resume"),
+    ("/read-only", "cmd_read_only"),
+    ("/edit", "cmd_edit"),
+    ("/plan", "cmd_plan"),
+    ("/bypass", "cmd_bypass"),
+    ("/permissions", "cmd_permissions"),
+    ("/config", "cmd_config"),
+    ("/settings", "cmd_settings"),
+    ("/status", "cmd_status"),
+    ("/usage", "cmd_usage"),
+    ("/quit", "cmd_quit"),
+    ("/exit", "cmd_exit"),
 ];
 
 /// Diff row backgrounds (translucent, so they read on both themes).
@@ -57,6 +55,24 @@ const DIFF_DEL_BG: u32 = 0xf8514933;
 enum Menu {
     Mode,
     Model,
+}
+
+/// Color-theme preference (`/config`): follow the system, or force one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThemePref {
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePref {
+    fn label(self) -> String {
+        match self {
+            ThemePref::System => t!("theme_system").to_string(),
+            ThemePref::Light => t!("theme_light").to_string(),
+            ThemePref::Dark => t!("theme_dark").to_string(),
+        }
+    }
 }
 
 /// A destructive tool call waiting for the user's yes / no / always.
@@ -100,6 +116,8 @@ pub struct ChatView {
     settings_open: bool,
     /// Show reasoning entries in full, or collapsed to one line.
     show_reasoning: bool,
+    /// Color theme: follow the system (default), or forced light/dark.
+    theme_pref: ThemePref,
     /// Completion prefix locked at the first Tab press, so cycling keeps
     /// the full candidate list even after the input holds a full match.
     comp_prefix: Option<String>,
@@ -131,10 +149,25 @@ impl ChatView {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .auto_grow(1, 8)
-                .placeholder("Type a message — Enter to send, Shift+Enter for a newline")
+                .placeholder(t!("placeholder").to_string())
         });
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe_in(&input, window, Self::on_input_event)
+            .detach();
+
+        // Follow live system light/dark switches while the preference is
+        // "system" (the startup sync happens in gpui_component::init).
+        window
+            .observe_window_appearance({
+                let this = cx.entity().downgrade();
+                move |window, cx| {
+                    if let Some(this) = this.upgrade()
+                        && this.read(cx).theme_pref == ThemePref::System
+                    {
+                        Theme::sync_system_appearance(Some(window), cx);
+                    }
+                }
+            })
             .detach();
 
         // Pump agent events from the tokio channel into this view. tokio's
@@ -172,6 +205,7 @@ impl ChatView {
             session_picker: None,
             settings_open: false,
             show_reasoning: true,
+            theme_pref: ThemePref::System,
             comp_prefix: None,
             completing: false,
             tokens_in: 0,
@@ -254,16 +288,16 @@ impl ChatView {
                     if self.menu == Some(Menu::Model) {
                         self.push(
                             EntryKind::Error,
-                            format!("Could not list models on {label}: {e}"),
+                            t!("model_list_failed", label = label, error = e).to_string(),
                         );
                     }
                 }
             },
             AgentEvent::Compacted { messages, summary } => {
                 if messages == 0 {
-                    self.push(EntryKind::Notice, "nothing to compact".to_string());
+                    self.push(EntryKind::Notice, t!("nothing_to_compact").to_string());
                 } else {
-                    self.push(EntryKind::Notice, format!("compacted {messages} messages"));
+                    self.push(EntryKind::Notice, t!("compacted", n = messages).to_string());
                     self.push(EntryKind::Summary, summary);
                 }
                 self.running = false;
@@ -271,17 +305,14 @@ impl ChatView {
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
             AgentEvent::BackgroundStarted { id } => {
-                self.push(
-                    EntryKind::Notice,
-                    format!("bash timed out — moved to background job #{id}"),
-                );
+                self.push(EntryKind::Notice, t!("bg_started", id = id).to_string());
             }
             AgentEvent::BackgroundDone {
                 id,
                 command,
                 output,
             } => {
-                self.push(EntryKind::Notice, format!("background job #{id} finished"));
+                self.push(EntryKind::Notice, t!("bg_done", id = id).to_string());
                 self.push(EntryKind::ToolOut, clip(&output, TOOL_OUTPUT_MAX_LINES));
                 // Prompt the model with the result so it reacts to it, like
                 // the TUI does.
@@ -291,7 +322,7 @@ impl ChatView {
                     self.running = true;
                 }
             }
-            AgentEvent::Cancelled => self.push(EntryKind::Notice, "cancelled".to_string()),
+            AgentEvent::Cancelled => self.push(EntryKind::Notice, t!("cancelled").to_string()),
             AgentEvent::TurnComplete => {
                 self.running = false;
                 self.autosave();
@@ -347,18 +378,12 @@ impl ChatView {
     /// `/resume`: open the session-selection dialog.
     fn open_session_picker(&mut self, cx: &mut Context<Self>) {
         if self.running {
-            self.push(
-                EntryKind::Error,
-                "Cannot resume while a turn is running".to_string(),
-            );
+            self.push(EntryKind::Error, t!("resume_while_running").to_string());
             cx.notify();
             return;
         }
         let Some(dir) = self.sessions_dir.clone() else {
-            self.push(
-                EntryKind::Error,
-                "Session storage is unavailable (no $HOME)".to_string(),
-            );
+            self.push(EntryKind::Error, t!("no_home").to_string());
             cx.notify();
             return;
         };
@@ -368,10 +393,7 @@ impl ChatView {
             .filter(|s| s.id != self.session_id)
             .collect();
         if sessions.is_empty() {
-            self.push(
-                EntryKind::Notice,
-                "No saved sessions for this project yet".to_string(),
-            );
+            self.push(EntryKind::Notice, t!("no_sessions").to_string());
             cx.notify();
             return;
         }
@@ -385,23 +407,17 @@ impl ChatView {
     fn resume_session(&mut self, id: &str, cx: &mut Context<Self>) {
         self.session_picker = None;
         if self.running {
-            self.push(
-                EntryKind::Error,
-                "Cannot resume while a turn is running".to_string(),
-            );
+            self.push(EntryKind::Error, t!("resume_while_running").to_string());
             cx.notify();
             return;
         }
         let Some(dir) = self.sessions_dir.clone() else {
-            self.push(
-                EntryKind::Error,
-                "Session storage is unavailable (no $HOME)".to_string(),
-            );
+            self.push(EntryKind::Error, t!("no_home").to_string());
             cx.notify();
             return;
         };
         if id == self.session_id {
-            self.push(EntryKind::Notice, "That is the current session".to_string());
+            self.push(EntryKind::Notice, t!("current_session").to_string());
             cx.notify();
             return;
         }
@@ -409,7 +425,10 @@ impl ChatView {
         let saved = match session::load(&dir, id) {
             Ok(s) => s,
             Err(e) => {
-                self.push(EntryKind::Error, format!("Failed to resume: {e:#}"));
+                self.push(
+                    EntryKind::Error,
+                    t!("resume_failed", error = format!("{e:#}")).to_string(),
+                );
                 cx.notify();
                 return;
             }
@@ -420,7 +439,7 @@ impl ChatView {
             .try_send(WorkerCmd::SeedHistory(saved.history))
             .is_err()
         {
-            self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+            self.push(EntryKind::Error, t!("worker_stopped").to_string());
             cx.notify();
             return;
         }
@@ -430,10 +449,7 @@ impl ChatView {
         self.tokens_out = 0;
         self.push(
             EntryKind::Notice,
-            format!(
-                "Resumed session {id} — {messages} messages, last saved with {}",
-                saved.model
-            ),
+            t!("resumed", id = id, n = messages, model = saved.model).to_string(),
         );
         self.entries.extend(saved.entries);
         self.session_id = id.to_string();
@@ -537,13 +553,34 @@ impl ChatView {
         );
     }
 
+    /// Cycle the theme preference and apply it.
+    fn cycle_theme(&mut self, delta: i64, cx: &mut Context<Self>) {
+        const CYCLE: [ThemePref; 3] = [ThemePref::System, ThemePref::Light, ThemePref::Dark];
+        let i = CYCLE
+            .iter()
+            .position(|t| *t == self.theme_pref)
+            .unwrap_or(0);
+        self.theme_pref = if delta < 0 {
+            CYCLE[(i + CYCLE.len() - 1) % CYCLE.len()]
+        } else {
+            CYCLE[(i + 1) % CYCLE.len()]
+        };
+        match self.theme_pref {
+            ThemePref::System => Theme::sync_system_appearance(None, cx),
+            ThemePref::Light => Theme::change(ThemeMode::Light, None, cx),
+            ThemePref::Dark => Theme::change(ThemeMode::Dark, None, cx),
+        }
+    }
+
     /// A `/config` row change. Every change applies immediately (max turns
-    /// from the next prompt on). Mirrors the TUI's `/config` dialog.
+    /// from the next prompt on). Mirrors the TUI's `/config` dialog, plus
+    /// the GUI-only theme row.
     fn adjust_setting(&mut self, row: usize, delta: i64, cx: &mut Context<Self>) {
         match row {
+            0 => self.cycle_theme(delta, cx),
             // Same cycle as the TUI: bypass stays menu/command-only, and
             // adjusting away from it lands on read-only.
-            0 => {
+            1 => {
                 let cycle = Mode::CYCLE;
                 let next = match cycle.iter().position(|m| *m == self.cfg.mode.get()) {
                     Some(i) if delta < 0 => cycle[(i + cycle.len() - 1) % cycle.len()],
@@ -552,32 +589,32 @@ impl ChatView {
                 };
                 self.cfg.mode.set(next);
             }
-            1 => self.show_reasoning = !self.show_reasoning,
-            2 => {
+            2 => self.show_reasoning = !self.show_reasoning,
+            3 => {
                 let turns = self.cfg.max_turns.get() as i64 + delta * 10;
                 self.cfg.max_turns.set(turns.clamp(10, 200) as u64);
             }
-            3 => {
+            4 => {
                 let secs = self.cfg.bash_timeout.get() as i64 + delta * 30;
                 self.cfg.bash_timeout.set(secs.clamp(30, 1800) as u64);
             }
-            4 => {
+            5 => {
                 let lines = self.cfg.read_max_lines.get() as i64 + delta * 500;
                 self.cfg.read_max_lines.set(lines.clamp(500, 10_000) as u64);
             }
-            5 => {
+            6 => {
                 let bytes = self.cfg.read_max_line_bytes.get() as i64 + delta * 100;
                 self.cfg
                     .read_max_line_bytes
                     .set(bytes.clamp(100, 5000) as u64);
             }
-            6 => self.cfg.search.cycle_provider(delta),
-            7 => {
+            7 => self.cfg.search.cycle_provider(delta),
+            8 => {
                 let n = self.cfg.search.snapshot().max_results as i64 + delta;
                 self.cfg.search.set_max_results(n.clamp(1, 20) as usize);
             }
             // ±5% between 50 and 95; stepping below 50 turns it off.
-            8 => {
+            9 => {
                 let cur = self.cfg.auto_compact.get() as i64;
                 let next = if delta < 0 {
                     if cur <= 50 { 0 } else { cur - 5 }
@@ -589,7 +626,7 @@ impl ChatView {
                 self.cfg.auto_compact.set(next as u64);
             }
             // Model: close the dialog and open the model menu.
-            9 => {
+            10 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, cx);
             }
@@ -735,11 +772,11 @@ impl ChatView {
                 self.tokens_out = 0;
                 // A cleared conversation starts a fresh session log.
                 self.session_id = session::new_id();
-                self.push(EntryKind::Notice, "conversation cleared".to_string());
+                self.push(EntryKind::Notice, t!("cleared").to_string());
             }
             "/compact" => {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
-                self.push(EntryKind::Notice, "compacting…".to_string());
+                self.push(EntryKind::Notice, t!("compacting").to_string());
                 self.running = true;
             }
             "/quit" | "/exit" => cx.quit(),
@@ -763,14 +800,11 @@ impl ChatView {
             _ if text.starts_with('/') => {
                 self.push(
                     EntryKind::Notice,
-                    format!("{text}: not available in the GUI (yet) — try the TUI"),
+                    t!("not_available", cmd = text).to_string(),
                 );
             }
             _ if self.running => {
-                self.push(
-                    EntryKind::Notice,
-                    "still running — wait for the turn to finish or press Stop".to_string(),
-                );
+                self.push(EntryKind::Notice, t!("still_running").to_string());
             }
             _ => self.send_prompt(text),
         }
@@ -800,14 +834,12 @@ impl ChatView {
         }
         self.cfg.mode.set(mode);
         if mode == Mode::Bypass {
-            self.push(
-                EntryKind::Warning,
-                "bypass mode: EVERY tool call now runs without confirmation (deny rules \
-                 still apply). Meant for isolated environments such as containers."
-                    .to_string(),
-            );
+            self.push(EntryKind::Warning, t!("bypass_warning").to_string());
         } else {
-            self.push(EntryKind::Notice, format!("Mode: {}", mode.label()));
+            self.push(
+                EntryKind::Notice,
+                t!("mode_changed", mode = mode.label()).to_string(),
+            );
         }
         cx.notify();
     }
@@ -837,10 +869,7 @@ impl ChatView {
     fn switch_model(&mut self, name: &str, cx: &mut Context<Self>) {
         self.menu = None;
         if self.running {
-            self.push(
-                EntryKind::Error,
-                "Cannot switch models while a turn is running".to_string(),
-            );
+            self.push(EntryKind::Error, t!("switch_while_running").to_string());
             cx.notify();
             return;
         }
@@ -850,7 +879,11 @@ impl ChatView {
                 if self.cfg.active_model.as_deref() == Some(name) {
                     self.push(
                         EntryKind::Notice,
-                        format!("Already using {name} ({})", entry.label()),
+                        t!(
+                            "already_using",
+                            name = format!("{name} ({})", entry.label())
+                        )
+                        .to_string(),
                     );
                     cx.notify();
                     return;
@@ -869,7 +902,7 @@ impl ChatView {
                 if self.cfg.active_model.is_none() && self.cfg.model == name {
                     self.push(
                         EntryKind::Notice,
-                        format!("Already using {}", self.cfg.model_label()),
+                        t!("already_using", name = self.cfg.model_label()).to_string(),
                     );
                     cx.notify();
                     return;
@@ -879,7 +912,10 @@ impl ChatView {
                 new_cfg.context_window = config::DEFAULT_CONTEXT_WINDOW;
             }
             None => {
-                self.push(EntryKind::Error, format!("Unknown model `{name}`"));
+                self.push(
+                    EntryKind::Error,
+                    t!("unknown_model", name = name).to_string(),
+                );
                 cx.notify();
                 return;
             }
@@ -895,7 +931,7 @@ impl ChatView {
                 Err(e) => {
                     self.push(
                         EntryKind::Error,
-                        format!("Failed to switch to `{name}`: {e:#}"),
+                        t!("switch_failed", name = name, error = format!("{e:#}")).to_string(),
                     );
                     cx.notify();
                     return;
@@ -926,7 +962,12 @@ impl ChatView {
         self.cfg = new_cfg;
         self.push(
             EntryKind::Notice,
-            format!("Model switched to {name} ({})", self.cfg.model_label()),
+            t!(
+                "model_switched",
+                name = name,
+                label = self.cfg.model_label()
+            )
+            .to_string(),
         );
         if endpoint_changed {
             self.available_models.clear();
@@ -1200,11 +1241,12 @@ impl ChatView {
         let a = self.approval.as_ref()?;
         let theme = cx.theme();
         let always_label = match approval::bash_command(&a.name, &a.args) {
-            Some(cmd) => format!(
-                "Always ({} …)",
-                config::bash_allow_patterns(&cmd).join(", ")
-            ),
-            None => format!("Always ({})", a.name),
+            Some(cmd) => t!(
+                "always_tool",
+                what = format!("{} …", config::bash_allow_patterns(&cmd).join(", "))
+            )
+            .to_string(),
+            None => t!("always_tool", what = a.name).to_string(),
         };
         Some(
             overlay()
@@ -1232,7 +1274,11 @@ impl ChatView {
                                         .flex_none()
                                         .text_color(color),
                                 )
-                                .child(div().font_bold().child(format!("Run {}?", a.name)))
+                                .child(
+                                    div()
+                                        .font_bold()
+                                        .child(t!("run_tool", tool = a.name).to_string()),
+                                )
                         })
                         .child(
                             div()
@@ -1251,19 +1297,24 @@ impl ChatView {
                                 .h_flex()
                                 .gap_2()
                                 .justify_end()
-                                .child(Button::new("deny").label("Deny").on_click(cx.listener(
-                                    |this, _, _, cx| this.answer_approval(false, false, cx),
-                                )))
+                                .child(Button::new("deny").label(t!("deny").to_string()).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.answer_approval(false, false, cx)
+                                    }),
+                                ))
                                 .child(Button::new("always").label(always_label).on_click(
                                     cx.listener(|this, _, _, cx| {
                                         this.answer_approval(true, true, cx)
                                     }),
                                 ))
-                                .child(Button::new("approve").primary().label("Approve").on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.answer_approval(true, false, cx)
-                                    }),
-                                )),
+                                .child(
+                                    Button::new("approve")
+                                        .primary()
+                                        .label(t!("approve").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.answer_approval(true, false, cx)
+                                        })),
+                                ),
                         ),
                 )
                 .into_any_element(),
@@ -1302,11 +1353,17 @@ impl ChatView {
                                 .child(q.question.clone()),
                         )
                         .child(div().v_flex().gap_2().children(options))
-                        .child(div().h_flex().justify_end().child(
-                            Button::new("dismiss").label("Dismiss").on_click(
-                                cx.listener(|this, _, _, cx| this.answer_question(None, cx)),
+                        .child(
+                            div().h_flex().justify_end().child(
+                                Button::new("dismiss")
+                                    .label(t!("dismiss").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.answer_question(None, cx)
+                                        }),
+                                    ),
                             ),
-                        )),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -1350,7 +1407,7 @@ impl ChatView {
                             .child(
                                 menu_row(
                                     SharedString::from("ctx-copy"),
-                                    "Copy text",
+                                    t!("copy_text").to_string(),
                                     one_line(&text, 32),
                                     false,
                                     theme,
@@ -1417,7 +1474,7 @@ impl ChatView {
                         div()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(desc),
+                            .child(t!(desc).to_string()),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.completing = true;
@@ -1457,12 +1514,13 @@ impl ChatView {
             } else {
                 s.snippet.clone()
             };
-            let detail = format!(
-                "{} · {} messages · {}",
-                session::age(s.modified),
-                s.messages,
-                s.model
-            );
+            let detail = t!(
+                "session_detail",
+                age = session::age(s.modified),
+                n = s.messages,
+                model = s.model
+            )
+            .to_string();
             list = list.child(
                 menu_row(
                     SharedString::from(format!("session-{ix}")),
@@ -1487,12 +1545,12 @@ impl ChatView {
                         .bg(theme.background)
                         .border_1()
                         .border_color(theme.border)
-                        .child(div().font_bold().child("Resume a session"))
+                        .child(div().font_bold().child(t!("resume_title").to_string()))
                         .child(list)
                         .child(
                             div().h_flex().justify_end().child(
                                 Button::new("resume-cancel")
-                                    .label("Cancel")
+                                    .label(t!("cancel").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.session_picker = None;
                                         cx.notify();
@@ -1512,40 +1570,65 @@ impl ChatView {
         }
         let theme = cx.theme();
         let search = self.cfg.search.snapshot();
-        let rows: [(&str, String); 10] = [
-            ("mode", self.cfg.mode.get().label().to_string()),
+        let rows: [(String, String); 11] = [
+            (t!("row_theme").to_string(), self.theme_pref.label()),
             (
-                "reasoning",
+                t!("row_mode").to_string(),
+                self.cfg.mode.get().label().to_string(),
+            ),
+            (
+                t!("row_reasoning").to_string(),
                 if self.show_reasoning {
-                    "shown".to_string()
+                    t!("reasoning_shown").to_string()
                 } else {
-                    "collapsed".to_string()
+                    t!("reasoning_collapsed").to_string()
                 },
             ),
-            ("max turns", self.cfg.max_turns.get().to_string()),
-            ("bash timeout", format!("{}s", self.cfg.bash_timeout.get())),
-            ("read lines", self.cfg.read_max_lines.get().to_string()),
-            ("line bytes", self.cfg.read_max_line_bytes.get().to_string()),
-            ("web search", search.provider.label().to_string()),
-            ("results", search.max_results.to_string()),
             (
-                "auto-compact",
+                t!("row_max_turns").to_string(),
+                self.cfg.max_turns.get().to_string(),
+            ),
+            (
+                t!("row_bash_timeout").to_string(),
+                format!("{}s", self.cfg.bash_timeout.get()),
+            ),
+            (
+                t!("row_read_lines").to_string(),
+                self.cfg.read_max_lines.get().to_string(),
+            ),
+            (
+                t!("row_line_bytes").to_string(),
+                self.cfg.read_max_line_bytes.get().to_string(),
+            ),
+            (
+                t!("row_web_search").to_string(),
+                search.provider.label().to_string(),
+            ),
+            (
+                t!("row_results").to_string(),
+                search.max_results.to_string(),
+            ),
+            (
+                t!("row_auto_compact").to_string(),
                 match self.cfg.auto_compact.get() {
-                    0 => "off".to_string(),
+                    0 => t!("auto_compact_off").to_string(),
                     pct => format!("{pct}%"),
                 },
             ),
-            ("model", self.cfg.model_label()),
+            (t!("row_model").to_string(), self.cfg.model_label()),
         ];
 
         let mut panel = div().v_flex().gap_1();
+        let model_row = rows.len() - 1;
         for (ix, (label, value)) in rows.into_iter().enumerate() {
             // The model row is a single button opening the model menu; the
             // others adjust in place with −/+.
-            let controls: AnyElement = if ix == 9 {
+            let controls: AnyElement = if ix == model_row {
                 Button::new("cfg-model")
                     .label(value)
-                    .on_click(cx.listener(move |this, _, _, cx| this.adjust_setting(9, 1, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.adjust_setting(model_row, 1, cx)),
+                    )
                     .into_any_element()
             } else {
                 div()
@@ -1578,7 +1661,7 @@ impl ChatView {
                     .items_center()
                     .px_2()
                     .py_1()
-                    .child(label.to_string())
+                    .child(label)
                     .child(controls),
             );
         }
@@ -1595,19 +1678,19 @@ impl ChatView {
                         .bg(theme.background)
                         .border_1()
                         .border_color(theme.border)
-                        .child(div().font_bold().child("Settings"))
+                        .child(div().font_bold().child(t!("settings_title").to_string()))
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
-                                .child("Changes apply immediately, for this session only."),
+                                .child(t!("settings_note").to_string()),
                         )
                         .child(panel)
                         .child(
                             div().h_flex().justify_end().child(
                                 Button::new("settings-close")
                                     .primary()
-                                    .label("Close")
+                                    .label(t!("close").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.settings_open = false;
                                         cx.notify();
@@ -1669,9 +1752,9 @@ impl ChatView {
             ));
 
         let state = if self.running {
-            "● running"
+            t!("running").to_string()
         } else {
-            "● idle"
+            t!("idle").to_string()
         };
 
         // Button-like pill: mode color as the fill, like the Send button.
@@ -1736,17 +1819,17 @@ impl ChatView {
         match menu {
             Menu::Mode => {
                 for (mode, desc) in [
-                    (Mode::ReadOnly, "destructive calls ask"),
-                    (Mode::Edit, "file edits run without asking"),
-                    (Mode::Plan, "investigate only; submits a plan"),
-                    (Mode::Bypass, "EVERYTHING runs unconfirmed"),
+                    (Mode::ReadOnly, "mode_read_only_desc"),
+                    (Mode::Edit, "mode_edit_desc"),
+                    (Mode::Plan, "mode_plan_desc"),
+                    (Mode::Bypass, "mode_bypass_desc"),
                 ] {
                     let active = mode == current_mode;
                     panel = panel.child(
                         menu_row(
                             SharedString::from(format!("mode-{}", mode.label())),
                             mode.label(),
-                            desc.to_string(),
+                            t!(desc).to_string(),
                             active,
                             theme,
                         )
@@ -1769,7 +1852,7 @@ impl ChatView {
                             .p_2()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child("Fetching the provider's model list…"),
+                            .child(t!("fetching_models").to_string()),
                     );
                 }
                 let mut list = div()
@@ -1866,11 +1949,14 @@ impl Render for ChatView {
             items.push(
                 div()
                     .text_color(muted_fg)
-                    .child(format!(
-                        "picocode — {} in {}",
-                        self.cfg.model_label(),
-                        self.cfg.root.display()
-                    ))
+                    .child(
+                        t!(
+                            "greeting",
+                            model = self.cfg.model_label(),
+                            root = self.cfg.root.display()
+                        )
+                        .to_string(),
+                    )
                     .into_any_element(),
             );
         }
@@ -1878,13 +1964,13 @@ impl Render for ChatView {
         let send_or_stop: AnyElement = if self.running {
             Button::new("stop")
                 .danger()
-                .label("Stop")
+                .label(t!("stop").to_string())
                 .on_click(cx.listener(Self::stop))
                 .into_any_element()
         } else {
             Button::new("send")
                 .primary()
-                .label("Send")
+                .label(t!("send").to_string())
                 .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
                 .into_any_element()
         };

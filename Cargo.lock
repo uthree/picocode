@@ -7969,7 +7969,9 @@ dependencies = [
  "ratex-parser",
  "ratex-render",
  "ratex-types",
+ "rust-i18n",
  "serde_json",
+ "sys-locale",
  "tokio",
  "unicodeit",
 ]

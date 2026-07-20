@@ -32,6 +32,8 @@ similar = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 tempfile = "3"
 unicodeit = "0.2"
+rust-i18n = "3"
+sys-locale = "0.3"
 ratex-render = { version = "0.1.13", features = ["embed-fonts"] }
 ratex-parser = "0.1.13"
 ratex-layout = "0.1.13"
