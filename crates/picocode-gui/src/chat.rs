@@ -1087,17 +1087,50 @@ impl ChatView {
                     format!("✳ {}", one_line(&entry.text, 80))
                 })
                 .into_any_element(),
-            EntryKind::Tool => div()
-                .font_family(mono)
-                .text_sm()
-                .text_color(muted)
-                .child(format!("⚙ {}", entry.text))
-                .into_any_element(),
+            EntryKind::Tool => {
+                // "{name} {args}" — icon and accent color per tool.
+                let (name, rest) = entry
+                    .text
+                    .split_once(' ')
+                    .unwrap_or((entry.text.as_str(), ""));
+                let (icon, color) = tool_style(name);
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        gpui_component::Icon::default()
+                            .path(icon)
+                            .size_4()
+                            .flex_none()
+                            .text_color(color),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(color)
+                            .child(name.to_string()),
+                    )
+                    .child(
+                        div()
+                            .font_family(mono)
+                            .text_sm()
+                            .text_color(muted)
+                            .truncate()
+                            .child(rest.to_string()),
+                    )
+                    .into_any_element()
+            }
             EntryKind::ToolOut => div()
+                .ml_2()
+                .pl_3()
+                .border_l_2()
+                .border_color(theme.border)
                 .font_family(mono)
                 .text_sm()
                 .text_color(muted)
-                .pl_4()
                 .child(entry.text.clone())
                 .into_any_element(),
             EntryKind::Diff => div()
@@ -1110,8 +1143,18 @@ impl ChatView {
                 .child(entry.text.clone())
                 .into_any_element(),
             EntryKind::Warning => div()
+                .h_flex()
+                .gap_2()
+                .items_start()
                 .text_sm()
                 .text_color(theme.warning)
+                .child(
+                    gpui_component::Icon::default()
+                        .path("icons/triangle-alert.svg")
+                        .size_4()
+                        .flex_none()
+                        .mt_0p5(),
+                )
                 .child(entry.text.clone())
                 .into_any_element(),
             EntryKind::Summary => div()
@@ -1125,8 +1168,18 @@ impl ChatView {
                 .child(entry.text.clone())
                 .into_any_element(),
             EntryKind::Error => div()
+                .h_flex()
+                .gap_2()
+                .items_start()
                 .text_sm()
                 .text_color(theme.danger)
+                .child(
+                    gpui_component::Icon::default()
+                        .path("icons/circle-x.svg")
+                        .size_4()
+                        .flex_none()
+                        .mt_0p5(),
+                )
                 .child(entry.text.clone())
                 .into_any_element(),
         }
@@ -1155,7 +1208,21 @@ impl ChatView {
                         .bg(theme.background)
                         .border_1()
                         .border_color(theme.border)
-                        .child(div().font_bold().child(format!("Run {}?", a.name)))
+                        .child({
+                            let (icon, color) = tool_style(&a.name);
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    gpui_component::Icon::default()
+                                        .path(icon)
+                                        .size_4()
+                                        .flex_none()
+                                        .text_color(color),
+                                )
+                                .child(div().font_bold().child(format!("Run {}?", a.name)))
+                        })
                         .child(
                             div()
                                 .id("approval-args")
@@ -1845,6 +1912,24 @@ fn overlay() -> gpui::Div {
         .items_center()
         .justify_center()
         .bg(gpui::black().opacity(0.4))
+}
+
+/// Icon asset path and accent color for a tool-call row: blue-ish for
+/// local reads, yellow for file edits, green for the shell, purple for
+/// the web tools, blue for plans.
+fn tool_style(name: &str) -> (&'static str, gpui::Hsla) {
+    let (icon, rgb) = match name {
+        "read_file" => ("icons/file-text.svg", 0x0ea5e9),
+        "list_files" => ("icons/folder.svg", 0x0ea5e9),
+        "grep" => ("icons/search.svg", 0x0ea5e9),
+        "edit_file" => ("icons/pencil.svg", 0xeab308),
+        "bash" => ("icons/terminal.svg", 0x3fb950),
+        "web_search" => ("icons/globe.svg", 0xa855f7),
+        "web_fetch" => ("icons/download.svg", 0xa855f7),
+        "submit_plan" => ("icons/clipboard-list.svg", 0x3b82f6),
+        _ => ("icons/wrench.svg", 0x8b949e),
+    };
+    (icon, gpui::rgb(rgb).into())
 }
 
 /// Status-bar color per permission mode (mirrors the TUI's palette).
