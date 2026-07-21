@@ -207,16 +207,19 @@ mod tests {
                     kind: EntryKind::Notice,
                     text: "picocode".into(),
                     lang: None,
+                    attachments: Vec::new(),
                 },
                 Entry {
                     kind: EntryKind::User,
                     text: prompt.into(),
                     lang: None,
+                    attachments: vec!["shot.png".into()],
                 },
                 Entry {
                     kind: EntryKind::Assistant,
                     text: "hi!".into(),
                     lang: None,
+                    attachments: Vec::new(),
                 },
             ],
         )

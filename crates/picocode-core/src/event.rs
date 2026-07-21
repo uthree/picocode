@@ -3,6 +3,8 @@
 use rig::completion::Message;
 use tokio::sync::oneshot;
 
+use crate::attachment::Attachment;
+
 /// Events sent from the agent worker / approval hook to the TUI.
 pub enum AgentEvent {
     /// Streamed assistant text delta.
@@ -63,8 +65,12 @@ pub enum AgentEvent {
 
 /// Commands sent from the TUI to the agent worker.
 pub enum WorkerCmd {
-    /// Run the agent on a user prompt.
-    Prompt(String),
+    /// Run the agent on a user prompt, with optional file attachments sent
+    /// as multimodal message content.
+    Prompt {
+        text: String,
+        attachments: Vec<Attachment>,
+    },
     /// Clear the conversation history.
     Clear,
     /// Summarize the history and replace it with the summary.

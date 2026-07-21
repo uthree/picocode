@@ -36,6 +36,7 @@ fn main() -> anyhow::Result<()> {
     // In the GUI, --smoke auto-sends the prompt once the window opens
     // (debug aid: exercises the whole worker ⇄ view bridge on launch).
     let smoke = args.smoke.clone();
+    let smoke_attach = args.smoke_attach.clone();
     let mut cfg = config::Config::from_args(args)?;
 
     // The agent worker and tools are tokio-based; gpui has its own executor,
@@ -98,7 +99,12 @@ fn main() -> anyhow::Result<()> {
                         cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
                     );
                     if let Some(prompt) = smoke {
-                        view.send_prompt(prompt);
+                        let attachments = smoke_attach
+                            .as_deref()
+                            .and_then(picocode_core::attachment::Attachment::classify)
+                            .into_iter()
+                            .collect();
+                        view.send_prompt(prompt, attachments);
                     }
                     view
                 });

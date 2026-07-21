@@ -102,6 +102,19 @@ const ICONS: &[(&str, &str)] = &[
         "icons/circle-x.svg",
         lucide!(r#"<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 15 6-6"/>"#),
     ),
+    // Attachments: the attach button and the non-image chip icons.
+    (
+        "icons/paperclip.svg",
+        lucide!(
+            r#"<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>"#
+        ),
+    ),
+    (
+        "icons/music.svg",
+        lucide!(
+            r#"<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>"#
+        ),
+    ),
 ];
 
 pub struct Assets;

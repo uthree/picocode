@@ -59,6 +59,10 @@ pub struct Args {
     /// events to stdout. Implies bypass mode.
     #[arg(long, hide = true)]
     pub smoke: Option<String>,
+
+    /// File attached to the --smoke prompt (E2E for multimodal messages).
+    #[arg(long, hide = true, requires = "smoke")]
+    pub smoke_attach: Option<PathBuf>,
 }
 
 // ----- config file ----------------------------------------------------------

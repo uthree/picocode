@@ -12,6 +12,9 @@ crates/
                    approval rules (rules), web-search settings (search)
     agent.rs     — rig agent construction and the streaming worker
     approval.rs  — approval gate for destructive tools (rig AgentHook)
+    attachment.rs — user file attachments (image/audio/PDF) sent as
+                   multimodal message content, with per-provider support
+                   checks
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
     models.rs    — provider model-list queries backing /model
     report.rs    — /status and /permissions text shared by both front ends

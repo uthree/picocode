@@ -14,6 +14,7 @@ use picocode_core::{agent, config, models};
 async fn main() -> anyhow::Result<()> {
     let args = config::Args::parse();
     let smoke = args.smoke.clone();
+    let smoke_attach = args.smoke_attach.clone();
     let mut cfg = config::Config::from_args(args)?;
     if smoke.is_some() {
         cfg.mode.set(config::Mode::Bypass);
@@ -30,7 +31,12 @@ async fn main() -> anyhow::Result<()> {
     let cmd_tx = agent::spawn(&cfg, event_tx.clone(), cancel_rx)?;
 
     if let Some(prompt) = smoke {
-        return run_smoke(prompt, event_rx, cmd_tx).await;
+        let attachments = smoke_attach
+            .as_deref()
+            .and_then(picocode_core::attachment::Attachment::classify)
+            .into_iter()
+            .collect();
+        return run_smoke(prompt, attachments, event_rx, cmd_tx).await;
     }
 
     let terminal = ratatui::init();
@@ -65,11 +71,17 @@ async fn main() -> anyhow::Result<()> {
 /// Headless debug mode: run one prompt and print the event stream.
 async fn run_smoke(
     prompt: String,
+    attachments: Vec<picocode_core::attachment::Attachment>,
     mut event_rx: tokio::sync::mpsc::Receiver<AgentEvent>,
     cmd_tx: tokio::sync::mpsc::Sender<WorkerCmd>,
 ) -> anyhow::Result<()> {
     use std::io::Write;
-    cmd_tx.send(WorkerCmd::Prompt(prompt)).await?;
+    cmd_tx
+        .send(WorkerCmd::Prompt {
+            text: prompt,
+            attachments,
+        })
+        .await?;
     while let Some(ev) = event_rx.recv().await {
         match ev {
             AgentEvent::TextDelta(s) => {

@@ -35,6 +35,7 @@ on macOS ones).
 | `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, bash timeout, read_file limits (lines / bytes per line), web search provider / result count and the auto-compact threshold (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter`. Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |
 | `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config |
 | `/compact` | Compact the conversation into a summary. Also runs automatically after a turn once context usage reaches the `auto_compact` threshold (default 85% of the window; 0 or the `/config` "off" setting disables) |
+| `/attach <path>` | Stage a file (image; audio/PDF on providers that take them — Ollama is images-only) to send with the next prompt as multimodal content. `/attach` lists what's staged, `/attach clear` unstages all |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |

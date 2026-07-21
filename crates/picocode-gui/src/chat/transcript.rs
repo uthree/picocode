@@ -74,15 +74,52 @@ impl ChatView {
         let foreground = theme.foreground;
         let mono = theme.mono_font_family.clone();
         match entry.kind {
-            EntryKind::User => div()
-                .px_3()
-                .py_2()
-                .rounded_lg()
-                .bg(theme.muted)
-                .border_1()
-                .border_color(theme.border)
-                .child(entry.text.clone())
-                .into_any_element(),
+            EntryKind::User => {
+                let mut bubble = div()
+                    .px_3()
+                    .py_2()
+                    .rounded_lg()
+                    .bg(theme.muted)
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(entry.text.clone());
+                if !entry.attachments.is_empty() {
+                    let mut row = div().h_flex().gap_2().flex_wrap().pt_1();
+                    for path in &entry.attachments {
+                        let path = std::path::PathBuf::from(path);
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.display().to_string());
+                        let is_image = picocode_core::attachment::Attachment::classify(&path)
+                            .is_some_and(|a| {
+                                a.kind == picocode_core::attachment::AttachmentKind::Image
+                            });
+                        // Thumbnails load from the original path; if the file
+                        // has since moved, gpui just renders nothing and the
+                        // name label still identifies it.
+                        let chip = div()
+                            .h_flex()
+                            .gap_1()
+                            .items_center()
+                            .text_sm()
+                            .text_color(muted);
+                        row = row.child(if is_image && path.exists() {
+                            chip.child(
+                                gpui::img(path.clone())
+                                    .h(px(64.))
+                                    .max_w(px(160.))
+                                    .rounded_md(),
+                            )
+                            .child(name)
+                        } else {
+                            chip.child(format!("📎 {name}"))
+                        });
+                    }
+                    bubble = bubble.child(row);
+                }
+                bubble.into_any_element()
+            }
             EntryKind::Assistant => {
                 // While the reply is still streaming, render it as plain
                 // text: the markdown TextView re-parses on a 200ms debounce

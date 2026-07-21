@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod approval;
+pub mod attachment;
 pub mod config;
 pub mod event;
 pub mod git;

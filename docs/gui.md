@@ -47,6 +47,14 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   Messages sent while the agent is still generating are not rejected:
   they queue above the input box and are sent one per completed turn;
   pressing Stop returns them to the input box instead.
+- **Attachments**: drop files from the Finder anywhere on the window, or
+  click the 📎 button next to the input for a file picker. Images (and,
+  depending on the provider, audio and PDFs — Ollama takes images only)
+  are staged as chips above the input — image chips show a thumbnail, ✕
+  removes one — and go to the model with the next prompt as multimodal
+  message content. Unsupported files are refused with a notice instead of
+  being silently dropped. Sent attachments stay visible in the user's
+  transcript bubble.
 - **Copying**: assistant text is selectable (Cmd+C copies the selection),
   every code block has a copy button in its top-right corner, and
   right-clicking any transcript entry opens a "Copy text" menu.

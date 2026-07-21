@@ -35,6 +35,10 @@ pub const LOGO: &str = r"            ███                                  
 
 /// Slash commands with a short description, used by the completion popup.
 pub const COMMANDS: &[(&str, &str)] = &[
+    (
+        "/attach",
+        "Attach a file to the next prompt: /attach <path>",
+    ),
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
     ("/model", "Pick a model (dialog) or switch: /model <name>"),
@@ -171,6 +175,8 @@ pub struct App {
     /// Streamed deltas since the last usage report — a live estimate of
     /// decoded tokens between usage updates.
     pub delta_est: u64,
+    /// Files staged with `/attach`, sent with the next prompt.
+    pub attachments: Vec<picocode_core::attachment::Attachment>,
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
@@ -239,6 +245,7 @@ impl App {
             turn_out: 0,
             total_out: 0,
             delta_est: 0,
+            attachments: Vec::new(),
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -659,6 +666,11 @@ impl App {
                 let id = text["/resume ".len()..].trim().to_string();
                 self.resume_session(&id).await;
             }
+            "/attach" => self.show_attachments(),
+            _ if text.starts_with("/attach ") => {
+                let arg = text["/attach ".len()..].trim().to_string();
+                self.attach(&arg);
+            }
             _ if text.starts_with('/') && !text.contains(' ') => {
                 self.push(EntryKind::Error, format!("Unknown command: {text}"));
             }
@@ -697,17 +709,103 @@ impl App {
 
     /// Send a user prompt to the agent worker. `display` is what the
     /// transcript shows (paste placeholders kept), `prompt` what the model
-    /// receives (pastes expanded).
+    /// receives (pastes expanded). Files staged with `/attach` go along and
+    /// the staging list is cleared.
     async fn send_prompt(&mut self, display: String, prompt: String) {
         self.close_blocks();
         // A new prompt re-arms auto-compaction (one attempt per user turn).
         self.auto_compact_tried = false;
-        self.push(EntryKind::User, display);
-        if self.cmd_tx.send(WorkerCmd::Prompt(prompt)).await.is_ok() {
+        let attachments = std::mem::take(&mut self.attachments);
+        self.entries.push(Entry {
+            kind: EntryKind::User,
+            text: display,
+            lang: None,
+            attachments: attachments.iter().map(|a| a.name()).collect(),
+        });
+        if self
+            .cmd_tx
+            .send(WorkerCmd::Prompt {
+                text: prompt,
+                attachments,
+            })
+            .await
+            .is_ok()
+        {
             self.begin_turn();
         } else {
             self.push(EntryKind::Error, "The agent worker has stopped".to_string());
         }
+    }
+
+    /// `/attach <path>`: stage a file to send with the next prompt
+    /// (`/attach clear` unstages everything). Unsupported types and types
+    /// the current provider can't take are refused with an explanation, so
+    /// nothing is silently dropped later in the provider conversion.
+    fn attach(&mut self, arg: &str) {
+        use picocode_core::attachment::Attachment;
+        if arg == "clear" {
+            self.attachments.clear();
+            self.push(EntryKind::Notice, "Attachments cleared".to_string());
+            return;
+        }
+        let path = self.cfg.root.join(arg);
+        if !path.is_file() {
+            self.push(EntryKind::Error, format!("Not a file: {arg}"));
+            return;
+        }
+        match Attachment::classify(&path) {
+            Some(att) if att.supported_by(self.cfg.provider) => {
+                if self.attachments.contains(&att) {
+                    self.push(EntryKind::Notice, format!("Already attached: {arg}"));
+                    return;
+                }
+                self.push(
+                    EntryKind::Notice,
+                    format!(
+                        "📎 Attached {} ({} staged)",
+                        arg,
+                        self.attachments.len() + 1
+                    ),
+                );
+                self.attachments.push(att);
+            }
+            Some(_) => self.push(
+                EntryKind::Warning,
+                format!(
+                    "The {} provider can't take this file type; not attached",
+                    picocode_core::config::provider_name(self.cfg.provider)
+                ),
+            ),
+            None => self.push(
+                EntryKind::Notice,
+                "Only image / audio / PDF files can be attached — I can read text \
+                 files myself via read_file"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// `/attach` with no argument: list what's staged.
+    fn show_attachments(&mut self) {
+        if self.attachments.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                "No attachments staged. /attach <path> stages a file for the \
+                 next prompt; /attach clear unstages all."
+                    .to_string(),
+            );
+            return;
+        }
+        let list = self
+            .attachments
+            .iter()
+            .map(|a| format!("  📎 {}", a.path.display()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.push(
+            EntryKind::Notice,
+            format!("Staged for the next prompt:\n{list}"),
+        );
     }
 
     /// `!<command>`: run a shell command directly (no model, no approval —
@@ -1528,12 +1626,15 @@ impl App {
                 // (this also records the result in the history). Runs after
                 // the current turn if one is streaming.
                 self.begin_turn();
-                self.send_worker_bg(WorkerCmd::Prompt(format!(
-                    "The bash command that was moved to background job #{id} has \
-                     finished:\n$ {command}\n\nOutput:\n{output}\n\n\
-                     Briefly report the result to the user and continue anything \
-                     that was waiting on it."
-                )));
+                self.send_worker_bg(WorkerCmd::Prompt {
+                    text: format!(
+                        "The bash command that was moved to background job #{id} has \
+                         finished:\n$ {command}\n\nOutput:\n{output}\n\n\
+                         Briefly report the result to the user and continue anything \
+                         that was waiting on it."
+                    ),
+                    attachments: Vec::new(),
+                });
             }
             AgentEvent::Cancelled => {
                 self.waiting = false;
@@ -1592,6 +1693,7 @@ impl App {
             kind,
             text,
             lang: None,
+            attachments: Vec::new(),
         });
     }
 
@@ -1602,6 +1704,7 @@ impl App {
             kind: EntryKind::Diff,
             text,
             lang: Some(lang.to_string()),
+            attachments: Vec::new(),
         });
     }
 

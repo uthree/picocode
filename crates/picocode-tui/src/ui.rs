@@ -148,6 +148,12 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                         Line::from(Span::styled(format!("  {s}"), Style::new().bold()))
                     }
                 });
+                for name in &entry.attachments {
+                    lines.push(Line::from(Span::styled(
+                        format!("  📎 {name}"),
+                        Style::new().fg(Color::DarkGray),
+                    )));
+                }
             }
             EntryKind::Assistant => {
                 lines.push(Line::default());

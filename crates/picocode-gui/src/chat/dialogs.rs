@@ -8,6 +8,7 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, StyledExt};
 use rust_i18n::t;
 
+use picocode_core::attachment::AttachmentKind;
 use picocode_core::config::{self};
 use picocode_core::transcript::diff_lines;
 use picocode_core::{approval, session};
@@ -259,10 +260,68 @@ impl ChatView {
             .text_sm()
             .text_color(theme.muted_foreground)
             .child(t!("queued_n", n = self.queued.len()).to_string());
-        for text in &self.queued {
-            block = block.child(format!("⏳ {}", one_line(text, 100)));
+        for (text, attachments) in &self.queued {
+            let mut line = format!("⏳ {}", one_line(text, 100));
+            if !attachments.is_empty() {
+                line.push_str(&format!(" (📎 {})", attachments.len()));
+            }
+            block = block.child(line);
         }
         Some(block.into_any_element())
+    }
+
+    /// Chips for files staged to go with the next prompt: image thumbnails,
+    /// icons for audio/PDF, each with a click-to-remove ✕.
+    pub(super) fn render_attachments(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.pending_attachments.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let mut row = div().h_flex().gap_2().flex_wrap();
+        for (ix, att) in self.pending_attachments.iter().enumerate() {
+            let visual: AnyElement = match att.kind {
+                AttachmentKind::Image => gpui::img(att.path.clone())
+                    .h(px(40.))
+                    .max_w(px(96.))
+                    .rounded_md()
+                    .into_any_element(),
+                AttachmentKind::Audio => gpui_component::Icon::default()
+                    .path("icons/music.svg")
+                    .size_4()
+                    .into_any_element(),
+                AttachmentKind::Pdf => gpui_component::Icon::default()
+                    .path("icons/file-text.svg")
+                    .size_4()
+                    .into_any_element(),
+            };
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("att-{ix}")))
+                    .h_flex()
+                    .gap_1()
+                    .items_center()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(theme.muted)
+                    .text_sm()
+                    .child(visual)
+                    .child(one_line(&att.name(), 40))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("att-x-{ix}")))
+                            .cursor_pointer()
+                            .text_color(theme.muted_foreground)
+                            .hover(|s| s.text_color(gpui::red()))
+                            .child("✕")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pending_attachments.remove(ix);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+        Some(row.into_any_element())
     }
 
     /// Completion popup: matching slash commands, shown above the input

@@ -11,6 +11,7 @@ serde_json.workspace = true
 clap.workspace = true
 futures.workspace = true
 anyhow.workspace = true
+base64.workspace = true
 thiserror.workspace = true
 regex.workspace = true
 ignore.workspace = true

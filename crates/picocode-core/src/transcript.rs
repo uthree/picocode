@@ -33,6 +33,10 @@ pub struct Entry {
     /// File name / language hint for syntax highlighting (Diff entries).
     #[serde(default)]
     pub lang: Option<String>,
+    /// Paths of files attached to a User entry, for display (the media
+    /// itself lives in the model-side history).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 /// Line diff between two strings, as "+ " / "- " / "  " prefixed lines —
@@ -113,5 +117,13 @@ mod tests {
         assert!(matches!(rows[3], DiffRow::Other(_)));
         assert_eq!(old, "let x = 1;\nlet y = 2;");
         assert_eq!(new, "let x = 1;\nlet y = 3;");
+    }
+
+    #[test]
+    fn entries_without_attachments_field_still_load() {
+        // Session files written before attachments existed lack the field.
+        let entry: Entry = serde_json::from_str(r#"{"kind":"User","text":"hi"}"#).unwrap();
+        assert!(entry.attachments.is_empty());
+        assert!(entry.lang.is_none());
     }
 }

@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use std::path::PathBuf;
 
+use picocode_core::attachment::Attachment;
 use picocode_core::config::{self, Config, Mode};
 use picocode_core::event::{AgentEvent, WorkerCmd};
 use picocode_core::transcript::{Entry, EntryKind, diff_lines};
@@ -141,7 +142,11 @@ pub struct ChatView {
     math_cache: crate::tex::MathCache,
     /// Prompts submitted while a turn was running, held back and sent one
     /// per completed turn (Stop returns them to the input box instead).
-    queued: Vec<String>,
+    /// Each keeps the attachments staged when it was submitted.
+    queued: Vec<(String, Vec<Attachment>)>,
+    /// Files staged (drag & drop or the attach button) to send with the
+    /// next prompt, shown as chips above the input box.
+    pending_attachments: Vec<Attachment>,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
     /// Virtualized-list state for the transcript: only visible entries are
@@ -246,6 +251,7 @@ impl ChatView {
             est_out: 0,
             math_cache: crate::tex::MathCache::new(),
             queued: Vec::new(),
+            pending_attachments: Vec::new(),
             ctx_menu: None,
             // The overdraw pre-measures entries near the viewport so
             // scrolling doesn't pop items in.
@@ -411,7 +417,14 @@ impl ChatView {
                 // the TUI does.
                 let prompt =
                     format!("[background job #{id} finished] `{command}` output:\n{output}");
-                if self.cmd_tx.try_send(WorkerCmd::Prompt(prompt)).is_ok() {
+                if self
+                    .cmd_tx
+                    .try_send(WorkerCmd::Prompt {
+                        text: prompt,
+                        attachments: Vec::new(),
+                    })
+                    .is_ok()
+                {
                     self.running = true;
                     self.waiting = true;
                 }
@@ -419,9 +432,22 @@ impl ChatView {
             AgentEvent::Cancelled => {
                 self.push(EntryKind::Notice, t!("cancelled").to_string());
                 // Stop means stop: give held-back prompts to the input box
-                // instead of firing them on the TurnComplete that follows.
+                // (and their attachments back to the staging row) instead of
+                // firing them on the TurnComplete that follows.
                 if !self.queued.is_empty() {
-                    let mut text = std::mem::take(&mut self.queued).join("\n");
+                    let queued = std::mem::take(&mut self.queued);
+                    let mut text = queued
+                        .iter()
+                        .map(|(t, _)| t.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    for (_, attachments) in queued {
+                        for att in attachments {
+                            if !self.pending_attachments.contains(&att) {
+                                self.pending_attachments.push(att);
+                            }
+                        }
+                    }
                     let existing = self.input.read(cx).value().to_string();
                     if !existing.is_empty() {
                         text.push('\n');
@@ -579,6 +605,7 @@ impl ChatView {
         self.entries.extend(saved.entries);
         self.session_id = id.to_string();
         self.queued.clear();
+        self.pending_attachments.clear();
         self.reset_list();
         cx.notify();
     }
@@ -705,6 +732,7 @@ impl ChatView {
                 kind: EntryKind::Diff,
                 text: clip(&diff, DIFF_MAX_LINES),
                 lang: Some(path.to_string()),
+                attachments: Vec::new(),
             });
             return;
         }
@@ -725,6 +753,7 @@ impl ChatView {
             kind,
             text,
             lang: None,
+            attachments: Vec::new(),
         });
     }
 
@@ -835,6 +864,7 @@ impl ChatView {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
                 self.entries.clear();
                 self.queued.clear();
+                self.pending_attachments.clear();
                 self.tokens_in = 0;
                 self.tokens_out = 0;
                 self.est_out = 0;
@@ -875,17 +905,33 @@ impl ChatView {
             }
             // Mid-turn prompts are held back (shown above the input box)
             // and sent one per completed turn, instead of being rejected.
-            _ if self.running => self.queued.push(text),
-            _ => self.send_prompt(text),
+            _ if self.running => {
+                let attachments = std::mem::take(&mut self.pending_attachments);
+                self.queued.push((text, attachments));
+            }
+            _ => {
+                let attachments = std::mem::take(&mut self.pending_attachments);
+                self.send_prompt(text, attachments);
+            }
         }
         self.scroll_to_bottom();
         cx.notify();
     }
 
     /// Record a user prompt in the transcript and hand it to the worker.
-    pub fn send_prompt(&mut self, text: String) {
-        self.push(EntryKind::User, text.clone());
-        let _ = self.cmd_tx.try_send(WorkerCmd::Prompt(text));
+    pub fn send_prompt(&mut self, text: String, attachments: Vec<Attachment>) {
+        self.push_entry(Entry {
+            kind: EntryKind::User,
+            text: text.clone(),
+            lang: None,
+            attachments: attachments
+                .iter()
+                .map(|a| a.path.display().to_string())
+                .collect(),
+        });
+        let _ = self
+            .cmd_tx
+            .try_send(WorkerCmd::Prompt { text, attachments });
         self.running = true;
         self.waiting = true;
     }
@@ -896,8 +942,57 @@ impl ChatView {
         if self.queued.is_empty() {
             return;
         }
-        let text = self.queued.remove(0);
-        self.send_prompt(text);
+        let (text, attachments) = self.queued.remove(0);
+        self.send_prompt(text, attachments);
+    }
+
+    /// Stage dropped or picked files for the next prompt; unsupported files
+    /// produce a notice instead of being silently dropped by the provider
+    /// conversion later.
+    fn add_attachments(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            match Attachment::classify(path) {
+                Some(att) if att.supported_by(self.cfg.provider) => {
+                    if !self.pending_attachments.contains(&att) {
+                        self.pending_attachments.push(att);
+                    }
+                }
+                Some(att) => self.push(
+                    EntryKind::Warning,
+                    t!(
+                        "attach_unsupported_provider",
+                        name = att.name(),
+                        provider = picocode_core::config::provider_name(self.cfg.provider)
+                    )
+                    .to_string(),
+                ),
+                None => self.push(
+                    EntryKind::Notice,
+                    t!(
+                        "attach_unsupported_type",
+                        name = path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                    .to_string(),
+                ),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Open a native file picker and stage the chosen files.
+    fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: None,
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = rx.await {
+                let _ = this.update(cx, |view, cx| view.add_attachments(&paths, cx));
+            }
+        })
+        .detach();
     }
 
     fn stop(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -1110,6 +1205,7 @@ impl ChatView {
             base_url: None,
             bypass: false,
             smoke: None,
+            smoke_attach: None,
         };
         let mut new_cfg = match config::Config::from_args(args) {
             Ok(cfg) => cfg,
@@ -1157,6 +1253,7 @@ impl ChatView {
         self.session_id = session::new_id();
         self.entries.clear();
         self.queued.clear();
+        self.pending_attachments.clear();
         self.tokens_in = 0;
         self.tokens_out = 0;
         self.est_out = 0;
@@ -1287,6 +1384,13 @@ impl Render for ChatView {
             .bg(background)
             .on_action(cx.listener(Self::accept_completion))
             .on_action(cx.listener(Self::on_submit_prompt))
+            // Files dragged from the OS anywhere onto the window become
+            // staged attachments for the next prompt.
+            .on_drop::<gpui::ExternalPaths>(cx.listener(
+                |this, paths: &gpui::ExternalPaths, _, cx| {
+                    this.add_attachments(paths.paths(), cx);
+                },
+            ))
             .child(div().flex_1().p_4().child(transcript))
             .children(self.render_completions(cx))
             .child(
@@ -1297,6 +1401,7 @@ impl Render for ChatView {
                     .border_t_1()
                     .border_color(border)
                     .children(self.render_queued(cx))
+                    .children(self.render_attachments(cx))
                     .child(
                         div()
                             .h_flex()
@@ -1332,6 +1437,17 @@ impl Render for ChatView {
                         div()
                             .h_flex()
                             .gap_2()
+                            .child(
+                                Button::new("attach")
+                                    .ghost()
+                                    .icon(
+                                        gpui_component::Icon::default().path("icons/paperclip.svg"),
+                                    )
+                                    .tooltip(t!("attach_tooltip").to_string())
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.pick_attachments(cx)),
+                                    ),
+                            )
                             .child(div().flex_1().child(Input::new(&self.input)))
                             .child(send_or_stop),
                     ),

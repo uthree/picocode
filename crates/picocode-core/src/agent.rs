@@ -7,13 +7,14 @@
 use futures::StreamExt;
 use rig::agent::Agent;
 use rig::completion::{CompletionModel, GetTokenUsage, Message};
-use rig::message::ToolResultContent;
+use rig::message::{ToolResultContent, UserContent};
 use rig::prelude::*;
 use rig::providers::{anthropic, ollama, openai};
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use tokio::sync::{mpsc, watch};
 
 use crate::approval::ApprovalHook;
+use crate::attachment::Attachment;
 use crate::config::{Config, Provider};
 use crate::event::{AgentEvent, WorkerCmd};
 use crate::tools;
@@ -195,11 +196,12 @@ async fn worker<M>(
                 let _ = tx.send(history.clone());
             }
             WorkerCmd::SeedHistory(h) => history = h,
-            WorkerCmd::Prompt(prompt) => {
+            WorkerCmd::Prompt { text, attachments } => {
                 run_once(
                     &agent,
                     &mut history,
-                    prompt,
+                    text,
+                    attachments,
                     &event_tx,
                     &cfg,
                     &mut cancel_rx,
@@ -277,10 +279,12 @@ async fn compact<M>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_once<M>(
     agent: &Agent<M>,
     history: &mut Vec<Message>,
     prompt: String,
+    attachments: Vec<Attachment>,
     event_tx: &mpsc::Sender<AgentEvent>,
     cfg: &Config,
     cancel: &mut watch::Receiver<()>,
@@ -303,12 +307,50 @@ async fn run_once<M>(
     } else {
         prompt
     };
+    // Small local models often fail to attend to attached media unless the
+    // text mentions it (observed with gemma on Ollama: the same request
+    // flip-flops between describing the image and claiming there is none,
+    // and an explicit note makes it reliable). List the attachments in the
+    // prompt text.
+    let prompt = if attachments.is_empty() {
+        prompt
+    } else {
+        let list = attachments
+            .iter()
+            .map(|a| format!("{} ({})", a.name(), a.kind.label()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{prompt}\n\n[{n} file(s) attached to this message: {list}]",
+            n = attachments.len()
+        )
+    };
+    // Attachments become extra content parts of the user message. Unreadable
+    // files are reported and skipped rather than aborting the turn.
+    let mut content = vec![UserContent::text(&prompt)];
+    for att in &attachments {
+        match att.to_user_content() {
+            Ok(c) => content.push(c),
+            Err(e) => {
+                let _ = event_tx
+                    .send(AgentEvent::Error(format!(
+                        "could not read attachment {}: {e}",
+                        att.path.display()
+                    )))
+                    .await;
+            }
+        }
+    }
+    let user_msg = Message::User {
+        // Never empty: the prompt text is always the first item.
+        content: rig::OneOrMany::many(content).expect("user content starts with the prompt text"),
+    };
     let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
     // rig's multi-turn driver needs some bound, but picocode doesn't cap
     // turns itself: the context window (with auto-compact) is the real
     // limit, so pass an effectively-unlimited value.
     let mut stream = agent
-        .stream_chat(prompt.clone(), history.clone())
+        .stream_chat(user_msg.clone(), history.clone())
         .max_turns(usize::MAX)
         .add_hook(hook)
         .await;
@@ -389,7 +431,7 @@ async fn run_once<M>(
                     // assistant turns + tool results), excluding prior history.
                     Some(new_messages) => history.extend(new_messages),
                     None => {
-                        history.push(Message::user(prompt.clone()));
+                        history.push(user_msg.clone());
                         if !response.output.is_empty() {
                             history.push(Message::assistant(response.output.clone()));
                         }
@@ -408,9 +450,9 @@ async fn run_once<M>(
         let _ = event_tx.send(AgentEvent::Cancelled).await;
     }
     if !got_final {
-        // The run was cancelled or errored out; keep the user's message so
-        // the next turn still has it as context.
-        history.push(Message::user(prompt));
+        // The run was cancelled or errored out; keep the user's message
+        // (attachments included) so the next turn still has it as context.
+        history.push(user_msg);
     }
 }
 

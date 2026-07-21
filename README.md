@@ -22,6 +22,9 @@ OpenAI-compatible server (vLLM, etc.).
   **session autosave and resume** (`/resume`), **settings** (`/config`),
   **direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),
   **pluggable web search** (DuckDuckGo / SearXNG / Brave)
+- **File attachments** — send images (and audio / PDF on providers that
+  support them) with a prompt: drag & drop or 📎 in the GUI, `/attach`
+  in the TUI
 
 ## Quick start
 
