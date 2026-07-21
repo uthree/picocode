@@ -18,6 +18,16 @@ impl ChatView {
         self.tokens_in as f64 / self.cfg.context_window.max(1) as f64
     }
 
+    /// Output tokens for display: the last reported count, plus the live
+    /// estimate while a completion is streaming ("~" marks the estimate).
+    fn tokens_out_live(&self) -> String {
+        if self.est_out > 0 {
+            format!("~{}", self.tokens_out + self.est_out)
+        } else {
+            self.tokens_out.to_string()
+        }
+    }
+
     /// Status bar, matching the TUI's layout: the clickable mode chip and
     /// the activity state on the left; the context gauge and the clickable
     /// model chip on the right.
@@ -65,7 +75,7 @@ impl ChatView {
                 "{}%  ↑ {} ↓ {}",
                 (ratio * 100.0).round() as u64,
                 self.tokens_in,
-                self.tokens_out
+                self.tokens_out_live()
             ));
 
         // Animated spinner while a turn runs; "waiting" until the first
@@ -287,7 +297,7 @@ impl ChatView {
                         t!("ctx_used").to_string(),
                         format!("{} ({pct}%)", self.tokens_in),
                     ),
-                    (t!("ctx_output").to_string(), self.tokens_out.to_string()),
+                    (t!("ctx_output").to_string(), self.tokens_out_live()),
                     (
                         t!("row_auto_compact").to_string(),
                         match self.cfg.auto_compact.get() {

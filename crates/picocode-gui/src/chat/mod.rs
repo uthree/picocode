@@ -133,6 +133,10 @@ pub struct ChatView {
     /// Context tokens of the last completion request / output tokens so far.
     tokens_in: u64,
     tokens_out: u64,
+    /// Rough output-token estimate for the in-flight completion, accumulated
+    /// from streamed deltas so the counter moves while the model generates.
+    /// Snapped back to zero whenever the provider reports real usage.
+    est_out: u64,
     /// RaTeX-rendered display formulas, keyed by (scale, color, tex).
     math_cache: crate::tex::MathCache,
     /// Prompts submitted while a turn was running, held back and sent one
@@ -239,6 +243,7 @@ impl ChatView {
             bg_jobs: Vec::new(),
             tokens_in: 0,
             tokens_out: 0,
+            est_out: 0,
             math_cache: crate::tex::MathCache::new(),
             queued: Vec::new(),
             ctx_menu: None,
@@ -307,14 +312,17 @@ impl ChatView {
         match ev {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
+                self.est_out += est_tokens(&s);
                 self.append(EntryKind::Assistant, &s);
             }
             AgentEvent::ReasoningDelta(s) => {
                 self.waiting = false;
+                self.est_out += est_tokens(&s);
                 self.append(EntryKind::Reasoning, &s);
             }
             AgentEvent::ToolCall { name, args } => {
                 self.waiting = false;
+                self.est_out += est_tokens(&args);
                 self.push_tool_call(&name, &args);
             }
             AgentEvent::ToolResult { output } => {
@@ -351,6 +359,9 @@ impl ChatView {
             AgentEvent::Usage { input, output } => {
                 self.tokens_in = input;
                 self.tokens_out = output;
+                // Real usage supersedes the streaming estimate; the next
+                // completion in this run starts estimating from zero again.
+                self.est_out = 0;
             }
             AgentEvent::ModelList { label, result } => match result {
                 Ok(mut names) => {
@@ -376,6 +387,7 @@ impl ChatView {
                     self.push(EntryKind::Summary, summary);
                 }
                 self.running = false;
+                self.est_out = 0;
                 self.autosave();
                 self.flush_queued();
             }
@@ -423,6 +435,9 @@ impl ChatView {
             AgentEvent::TurnComplete => {
                 self.running = false;
                 self.waiting = false;
+                // A cancelled or failed completion never reports usage; drop
+                // its estimate rather than carrying it into the idle counter.
+                self.est_out = 0;
                 // Tools may have switched branches during the turn.
                 self.git_branch = picocode_core::git::branch(&self.cfg.root);
                 self.autosave();
@@ -556,6 +571,7 @@ impl ChatView {
         self.entries.clear();
         self.tokens_in = 0;
         self.tokens_out = 0;
+        self.est_out = 0;
         self.push(
             EntryKind::Notice,
             t!("resumed", id = id, n = messages, model = saved.model).to_string(),
@@ -821,6 +837,7 @@ impl ChatView {
                 self.queued.clear();
                 self.tokens_in = 0;
                 self.tokens_out = 0;
+                self.est_out = 0;
                 // A cleared conversation starts a fresh session log.
                 self.session_id = session::new_id();
                 self.push(EntryKind::Notice, t!("cleared").to_string());
@@ -1142,6 +1159,7 @@ impl ChatView {
         self.queued.clear();
         self.tokens_in = 0;
         self.tokens_out = 0;
+        self.est_out = 0;
         self.available_models.clear();
         self.refresh_models();
         self.push(
@@ -1329,6 +1347,14 @@ impl Render for ChatView {
 }
 
 // ---------- small helpers ----------
+
+/// Rough token count for one streamed delta. Ollama streams roughly one
+/// token per chunk while cloud providers batch several, so take whichever
+/// of "one chunk" and "~4 bytes per token" is larger. Only used to animate
+/// the status-bar counter between real usage reports.
+fn est_tokens(s: &str) -> u64 {
+    (s.len() as u64 / 4).max(1)
+}
 
 /// Squeeze a JSON args string onto one line, truncated to `max` chars.
 fn one_line(s: &str, max: usize) -> String {

@@ -31,7 +31,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   context-usage gauge colored by pressure and a clickable model chip
   (right) opening the model menu — configured `[[models]]` entries plus
   whatever the provider reports serving, with the conversation carried
-  over on switch.
+  over on switch. While the model generates, the output-token counter
+  ticks live from an estimate of the streamed deltas (shown with a `~`)
+  and snaps to the provider-reported count at each completion boundary.
 - **Workdir line**: the project directory and git branch (with an icon)
   sit above the input box, refreshed after each turn. Clicking the
   directory opens a native folder picker and moves the project root
