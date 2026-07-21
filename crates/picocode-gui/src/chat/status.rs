@@ -19,13 +19,11 @@ impl ChatView {
     }
 
     /// Output tokens for display: the last reported count, plus the live
-    /// estimate while a completion is streaming ("~" marks the estimate).
+    /// estimate while a completion is streaming (the estimate keeps the
+    /// counter moving between usage reports and snaps to the real number
+    /// on each one).
     fn tokens_out_live(&self) -> String {
-        if self.est_out > 0 {
-            format!("~{}", self.tokens_out + self.est_out)
-        } else {
-            self.tokens_out.to_string()
-        }
+        (self.tokens_out + self.est_out).to_string()
     }
 
     /// Status bar, matching the TUI's layout: the clickable mode chip and
