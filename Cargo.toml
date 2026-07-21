@@ -6,6 +6,8 @@ default-members = ["crates/picocode-tui"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/uthree/picocode"
 
 [workspace.dependencies]
 picocode-core = { path = "crates/picocode-core" }
@@ -39,3 +41,8 @@ ratex-render = { version = "0.1.13", features = ["embed-fonts"] }
 ratex-parser = "0.1.13"
 ratex-layout = "0.1.13"
 ratex-types = "0.1.13"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

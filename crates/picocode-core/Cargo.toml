@@ -2,6 +2,9 @@
 name = "picocode-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared engine for the picocode coding agent (tools, agent loop, sessions)"
 
 [dependencies]
 rig.workspace = true

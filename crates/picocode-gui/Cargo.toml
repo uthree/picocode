@@ -2,6 +2,14 @@
 name = "picocode-gui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A minimal coding agent — native GUI front end"
+
+# Not distributed by cargo-dist: the GUI needs a macOS .app bundle (and
+# eventually signing/notarization), which is packaged separately.
+[package.metadata.dist]
+dist = false
 
 [[bin]]
 name = "picocode-gui"

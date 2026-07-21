@@ -2,6 +2,9 @@
 name = "picocode-tui"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A minimal coding agent for your terminal"
 
 [[bin]]
 name = "picocode"
