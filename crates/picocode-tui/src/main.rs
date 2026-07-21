@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(prompt) = smoke {
         let attachments = smoke_attach
             .as_deref()
-            .and_then(picocode_core::attachment::Attachment::classify)
+            .and_then(picocode_core::attachment::Attachment::detect)
             .into_iter()
             .collect();
         return run_smoke(prompt, attachments, event_rx, cmd_tx).await;

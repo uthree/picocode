@@ -753,7 +753,7 @@ impl App {
             self.push(EntryKind::Error, format!("Not a file: {arg}"));
             return;
         }
-        match Attachment::classify(&path) {
+        match Attachment::detect(&path) {
             Some(att) if att.supported_by(self.cfg.provider) => {
                 if self.attachments.contains(&att) {
                     self.push(EntryKind::Notice, format!("Already attached: {arg}"));
@@ -778,8 +778,8 @@ impl App {
             ),
             None => self.push(
                 EntryKind::Notice,
-                "Only image / audio / PDF files can be attached — I can read text \
-                 files myself via read_file"
+                "This looks like an unsupported binary format — images, audio, PDF \
+                 and text files can be attached"
                     .to_string(),
             ),
         }

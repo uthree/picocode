@@ -270,6 +270,47 @@ impl ChatView {
         Some(block.into_any_element())
     }
 
+    /// Full-size view of a transcript image, opened by clicking its
+    /// thumbnail. Clicking anywhere closes it.
+    pub(super) fn render_image_preview(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let path = self.image_preview.clone()?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Some(
+            overlay()
+                .id("image-preview")
+                .cursor_pointer()
+                .bg(gpui::black().opacity(0.6))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.image_preview = None;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .items_center()
+                        .max_w(gpui::relative(0.85))
+                        .max_h(gpui::relative(0.85))
+                        .child(
+                            gpui::img(path)
+                                .max_w(gpui::relative(1.))
+                                .max_h(gpui::relative(1.))
+                                .rounded_lg(),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(gpui::white().opacity(0.8))
+                                .child(name),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Chips for files staged to go with the next prompt: image thumbnails,
     /// icons for audio/PDF, each with a click-to-remove ✕.
     pub(super) fn render_attachments(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -289,7 +330,7 @@ impl ChatView {
                     .path("icons/music.svg")
                     .size_4()
                     .into_any_element(),
-                AttachmentKind::Pdf => gpui_component::Icon::default()
+                AttachmentKind::Pdf | AttachmentKind::Text => gpui_component::Icon::default()
                     .path("icons/file-text.svg")
                     .size_4()
                     .into_any_element(),

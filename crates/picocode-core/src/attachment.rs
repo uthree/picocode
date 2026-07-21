@@ -17,12 +17,21 @@ use rig::message::{
 
 use crate::config::Provider;
 
-/// What kind of media a file is, judged by its extension.
+/// Bytes sniffed from a file's head to decide whether it is text.
+const SNIFF_BYTES: usize = 8 * 1024;
+/// Cap on the inlined contents of a text attachment.
+const TEXT_ATTACHMENT_MAX_BYTES: usize = 64 * 1024;
+
+/// What kind of media a file is, judged by its extension (or, for `Text`,
+/// its contents).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttachmentKind {
     Image,
     Audio,
     Pdf,
+    /// Anything that isn't a known media type but decodes as text
+    /// (markdown, source code, …) — inlined into the message as text.
+    Text,
 }
 
 impl AttachmentKind {
@@ -31,7 +40,22 @@ impl AttachmentKind {
             AttachmentKind::Image => "image",
             AttachmentKind::Audio => "audio",
             AttachmentKind::Pdf => "PDF",
+            AttachmentKind::Text => "text, contents inlined below",
         }
+    }
+}
+
+/// Whether a sample from a file's head reads as text: no NUL bytes and
+/// valid UTF-8 (allowing one multi-byte char cut off at the sample edge).
+pub fn looks_like_text(sample: &[u8]) -> bool {
+    if sample.contains(&0) {
+        return false;
+    }
+    match std::str::from_utf8(sample) {
+        Ok(_) => true,
+        // `error_len() == None` means the bytes so far are a valid prefix
+        // and only the tail was truncated mid-character.
+        Err(e) => e.error_len().is_none() && e.valid_up_to() + 4 > sample.len(),
     }
 }
 
@@ -43,8 +67,9 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// Classify a file by extension; `None` for anything picocode can't
-    /// send as media (callers point the user at `read_file` for text).
+    /// Classify a file as media by extension; `None` for anything else
+    /// (see [`Attachment::detect`] for the content-sniffing variant that
+    /// also accepts text files).
     pub fn classify(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         let kind = match ext.as_str() {
@@ -59,12 +84,39 @@ impl Attachment {
         })
     }
 
+    /// Classify by extension, then fall back to sniffing the file's head:
+    /// non-media files that read as text (markdown, source code, …) become
+    /// [`AttachmentKind::Text`] and are inlined into the message. `None`
+    /// means unattachable (unknown binary format).
+    pub fn detect(path: &Path) -> Option<Self> {
+        if let Some(att) = Self::classify(path) {
+            return Some(att);
+        }
+        let mut head = vec![0u8; SNIFF_BYTES];
+        let n = {
+            use std::io::Read;
+            let mut f = std::fs::File::open(path).ok()?;
+            f.read(&mut head).ok()?
+        };
+        head.truncate(n);
+        looks_like_text(&head).then(|| Self {
+            path: path.to_path_buf(),
+            kind: AttachmentKind::Text,
+        })
+    }
+
     /// Whether rig's conversion for `provider` actually forwards this kind
-    /// (anything else would be dropped or rejected mid-request).
+    /// (anything else would be dropped or rejected mid-request). Text is
+    /// plain message content, so every provider takes it.
     pub fn supported_by(&self, provider: Provider) -> bool {
         match provider {
-            Provider::Ollama => self.kind == AttachmentKind::Image,
-            Provider::Anthropic => matches!(self.kind, AttachmentKind::Image | AttachmentKind::Pdf),
+            Provider::Ollama => {
+                matches!(self.kind, AttachmentKind::Image | AttachmentKind::Text)
+            }
+            Provider::Anthropic => matches!(
+                self.kind,
+                AttachmentKind::Image | AttachmentKind::Pdf | AttachmentKind::Text
+            ),
             Provider::Openai => true,
         }
     }
@@ -80,6 +132,24 @@ impl Attachment {
     /// Read the file and build the rig message content for it.
     pub fn to_user_content(&self) -> std::io::Result<UserContent> {
         let bytes = std::fs::read(&self.path)?;
+        // Text attachments are inlined, not base64-encoded media.
+        if self.kind == AttachmentKind::Text {
+            let total = bytes.len();
+            let mut end = total.min(TEXT_ATTACHMENT_MAX_BYTES);
+            // Back off to a UTF-8 boundary (a byte that isn't a continuation).
+            while end > 0 && end < total && (bytes[end] & 0xC0) == 0x80 {
+                end -= 1;
+            }
+            let body = String::from_utf8_lossy(&bytes[..end]);
+            let mut text = format!("Contents of the attached file {}:\n\n{body}", self.name());
+            if end < total {
+                text.push_str(&format!(
+                    "\n… (truncated: {} of {} bytes shown)",
+                    end, total
+                ));
+            }
+            return Ok(UserContent::text(text));
+        }
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         let ext = self
             .path
@@ -117,6 +187,7 @@ impl Attachment {
                 media_type: Some(DocumentMediaType::PDF),
                 additional_params: None,
             }),
+            AttachmentKind::Text => unreachable!("handled by the early return above"),
         })
     }
 }
@@ -165,5 +236,50 @@ mod tests {
             }) => assert_eq!(b64, "iVBORw=="),
             other => panic!("unexpected content: {other:?}"),
         }
+    }
+
+    #[test]
+    fn detects_text_files_by_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("notes.md");
+        std::fs::write(&md, "# Title\n日本語もOK\n").unwrap();
+        assert_eq!(
+            Attachment::detect(&md).map(|a| a.kind),
+            Some(AttachmentKind::Text)
+        );
+        // Unknown binary is rejected …
+        let bin = dir.path().join("blob.dat");
+        std::fs::write(&bin, [0u8, 159, 146, 150]).unwrap();
+        assert!(Attachment::detect(&bin).is_none());
+        // … while media extensions never go through sniffing.
+        let png = dir.path().join("x.png");
+        std::fs::write(&png, [0x89, b'P']).unwrap();
+        assert_eq!(
+            Attachment::detect(&png).map(|a| a.kind),
+            Some(AttachmentKind::Image)
+        );
+    }
+
+    #[test]
+    fn text_attachment_inlines_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let content = Attachment::detect(&path)
+            .unwrap()
+            .to_user_content()
+            .unwrap();
+        match content {
+            UserContent::Text(t) => {
+                assert!(t.text.contains("main.rs"));
+                assert!(t.text.contains("fn main() {}"));
+            }
+            other => panic!("unexpected content: {other:?}"),
+        }
+        assert!(
+            Attachment::detect(&path)
+                .unwrap()
+                .supported_by(Provider::Ollama)
+        );
     }
 }

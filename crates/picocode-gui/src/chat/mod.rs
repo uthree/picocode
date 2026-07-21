@@ -149,6 +149,8 @@ pub struct ChatView {
     pending_attachments: Vec<Attachment>,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
+    /// Image opened full-size from a transcript thumbnail (click closes).
+    image_preview: Option<std::path::PathBuf>,
     /// Virtualized-list state for the transcript: only visible entries are
     /// rendered and measured. Bottom alignment gives chat-log scrolling —
     /// the view sticks to the bottom until the user scrolls up, and resumes
@@ -253,6 +255,7 @@ impl ChatView {
             queued: Vec::new(),
             pending_attachments: Vec::new(),
             ctx_menu: None,
+            image_preview: None,
             // The overdraw pre-measures entries near the viewport so
             // scrolling doesn't pop items in.
             list_state: ListState::new(0, ListAlignment::Bottom, px(512.)),
@@ -948,10 +951,11 @@ impl ChatView {
 
     /// Stage dropped or picked files for the next prompt; unsupported files
     /// produce a notice instead of being silently dropped by the provider
-    /// conversion later.
+    /// conversion later. Non-media files that read as text are staged as
+    /// text attachments (inlined into the message).
     fn add_attachments(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
         for path in paths {
-            match Attachment::classify(path) {
+            match Attachment::detect(path) {
                 Some(att) if att.supported_by(self.cfg.provider) => {
                     if !self.pending_attachments.contains(&att) {
                         self.pending_attachments.push(att);
@@ -1459,6 +1463,7 @@ impl Render for ChatView {
             .children(self.render_session_picker(cx))
             .children(self.render_approval(cx))
             .children(self.render_question(cx))
+            .children(self.render_image_preview(cx))
     }
 }
 

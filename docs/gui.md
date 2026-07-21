@@ -52,9 +52,12 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   depending on the provider, audio and PDFs — Ollama takes images only)
   are staged as chips above the input — image chips show a thumbnail, ✕
   removes one — and go to the model with the next prompt as multimodal
-  message content. Unsupported files are refused with a notice instead of
+  message content. Files that aren't a known media type but read as text
+  (markdown, source code, …) are attached as text and inlined into the
+  message. Unsupported binary files are refused with a notice instead of
   being silently dropped. Sent attachments stay visible in the user's
-  transcript bubble.
+  transcript bubble; clicking an image thumbnail there opens it full
+  size (click again to close).
 - **Copying**: assistant text is selectable (Cmd+C copies the selection),
   every code block has a copy button in its top-right corner, and
   right-clicking any transcript entry opens a "Copy text" menu.

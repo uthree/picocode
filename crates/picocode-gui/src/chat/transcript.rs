@@ -85,7 +85,7 @@ impl ChatView {
                     .child(entry.text.clone());
                 if !entry.attachments.is_empty() {
                     let mut row = div().h_flex().gap_2().flex_wrap().pt_1();
-                    for path in &entry.attachments {
+                    for (aix, path) in entry.attachments.iter().enumerate() {
                         let path = std::path::PathBuf::from(path);
                         let name = path
                             .file_name()
@@ -105,11 +105,23 @@ impl ChatView {
                             .text_sm()
                             .text_color(muted);
                         row = row.child(if is_image && path.exists() {
+                            // Clicking the thumbnail opens the full-size
+                            // image preview overlay.
                             chip.child(
-                                gpui::img(path.clone())
-                                    .h(px(64.))
-                                    .max_w(px(160.))
-                                    .rounded_md(),
+                                div()
+                                    .id(SharedString::from(format!("att-img-{ix}-{aix}")))
+                                    .cursor_pointer()
+                                    .hover(|s| s.opacity(0.8))
+                                    .child(
+                                        gpui::img(path.clone())
+                                            .h(px(64.))
+                                            .max_w(px(160.))
+                                            .rounded_md(),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.image_preview = Some(path.clone());
+                                        cx.notify();
+                                    })),
                             )
                             .child(name)
                         } else {
