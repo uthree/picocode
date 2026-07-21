@@ -18,6 +18,9 @@ path = "src/main.rs"
 [dependencies]
 picocode-core.workspace = true
 
+# For calling core tools directly (the `!` shell escape uses the Bash tool).
+rig.workspace = true
+
 # runtime_shaders: compile the Metal shaders at runtime instead of via the
 # `metal` CLI, which is only available with a full Xcode install.
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }

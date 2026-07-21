@@ -44,9 +44,13 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills.
-  Messages sent while the agent is still generating are not rejected:
-  they queue above the input box and are sent one per completed turn;
-  pressing Stop returns them to the input box instead.
+  A leading `!` runs the rest as a shell command directly (no model, no
+  approval — you typed it); the output joins the transcript and the model's
+  history like in the TUI. The input border turns yellow while typing a
+  `!` command and cyan for a `/` command. Messages sent while the agent
+  is still generating are not rejected: they queue above the input box
+  and are sent one per completed turn (a queued `!` command runs when
+  its turn comes); pressing Stop returns them to the input box instead.
 - **Attachments**: drop files from the Finder anywhere on the window, or
   click the 📎 button next to the input for a file picker. Images (and,
   depending on the provider, audio and PDFs — Ollama takes images only)
@@ -58,9 +62,10 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   being silently dropped. Sent attachments stay visible in the user's
   transcript bubble; clicking an image thumbnail there opens it full
   size (click again to close).
-- **Copying**: assistant text is selectable (Cmd+C copies the selection),
-  every code block has a copy button in its top-right corner, and
-  right-clicking any transcript entry opens a "Copy text" menu.
+- **Copying**: assistant text and your own sent messages are selectable
+  (Cmd+C copies the selection), every code block has a copy button in its
+  top-right corner, and right-clicking any transcript entry opens a
+  "Copy text" menu.
 - **Commands**: `/clear`, `/compact`, `/model`, `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI),
   `/status`, `/permissions`, `/quit`.

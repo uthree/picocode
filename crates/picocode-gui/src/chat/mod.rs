@@ -906,6 +906,15 @@ impl ChatView {
                     t!("not_available", cmd = text).to_string(),
                 );
             }
+            // `!<command>`: direct shell, like the TUI. While a turn runs it
+            // joins the held-back queue and executes when the turn ends.
+            _ if text.starts_with('!') => {
+                if self.running {
+                    self.queued.push((text, Vec::new()));
+                } else {
+                    self.run_shell(text);
+                }
+            }
             // Mid-turn prompts are held back (shown above the input box)
             // and sent one per completed turn, instead of being rejected.
             _ if self.running => {
@@ -946,7 +955,58 @@ impl ChatView {
             return;
         }
         let (text, attachments) = self.queued.remove(0);
-        self.send_prompt(text, attachments);
+        if text.starts_with('!') {
+            self.run_shell(text);
+        } else {
+            self.send_prompt(text, attachments);
+        }
+    }
+
+    /// `!<command>`: run a shell command directly (no model, no approval —
+    /// the user typed it). Mirrors the TUI: the output is shown in the
+    /// transcript and recorded in the model's history so the next prompt
+    /// can refer to it. Ends with a `TurnComplete` through the regular
+    /// event pump, which resets `running` and flushes the queue.
+    pub fn run_shell(&mut self, text: String) {
+        let command = text[1..].trim().to_string();
+        if command.is_empty() {
+            self.push(EntryKind::Error, t!("shell_empty").to_string());
+            return;
+        }
+        self.push(EntryKind::User, text);
+        self.running = true;
+        self.waiting = false;
+
+        let root = self.cfg.root.clone();
+        let timeout = self.cfg.bash_timeout.clone();
+        let event_tx = self.event_tx.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let mut cancel = self.cancel_tx.subscribe();
+        self.rt.spawn(async move {
+            use rig::tool::Tool;
+            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone());
+            let call = tool.call(picocode_core::tools::BashArgs {
+                command: command.clone(),
+            });
+            // Stop drops the call future, which kills the process
+            // (kill_on_drop) — unless it already went to the background.
+            let output = tokio::select! {
+                biased;
+                _ = cancel.changed() => "(stopped before finishing)".to_string(),
+                out = call => match out {
+                    Ok(out) => out,
+                    Err(e) => format!("error: {e}"),
+                },
+            };
+            let _ = cmd_tx
+                .send(WorkerCmd::ShellRecord {
+                    command,
+                    output: output.clone(),
+                })
+                .await;
+            let _ = event_tx.send(AgentEvent::ShellOutput { output }).await;
+            let _ = event_tx.send(AgentEvent::TurnComplete).await;
+        });
     }
 
     /// Stage dropped or picked files for the next prompt; unsupported files
@@ -1452,7 +1512,21 @@ impl Render for ChatView {
                                         cx.listener(|this, _, _, cx| this.pick_attachments(cx)),
                                     ),
                             )
-                            .child(div().flex_1().child(Input::new(&self.input)))
+                            .child(div().flex_1().child({
+                                // A leading `!` means a direct shell command
+                                // and a leading `/` a slash command; recolor
+                                // the input's border so the mode is obvious
+                                // while typing (mirrors the TUI's palette).
+                                let input = Input::new(&self.input);
+                                let value = self.input.read(cx).value();
+                                if value.starts_with('!') {
+                                    input.border_color(gpui::rgb(0xeab308)) // yellow
+                                } else if value.starts_with('/') {
+                                    input.border_color(gpui::rgb(0x0ea5e9)) // cyan
+                                } else {
+                                    input
+                                }
+                            }))
                             .child(send_or_stop),
                     ),
             )

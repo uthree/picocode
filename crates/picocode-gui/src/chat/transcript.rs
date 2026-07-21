@@ -82,7 +82,18 @@ impl ChatView {
                     .bg(theme.muted)
                     .border_1()
                     .border_color(theme.border)
-                    .child(entry.text.clone());
+                    // TextView is the only selectable text element, and it
+                    // always parses markdown — escape so user text renders
+                    // literally.
+                    .child(
+                        TextView::markdown(
+                            SharedString::from(format!("user-{ix}")),
+                            SharedString::from(escape_markdown(&entry.text)),
+                            window,
+                            cx,
+                        )
+                        .selectable(true),
+                    );
                 if !entry.attachments.is_empty() {
                     let mut row = div().h_flex().gap_2().flex_wrap().pt_1();
                     for (aix, path) in entry.attachments.iter().enumerate() {
@@ -412,6 +423,25 @@ pub(super) fn diff_element(
     out.into_any_element()
 }
 
+/// Escape markdown so user-typed text renders literally in a `TextView`
+/// (the only selectable text element, and it always parses markdown):
+/// backslash-escape ASCII punctuation and turn single newlines into hard
+/// breaks so line boundaries survive the paragraph collapse.
+fn escape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    for ch in text.chars() {
+        match ch {
+            '\n' => out.push_str("  \n"),
+            c if c.is_ascii_punctuation() => {
+                out.push('\\');
+                out.push(c);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Icon asset path and accent color for a tool-call row: blue-ish for
 /// local reads, yellow for file edits, green for the shell, purple for
 /// the web tools, blue for plans.
@@ -428,4 +458,21 @@ pub(super) fn tool_style(name: &str) -> (&'static str, gpui::Hsla) {
         _ => ("icons/wrench.svg", 0x8b949e),
     };
     (icon, gpui::rgb(rgb).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escapes_markdown_punctuation_and_keeps_newlines() {
+        assert_eq!(escape_markdown("*bold* _it_"), "\\*bold\\* \\_it\\_");
+        assert_eq!(escape_markdown("a\nb"), "a  \nb");
+        assert_eq!(escape_markdown("# not a heading"), "\\# not a heading");
+        assert_eq!(
+            escape_markdown("<tag> & `code`"),
+            "\\<tag\\> \\& \\`code\\`"
+        );
+        assert_eq!(escape_markdown("日本語はそのまま"), "日本語はそのまま");
+    }
 }

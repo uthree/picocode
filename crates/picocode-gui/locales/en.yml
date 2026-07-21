@@ -84,6 +84,7 @@ attach_tooltip: "Attach files (images and text; audio/PDF depending on the provi
 attach_unsupported_type: "%{name}: this looks like an unsupported binary format — images, audio, PDF and text files can be attached"
 attach_unsupported_provider: "%{name}: this file type isn't supported by the %{provider} provider, so it was not attached"
 not_available: "%{cmd}: not available in the GUI (yet) — try the TUI"
+shell_empty: "empty shell command"
 session_detail: "%{age} · %{n} messages · %{model}"
 
 cmd_clear: "Clear conversation history"

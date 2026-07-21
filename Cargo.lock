@@ -7970,6 +7970,7 @@ dependencies = [
  "ratex-parser",
  "ratex-render",
  "ratex-types",
+ "rig",
  "ropey",
  "rust-i18n",
  "serde",

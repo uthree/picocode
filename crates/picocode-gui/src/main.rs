@@ -99,12 +99,17 @@ fn main() -> anyhow::Result<()> {
                         cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
                     );
                     if let Some(prompt) = smoke {
-                        let attachments = smoke_attach
-                            .as_deref()
-                            .and_then(picocode_core::attachment::Attachment::detect)
-                            .into_iter()
-                            .collect();
-                        view.send_prompt(prompt, attachments);
+                        if prompt.starts_with('!') {
+                            // Exercise the direct-shell path too.
+                            view.run_shell(prompt);
+                        } else {
+                            let attachments = smoke_attach
+                                .as_deref()
+                                .and_then(picocode_core::attachment::Attachment::detect)
+                                .into_iter()
+                                .collect();
+                            view.send_prompt(prompt, attachments);
+                        }
                     }
                     view
                 });

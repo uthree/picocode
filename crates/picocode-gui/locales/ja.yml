@@ -84,6 +84,7 @@ attach_tooltip: "ファイルを添付 (画像・テキストのほか、プロ�
 attach_unsupported_type: "%{name}: 未対応のバイナリ形式のようです — 添付できるのは画像・音声・PDF・テキストです"
 attach_unsupported_provider: "%{name}: このファイル形式は %{provider} プロバイダでは送信できないため添付しませんでした"
 not_available: "%{cmd}: GUI では未対応です — TUI をお使いください"
+shell_empty: "シェルコマンドが空です"
 session_detail: "%{age} · %{n} メッセージ · %{model}"
 
 cmd_clear: "会話履歴をクリア"
