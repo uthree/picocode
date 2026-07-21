@@ -34,7 +34,7 @@ pub fn provider_from_name(s: &str) -> Option<Provider> {
 
 /// picocode — a minimal TUI coding agent.
 #[derive(Parser, Debug)]
-#[command(version, about = "picocode — a minimal coding agent")]
+#[command(name = "picocode", version, about = "picocode — a minimal coding agent")]
 pub struct Args {
     /// LLM provider to use (default: ollama, or the config file's value).
     #[arg(long, value_enum)]
