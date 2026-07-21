@@ -111,8 +111,9 @@ pub struct ChatView {
     session_picker: Option<Vec<session::SessionSummary>>,
     /// Whether the `/config` dialog is open.
     settings_open: bool,
-    /// Show reasoning entries in full, or collapsed to one line.
-    show_reasoning: bool,
+    /// Reasoning entries the user expanded (indices into `entries`);
+    /// everything else renders collapsed to a one-line preview.
+    expanded_reasoning: std::collections::HashSet<usize>,
     /// Color theme: follow the system (default), or forced light/dark.
     theme_pref: ThemeSetting,
     /// Sparse overlay of `/config` values the user changed, persisted to
@@ -241,7 +242,7 @@ impl ChatView {
             sessions_dir,
             session_picker: None,
             settings_open: false,
-            show_reasoning: saved.show_reasoning.unwrap_or(true),
+            expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
             saved,
             comp_prefix: None,
@@ -496,6 +497,16 @@ impl ChatView {
         self.list_state.reset(self.entries.len());
     }
 
+    /// Toggle one reasoning entry between the one-line preview and the
+    /// full text (clicked in the transcript). Re-measures only that row,
+    /// so the scroll position is preserved.
+    pub(super) fn toggle_reasoning(&mut self, ix: usize) {
+        if !self.expanded_reasoning.remove(&ix) {
+            self.expanded_reasoning.insert(ix);
+        }
+        self.list_state.splice(ix..ix + 1, 1);
+    }
+
     /// Snapshot the conversation to disk. Runs in the background after each
     /// completed turn; empty conversations are not written.
     fn autosave(&mut self) {
@@ -609,6 +620,7 @@ impl ChatView {
         self.session_id = id.to_string();
         self.queued.clear();
         self.pending_attachments.clear();
+        self.expanded_reasoning.clear();
         self.reset_list();
         cx.notify();
     }
@@ -670,38 +682,31 @@ impl ChatView {
             // adjusting away from it lands on read-only.
             1 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
             2 => {
-                self.show_reasoning = !self.show_reasoning;
-                self.saved.show_reasoning = Some(self.show_reasoning);
-                // Reasoning entries change height everywhere, invalidating
-                // the list's cached measurements.
-                self.reset_list();
-            }
-            3 => {
                 self.cfg.step_bash_timeout(delta);
                 self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
             }
-            4 => {
+            3 => {
                 self.cfg.step_read_lines(delta);
                 self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
             }
-            5 => {
+            4 => {
                 self.cfg.step_line_bytes(delta);
                 self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
             }
-            6 => {
+            5 => {
                 self.cfg.search.cycle_provider(delta);
                 self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
             }
-            7 => {
+            6 => {
                 self.cfg.search.step_max_results(delta);
                 self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
-            8 => {
+            7 => {
                 self.cfg.step_auto_compact(delta);
                 self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
-            9 => {
+            8 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, cx);
             }
@@ -873,6 +878,7 @@ impl ChatView {
                 self.est_out = 0;
                 // A cleared conversation starts a fresh session log.
                 self.session_id = session::new_id();
+                self.expanded_reasoning.clear();
                 self.push(EntryKind::Notice, t!("cleared").to_string());
                 self.reset_list();
             }
@@ -1318,6 +1324,7 @@ impl ChatView {
         self.entries.clear();
         self.queued.clear();
         self.pending_attachments.clear();
+        self.expanded_reasoning.clear();
         self.tokens_in = 0;
         self.tokens_out = 0;
         self.est_out = 0;

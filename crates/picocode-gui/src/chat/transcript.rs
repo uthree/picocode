@@ -38,7 +38,7 @@ impl ChatView {
         let rendered = Self::render_entry(
             entry,
             ix,
-            self.show_reasoning,
+            self.expanded_reasoning.contains(&ix),
             streaming,
             &mut self.math_cache,
             window,
@@ -63,7 +63,7 @@ impl ChatView {
     fn render_entry(
         entry: &Entry,
         ix: usize,
-        show_reasoning: bool,
+        reasoning_expanded: bool,
         streaming: bool,
         math_cache: &mut crate::tex::MathCache,
         window: &mut Window,
@@ -225,15 +225,23 @@ impl ChatView {
                 }
                 col.into_any_element()
             }
+            // A disclosure: collapsed to a one-line preview by default,
+            // clicking toggles the full text (per entry).
             EntryKind::Reasoning => div()
+                .id(SharedString::from(format!("reasoning-{ix}")))
+                .cursor_pointer()
+                .hover(|s| s.opacity(0.8))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_reasoning(ix);
+                    cx.notify();
+                }))
                 .italic()
                 .text_sm()
                 .text_color(muted)
-                .child(if show_reasoning {
-                    entry.text.clone()
+                .child(if reasoning_expanded {
+                    format!("▾ ✳ {}", entry.text)
                 } else {
-                    // Collapsed (the `/config` "reasoning" row): one line.
-                    format!("✳ {}", one_line(&entry.text, 80))
+                    format!("▸ ✳ {}", one_line(&entry.text, 80))
                 })
                 .into_any_element(),
             EntryKind::Tool => {

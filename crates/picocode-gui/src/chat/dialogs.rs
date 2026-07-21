@@ -507,17 +507,9 @@ impl ChatView {
         }
         let theme = cx.theme();
         let search = self.cfg.search.snapshot();
-        let rows: [(String, String); 10] = [
+        let rows: [(String, String); 9] = [
             (t!("row_theme").to_string(), self.theme_pref.label()),
             (t!("row_mode").to_string(), mode_name(self.cfg.mode.get())),
-            (
-                t!("row_reasoning").to_string(),
-                if self.show_reasoning {
-                    t!("reasoning_shown").to_string()
-                } else {
-                    t!("reasoning_collapsed").to_string()
-                },
-            ),
             (
                 t!("row_bash_timeout").to_string(),
                 format!("{}s", self.cfg.bash_timeout.get()),

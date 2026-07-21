@@ -11,8 +11,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 ## Features
 
 - **Chat**: streaming replies rendered as markdown with syntax-highlighted
-  code blocks; reasoning shown dimmed (collapsible via `/config`); tool
-  calls with per-tool icons and accent colors, outputs as attached blocks;
+  code blocks; model reasoning collapsed to a dimmed one-line preview —
+  click it to expand or fold that entry; tool calls with per-tool icons
+  and accent colors, outputs as attached blocks;
   `edit_file` line diffs in the transcript and the approval dialog, with
   additions/removals marked by the row background while the text keeps its
   syntax highlighting (picked from the file extension, theme-aware).
@@ -67,7 +68,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   top-right corner, and right-clicking any transcript entry opens a
   "Copy text" menu.
 - **Commands**: `/clear`, `/compact`, `/model`, `/resume`, the mode
-  commands, `/config` (settings dialog with the same rows as the TUI),
+  commands, `/config` (settings dialog with the same rows as the TUI,
+  minus its reasoning-display row — reasoning folds per entry in the
+  transcript — plus the GUI-only theme row),
   `/status`, `/permissions`, `/quit`.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.

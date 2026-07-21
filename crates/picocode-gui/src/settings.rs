@@ -20,8 +20,6 @@ pub struct GuiSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeSetting>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_reasoning: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bash_timeout: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_max_lines: Option<u64>,
