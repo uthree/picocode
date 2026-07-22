@@ -6,10 +6,15 @@ license.workspace = true
 repository.workspace = true
 description = "A minimal coding agent — native GUI front end"
 
-# Not distributed by cargo-dist: the GUI needs a macOS .app bundle (and
-# eventually signing/notarization), which is packaged separately.
+# Distributed as a bare binary for macOS only: the shell installer's curl
+# download carries no quarantine attribute, so Gatekeeper stays out of the
+# way. A proper .app bundle (and signing/notarization) would be a separate
+# packaging step; Linux needs Vulkan and extra CI deps, Windows gpui
+# support is untested — neither is built yet.
 [package.metadata.dist]
-dist = false
+dist = true
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+installers = ["shell"]
 
 [[bin]]
 name = "picocode-gui"

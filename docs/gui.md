@@ -8,6 +8,13 @@ same engine (`picocode-core`) as the TUI.
 cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 ```
 
+On macOS a prebuilt binary is also on the
+[releases page](https://github.com/uthree/picocode/releases) with its own
+shell installer (`picocode-gui-installer.sh`); launch it as
+`picocode-gui`. It is a bare binary rather than a .app bundle, so there
+is no Dock icon or double-click launch — packaging (and
+signing/notarization) may come later.
+
 ## Features
 
 - **Chat**: streaming replies rendered as markdown with syntax-highlighted

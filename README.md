@@ -44,7 +44,17 @@ Windows (PowerShell):
 irm https://github.com/uthree/picocode/releases/latest/download/picocode-tui-installer.ps1 | iex
 ```
 
-The GUI is currently built from source (see below).
+The native GUI ships as a prebuilt binary for macOS (installed the same
+way — the curl download carries no quarantine attribute, so Gatekeeper
+does not object; it is a bare binary, not a .app bundle):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/uthree/picocode/releases/latest/download/picocode-gui-installer.sh | sh
+```
+
+Then launch it with `picocode-gui`. On other platforms the GUI is built
+from source (see below).
 
 ## Quick start
 
