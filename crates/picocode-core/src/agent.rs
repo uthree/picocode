@@ -32,6 +32,7 @@ pub fn spawn(
 
     // The concrete `Agent<M>` type differs per provider, so the builder chain
     // lives in a macro and each arm spawns its own typed worker.
+    let journal = crate::undo::UndoJournal::new();
     macro_rules! spawn_for {
         ($client:expr) => {{
             let client = $client;
@@ -47,7 +48,11 @@ pub fn spawn(
                 ))
                 .tool(tools::ListFiles::new(root.clone()))
                 .tool(tools::Grep::new(root.clone()))
-                .tool(tools::EditFile::new(root.clone(), cfg.after_edit.clone()))
+                .tool(tools::EditFile::new(
+                    root.clone(),
+                    cfg.after_edit.clone(),
+                    journal.clone(),
+                ))
                 .tool(tools::Bash::new(
                     root,
                     cfg.bash_timeout.clone(),
@@ -68,7 +73,9 @@ pub fn spawn(
                 .preamble(COMPACT_PREAMBLE)
                 .max_tokens(8192)
                 .build();
-            tokio::spawn(worker(agent, compactor, cmd_rx, event_tx, cfg, cancel_rx));
+            tokio::spawn(worker(
+                agent, compactor, cmd_rx, event_tx, cfg, cancel_rx, journal,
+            ));
         }};
     }
 
@@ -170,6 +177,7 @@ const COMPACT_REQUEST: &str = "Summarize our entire conversation above so that y
      could seamlessly continue the work from the summary alone. Reply with the \
      summary only.";
 
+#[allow(clippy::too_many_arguments)]
 async fn worker<M>(
     agent: Agent<M>,
     compactor: Agent<M>,
@@ -177,6 +185,7 @@ async fn worker<M>(
     event_tx: mpsc::Sender<AgentEvent>,
     cfg: Config,
     mut cancel_rx: watch::Receiver<()>,
+    journal: crate::undo::UndoJournal,
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
@@ -186,6 +195,19 @@ async fn worker<M>(
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             WorkerCmd::Clear => history.clear(),
+            WorkerCmd::Undo => {
+                let restored = journal.undo();
+                let summary = undo_summary(&restored);
+                // Tell the model its edits were rolled back, the same way
+                // `!` shell commands are recorded — otherwise it believes
+                // its previous changes are still in place.
+                if !summary.is_empty() {
+                    history.push(Message::user(format!(
+                        "I reverted the file changes from your last turn:\n{summary}"
+                    )));
+                }
+                let _ = event_tx.send(AgentEvent::Undone { summary }).await;
+            }
             WorkerCmd::ShellRecord { command, output } => {
                 history.push(Message::user(format!(
                     "I ran this shell command myself in the working directory:\n\
@@ -197,6 +219,7 @@ async fn worker<M>(
             }
             WorkerCmd::SeedHistory(h) => history = h,
             WorkerCmd::Prompt { text, attachments } => {
+                journal.begin_turn();
                 run_once(
                     &agent,
                     &mut history,
@@ -532,6 +555,21 @@ fn is_transient(error: &str) -> bool {
     ]
     .iter()
     .any(|needle| e.contains(needle))
+}
+
+/// Human-readable `/undo` result, one line per file; empty when there was
+/// nothing to undo. Shown to the user and recorded for the model.
+fn undo_summary(restored: &[crate::undo::Restored]) -> String {
+    use crate::undo::Restored;
+    restored
+        .iter()
+        .map(|r| match r {
+            Restored::Reverted(p) => format!("restored {}", p.display()),
+            Restored::Removed(p) => format!("deleted {} (the edit had created it)", p.display()),
+            Restored::Failed(p, e) => format!("FAILED to restore {}: {e}", p.display()),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {

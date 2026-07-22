@@ -82,10 +82,13 @@ attach_unsupported_type: "%{name}: this looks like an unsupported binary format 
 attach_unsupported_provider: "%{name}: this file type isn't supported by the %{provider} provider, so it was not attached"
 not_available: "%{cmd}: not available in the GUI (yet) — try the TUI"
 shell_empty: "empty shell command"
+undo_nothing: "nothing to undo"
+undo_done: "Undo:\n%{files}"
 session_detail: "%{age} · %{n} messages · %{model}"
 
 cmd_clear: "Clear conversation history"
 cmd_compact: "Summarize history to free context"
+cmd_undo: "Revert the last turn's file edits (repeatable)"
 cmd_model: "Pick a model (menu) or switch: /model <name>"
 cmd_resume: "Pick a saved session to resume"
 cmd_read_only: "Mode: reads only, every write asks"

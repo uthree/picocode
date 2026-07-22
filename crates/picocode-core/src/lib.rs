@@ -19,3 +19,4 @@ pub mod session;
 pub mod state;
 pub mod tools;
 pub mod transcript;
+pub mod undo;

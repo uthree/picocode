@@ -55,6 +55,9 @@ pub enum AgentEvent {
         command: String,
         output: String,
     },
+    /// `/undo` finished: a human-readable per-file summary, or an empty
+    /// string when there was nothing to undo.
+    Undone { summary: String },
     /// The user stopped the current generation with Esc.
     Cancelled,
     /// The current run finished (successfully or not).
@@ -78,6 +81,9 @@ pub enum WorkerCmd {
     /// Record a user-run `!` shell command and its output in the history so
     /// the model has it as context.
     ShellRecord { command: String, output: String },
+    /// Revert the file edits of the most recent turn that made any
+    /// (`/undo`); repeatable to walk further back.
+    Undo,
     /// Send a copy of the history back (used when switching models).
     TakeHistory(oneshot::Sender<Vec<Message>>),
     /// Replace the history (seeds a freshly spawned worker on model switch).

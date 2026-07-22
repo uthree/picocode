@@ -82,10 +82,13 @@ attach_unsupported_type: "%{name}: 未対応のバイナリ形式のようです
 attach_unsupported_provider: "%{name}: このファイル形式は %{provider} プロバイダでは送信できないため添付しませんでした"
 not_available: "%{cmd}: GUI では未対応です — TUI をお使いください"
 shell_empty: "シェルコマンドが空です"
+undo_nothing: "取り消す編集がありません"
+undo_done: "取り消しました:\n%{files}"
 session_detail: "%{age} · %{n} メッセージ · %{model}"
 
 cmd_clear: "会話履歴をクリア"
 cmd_compact: "履歴を要約してコンテキストを解放"
+cmd_undo: "直前のターンのファイル編集を取り消す (繰り返し可)"
 cmd_model: "モデルを選択 (メニュー) / 切替: /model <name>"
 cmd_resume: "保存済みセッションを再開"
 cmd_read_only: "モード: 読み取りのみ、書き込みは毎回確認"

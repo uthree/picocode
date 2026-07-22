@@ -40,6 +40,7 @@ gpui::actions!(picocode_gui, [AcceptCompletion, SubmitPrompt]);
 const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "cmd_clear"),
     ("/compact", "cmd_compact"),
+    ("/undo", "cmd_undo"),
     ("/model", "cmd_model"),
     ("/resume", "cmd_resume"),
     ("/read-only", "cmd_read_only"),
@@ -402,6 +403,18 @@ impl ChatView {
                 self.flush_queued();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
+            AgentEvent::Undone { summary } => {
+                if summary.is_empty() {
+                    self.push(EntryKind::Notice, t!("undo_nothing").to_string());
+                } else {
+                    self.push(
+                        EntryKind::Notice,
+                        t!("undo_done", files = summary).to_string(),
+                    );
+                    // Persist the history record the worker just added.
+                    self.autosave();
+                }
+            }
             AgentEvent::BackgroundStarted { id, command } => {
                 self.bg_jobs.push((id, command, std::time::Instant::now()));
                 self.push(EntryKind::Notice, t!("bg_started", id = id).to_string());
@@ -887,6 +900,9 @@ impl ChatView {
                 self.push(EntryKind::Notice, t!("compacting").to_string());
                 self.running = true;
                 self.waiting = true;
+            }
+            "/undo" => {
+                let _ = self.cmd_tx.try_send(WorkerCmd::Undo);
             }
             "/quit" | "/exit" => cx.quit(),
             "/read-only" => self.select_mode(Mode::ReadOnly, cx),

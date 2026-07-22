@@ -41,6 +41,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ),
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
+    ("/undo", "Revert the last turn's file edits (repeatable)"),
     ("/model", "Pick a model (dialog) or switch: /model <name>"),
     ("/resume", "Pick a saved session to resume"),
     ("/read-only", "Mode: reads only, every write asks"),
@@ -648,6 +649,9 @@ impl App {
                 } else {
                     self.push(EntryKind::Error, "The agent worker has stopped".to_string());
                 }
+            }
+            "/undo" => {
+                let _ = self.cmd_tx.send(WorkerCmd::Undo).await;
             }
             "/permissions" => self.show_permissions(),
             "/config" | "/settings" => self.settings = Some(SettingsMenu { selected: 0 }),
@@ -1600,6 +1604,15 @@ impl App {
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
+            }
+            AgentEvent::Undone { summary } => {
+                self.close_blocks();
+                if summary.is_empty() {
+                    self.push(EntryKind::Notice, "Nothing to undo".to_string());
+                } else {
+                    self.push(EntryKind::Notice, format!("Undo:\n{summary}"));
+                    self.autosave();
+                }
             }
             AgentEvent::BackgroundStarted { .. } => {
                 self.background_jobs += 1;

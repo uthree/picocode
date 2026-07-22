@@ -25,11 +25,21 @@ pub struct EditFile {
     /// Shell command run after every successful write (`after_edit` in the
     /// config file); its verdict is appended to the tool result.
     after_edit: Option<String>,
+    /// Per-turn journal of pre-edit file states, powering `/undo`.
+    journal: crate::undo::UndoJournal,
 }
 
 impl EditFile {
-    pub fn new(root: PathBuf, after_edit: Option<String>) -> Self {
-        Self { root, after_edit }
+    pub fn new(
+        root: PathBuf,
+        after_edit: Option<String>,
+        journal: crate::undo::UndoJournal,
+    ) -> Self {
+        Self {
+            root,
+            after_edit,
+            journal,
+        }
     }
 
     /// Run the configured check and append its verdict to the tool output.
@@ -109,6 +119,7 @@ impl Tool for EditFile {
         // No (or empty) old_string: whole-file create/overwrite (the former
         // write_file).
         let Some(old_string) = args.old_string.filter(|s| !s.is_empty()) else {
+            self.journal.record(&path);
             let mut out = write_whole_file(&path, &args.new_string).await?;
             self.append_after_edit(&mut out).await;
             return Ok(out);
@@ -139,6 +150,7 @@ impl Tool for EditFile {
                 },
             )),
             1 => {
+                self.journal.record(&path);
                 let updated = content.replacen(&old_string, &args.new_string, 1);
                 tokio::fs::write(&path, &updated).await.map_err(|e| {
                     ToolError::new(format!("failed to write {}: {e}", path.display()))
@@ -243,7 +255,7 @@ mod tests {
     fn setup(content: &str) -> (tempfile::TempDir, EditFile) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), content).unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf(), None);
+        let tool = EditFile::new(dir.path().to_path_buf(), None, Default::default());
         (dir, tool)
     }
 
@@ -313,7 +325,11 @@ mod tests {
         // Passing check: terse verdict.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), "a\n").unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf(), Some("true".into()));
+        let tool = EditFile::new(
+            dir.path().to_path_buf(),
+            Some("true".into()),
+            Default::default(),
+        );
         let out = tool
             .call(EditArgs {
                 path: "f.txt".into(),
@@ -327,7 +343,11 @@ mod tests {
 
         // Failing check: exit code and output are included (also covers the
         // whole-file write path).
-        let tool = EditFile::new(dir.path().to_path_buf(), Some("echo broken; exit 3".into()));
+        let tool = EditFile::new(
+            dir.path().to_path_buf(),
+            Some("echo broken; exit 3".into()),
+            Default::default(),
+        );
         let out = tool
             .call(EditArgs {
                 path: "g.txt".into(),
@@ -340,7 +360,11 @@ mod tests {
         assert!(out.contains("broken"), "{out}");
 
         // A failed edit runs no check.
-        let tool = EditFile::new(dir.path().to_path_buf(), Some("true".into()));
+        let tool = EditFile::new(
+            dir.path().to_path_buf(),
+            Some("true".into()),
+            Default::default(),
+        );
         let err = tool
             .call(EditArgs {
                 path: "f.txt".into(),
@@ -366,7 +390,7 @@ mod tests {
     #[tokio::test]
     async fn omitted_old_string_creates_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf(), None);
+        let tool = EditFile::new(dir.path().to_path_buf(), None, Default::default());
         let out = tool
             .call(EditArgs {
                 path: "sub/dir/x.txt".into(),
