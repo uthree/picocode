@@ -70,8 +70,20 @@ impl Tool for EditFile {
         }
         let count = content.matches(&old_string).count();
         match count {
+            // Small models loop on a bare "not found"; showing the actual
+            // text of the closest region lets the next attempt copy it
+            // verbatim instead of guessing again.
             0 => Err(ToolError::new(
-                "old_string was not found in the file. Re-read the file and copy the text exactly.",
+                match closest_region(&content, &old_string) {
+                    Some((first_line, snippet)) => format!(
+                        "old_string was not found in the file. The closest text in the \
+                     file starts at line {first_line}:\n{snippet}\nRe-read that part and \
+                     copy it exactly (mind whitespace and punctuation)."
+                    ),
+                    None => "old_string was not found in the file. Re-read the file and \
+                         copy the text exactly."
+                        .to_string(),
+                },
             )),
             1 => {
                 let updated = content.replacen(&old_string, &args.new_string, 1);
@@ -86,10 +98,69 @@ impl Tool for EditFile {
                 ))
             }
             n => Err(ToolError::new(format!(
-                "old_string appears {n} times in the file. Add surrounding context to make it unique."
+                "old_string appears {n} times in the file (starting on lines {}). \
+                 Add surrounding context to make it unique.",
+                match_lines(&content, &old_string)
             ))),
         }
     }
+}
+
+/// 1-based line numbers where `needle` occurrences start, as "12, 45, 78"
+/// (capped at the first 10).
+fn match_lines(content: &str, needle: &str) -> String {
+    let mut lines = Vec::new();
+    let mut from = 0;
+    while let Some(pos) = content[from..].find(needle) {
+        let at = from + pos;
+        lines.push((content[..at].matches('\n').count() + 1).to_string());
+        from = at + needle.len().max(1);
+        if lines.len() == 10 {
+            lines.push("…".to_string());
+            break;
+        }
+    }
+    lines.join(", ")
+}
+
+/// The region of `content` most similar to `needle`: a sliding window of the
+/// same line count, scored with a character diff. Returns the 1-based first
+/// line and the region's text, or `None` when nothing is similar enough (or
+/// the file is too large to scan).
+fn closest_region(content: &str, needle: &str) -> Option<(usize, String)> {
+    const MAX_LINES: usize = 5_000;
+    const MAX_SNIPPET_BYTES: usize = 1_500;
+    /// Similarity below this reads as "nothing like it" — no snippet.
+    const MIN_RATIO: f32 = 0.5;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let window = needle.lines().count().max(1);
+    if lines.is_empty() || lines.len() > MAX_LINES || window > lines.len() {
+        return None;
+    }
+
+    let mut best: Option<(usize, f32)> = None;
+    for start in 0..=(lines.len() - window) {
+        let candidate = lines[start..start + window].join("\n");
+        let ratio = similar::TextDiff::from_chars(needle, &candidate).ratio();
+        if best.is_none_or(|(_, r)| ratio > r) {
+            best = Some((start, ratio));
+        }
+    }
+    let (start, ratio) = best?;
+    if ratio < MIN_RATIO {
+        return None;
+    }
+    let mut snippet = lines[start..start + window].join("\n");
+    if snippet.len() > MAX_SNIPPET_BYTES {
+        let mut end = MAX_SNIPPET_BYTES;
+        while end > 0 && !snippet.is_char_boundary(end) {
+            end -= 1;
+        }
+        snippet.truncate(end);
+        snippet.push('…');
+    }
+    Some((start + 1, snippet))
 }
 
 /// Create or overwrite `path` with `content`, creating parent directories.
@@ -138,8 +209,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_ambiguous_match() {
-        let (_dir, tool) = setup("x\nx\n");
+    async fn rejects_ambiguous_match_with_line_numbers() {
+        let (_dir, tool) = setup("x\ny\nx\n");
         let err = tool
             .call(EditArgs {
                 path: "f.txt".into(),
@@ -148,21 +219,49 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(err.0.contains("appears"));
+        assert!(err.0.contains("appears 2 times"));
+        assert!(err.0.contains("lines 1, 3"));
     }
 
     #[tokio::test]
-    async fn rejects_missing_match() {
-        let (_dir, tool) = setup("abc\n");
+    async fn rejects_missing_match_with_closest_snippet() {
+        // A near miss (wrong indentation) shows the actual text to copy.
+        let (_dir, tool) = setup("fn main() {\n    println!(\"hi\");\n}\n");
         let err = tool
             .call(EditArgs {
                 path: "f.txt".into(),
-                old_string: Some("zzz".into()),
+                old_string: Some("fn main() {\nprintln!(\"hi\");\n}".into()),
                 new_string: "y".into(),
             })
             .await
             .unwrap_err();
         assert!(err.0.contains("not found"));
+        assert!(err.0.contains("starts at line 1"), "{}", err.0);
+        assert!(err.0.contains("    println!(\"hi\");"), "{}", err.0);
+
+        // Nothing remotely similar: no snippet, just the plain error.
+        let (_dir, tool) = setup("abc\n");
+        let err = tool
+            .call(EditArgs {
+                path: "f.txt".into(),
+                old_string: Some("zzzzzzzz".into()),
+                new_string: "y".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.0.contains("not found"));
+        assert!(!err.0.contains("closest"), "{}", err.0);
+    }
+
+    #[test]
+    fn match_lines_caps_at_ten() {
+        let content = "x\n".repeat(30);
+        let out = match_lines(&content, "x");
+        assert!(out.ends_with("…"));
+        assert!(
+            out.starts_with("1, 3,") || out.starts_with("1, 2,"),
+            "{out}"
+        );
     }
 
     #[tokio::test]
