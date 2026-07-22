@@ -47,7 +47,7 @@ pub fn spawn(
                 ))
                 .tool(tools::ListFiles::new(root.clone()))
                 .tool(tools::Grep::new(root.clone()))
-                .tool(tools::EditFile::new(root.clone()))
+                .tool(tools::EditFile::new(root.clone(), cfg.after_edit.clone()))
                 .tool(tools::Bash::new(
                     root,
                     cfg.bash_timeout.clone(),
@@ -499,6 +499,7 @@ mod tests {
                 api_key: None,
             }),
             disable_tools: Vec::new(),
+            after_edit: None,
             system_prompt: None,
             instructions: Vec::new(),
             config_files: Vec::new(),

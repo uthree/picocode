@@ -97,6 +97,10 @@ struct FileConfig {
     /// Tools to leave unregistered entirely (schemas never sent to the
     /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
     disable_tools: Option<Vec<String>>,
+    /// Shell command run after every successful edit_file write (e.g.
+    /// `cargo check`); its verdict is appended to the tool result so the
+    /// model sees breakage immediately without being told to verify.
+    after_edit: Option<String>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
@@ -292,6 +296,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         auto_compact: project.auto_compact.or(global.auto_compact),
+        after_edit: project.after_edit.or(global.after_edit),
         // Like the approval lists: a project can add disables, not re-enable.
         disable_tools: match (global.disable_tools, project.disable_tools) {
             (Some(mut g), Some(p)) => {
@@ -364,6 +369,9 @@ pub struct Config {
     /// Tools left unregistered entirely (only web tools; from `disable_tools`
     /// in the config file, so a change requires a restart).
     pub disable_tools: Vec<String>,
+    /// Shell command run after each successful edit_file write; its verdict
+    /// is appended to the tool result (from `after_edit` in the config file).
+    pub after_edit: Option<String>,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Instruction files that were found: (file name, content).
@@ -519,6 +527,7 @@ impl Config {
             }),
             search: SearchHandle::new(search),
             disable_tools,
+            after_edit: file.after_edit.filter(|c| !c.trim().is_empty()),
             system_prompt: file.system_prompt,
             instructions,
             config_files,

@@ -1,10 +1,16 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve};
+use super::{ToolError, resolve, truncate_output};
+
+/// Hard cap on the configured `after_edit` command.
+const AFTER_EDIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Cap on the failure output appended to the tool result.
+const AFTER_EDIT_MAX_OUTPUT: usize = 4_000;
 
 #[derive(Deserialize)]
 pub struct EditArgs {
@@ -16,11 +22,57 @@ pub struct EditArgs {
 
 pub struct EditFile {
     root: PathBuf,
+    /// Shell command run after every successful write (`after_edit` in the
+    /// config file); its verdict is appended to the tool result.
+    after_edit: Option<String>,
 }
 
 impl EditFile {
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
+    pub fn new(root: PathBuf, after_edit: Option<String>) -> Self {
+        Self { root, after_edit }
+    }
+
+    /// Run the configured check and append its verdict to the tool output.
+    /// The model sees breakage immediately, without the system prompt having
+    /// to ask it to verify (small models forget to).
+    async fn append_after_edit(&self, out: &mut String) {
+        let Some(command) = &self.after_edit else {
+            return;
+        };
+        out.push_str(&run_after_edit(&self.root, command).await);
+    }
+}
+
+/// Execute the after-edit check; the returned text is appended to the
+/// edit_file output. Success stays terse; failures carry the (truncated)
+/// output so the model can act on it.
+async fn run_after_edit(root: &Path, command: &str) -> String {
+    let run = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .output();
+    match tokio::time::timeout(AFTER_EDIT_TIMEOUT, run).await {
+        Err(_) => format!(
+            "\n\nafter_edit check (`{command}`) timed out after {}s.",
+            AFTER_EDIT_TIMEOUT.as_secs()
+        ),
+        Ok(Err(e)) => format!("\n\nafter_edit check (`{command}`) could not run: {e}"),
+        Ok(Ok(out)) if out.status.success() => {
+            format!("\n\nafter_edit check (`{command}`): passed.")
+        }
+        Ok(Ok(out)) => {
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            format!(
+                "\n\nafter_edit check (`{command}`) failed (exit {}):\n{}",
+                out.status
+                    .code()
+                    .map_or_else(|| "?".to_string(), |c| c.to_string()),
+                truncate_output(text.trim(), AFTER_EDIT_MAX_OUTPUT)
+            )
+        }
     }
 }
 
@@ -54,11 +106,12 @@ impl Tool for EditFile {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let path = resolve(&self.root, &args.path)?;
 
-        // No old_string: whole-file create/overwrite (the former write_file).
-        let old_string = match args.old_string {
-            None => return write_whole_file(&path, &args.new_string).await,
-            Some(s) if s.is_empty() => return write_whole_file(&path, &args.new_string).await,
-            Some(s) => s,
+        // No (or empty) old_string: whole-file create/overwrite (the former
+        // write_file).
+        let Some(old_string) = args.old_string.filter(|s| !s.is_empty()) else {
+            let mut out = write_whole_file(&path, &args.new_string).await?;
+            self.append_after_edit(&mut out).await;
+            return Ok(out);
         };
 
         let content = tokio::fs::read_to_string(&path)
@@ -90,12 +143,14 @@ impl Tool for EditFile {
                 tokio::fs::write(&path, &updated).await.map_err(|e| {
                     ToolError::new(format!("failed to write {}: {e}", path.display()))
                 })?;
-                Ok(format!(
+                let mut out = format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
                     old_string.lines().count(),
                     args.new_string.lines().count()
-                ))
+                );
+                self.append_after_edit(&mut out).await;
+                Ok(out)
             }
             n => Err(ToolError::new(format!(
                 "old_string appears {n} times in the file (starting on lines {}). \
@@ -188,7 +243,7 @@ mod tests {
     fn setup(content: &str) -> (tempfile::TempDir, EditFile) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), content).unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf());
+        let tool = EditFile::new(dir.path().to_path_buf(), None);
         (dir, tool)
     }
 
@@ -253,6 +308,50 @@ mod tests {
         assert!(!err.0.contains("closest"), "{}", err.0);
     }
 
+    #[tokio::test]
+    async fn after_edit_verdict_is_appended() {
+        // Passing check: terse verdict.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("f.txt"), "a\n").unwrap();
+        let tool = EditFile::new(dir.path().to_path_buf(), Some("true".into()));
+        let out = tool
+            .call(EditArgs {
+                path: "f.txt".into(),
+                old_string: Some("a".into()),
+                new_string: "b".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.contains("Edited"));
+        assert!(out.contains("after_edit check (`true`): passed"), "{out}");
+
+        // Failing check: exit code and output are included (also covers the
+        // whole-file write path).
+        let tool = EditFile::new(dir.path().to_path_buf(), Some("echo broken; exit 3".into()));
+        let out = tool
+            .call(EditArgs {
+                path: "g.txt".into(),
+                old_string: None,
+                new_string: "x\n".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.contains("failed (exit 3)"), "{out}");
+        assert!(out.contains("broken"), "{out}");
+
+        // A failed edit runs no check.
+        let tool = EditFile::new(dir.path().to_path_buf(), Some("true".into()));
+        let err = tool
+            .call(EditArgs {
+                path: "f.txt".into(),
+                old_string: Some("zzzz-not-there".into()),
+                new_string: "y".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(!err.0.contains("after_edit"), "{}", err.0);
+    }
+
     #[test]
     fn match_lines_caps_at_ten() {
         let content = "x\n".repeat(30);
@@ -267,7 +366,7 @@ mod tests {
     #[tokio::test]
     async fn omitted_old_string_creates_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf());
+        let tool = EditFile::new(dir.path().to_path_buf(), None);
         let out = tool
             .call(EditArgs {
                 path: "sub/dir/x.txt".into(),

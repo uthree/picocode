@@ -104,6 +104,13 @@ auto_compact = 85
 # can be listed; default: [] (everything on). Needs a restart to change.
 disable_tools = ["web_search", "web_fetch"]
 
+# Shell command run after every successful edit_file write; its verdict is
+# appended to the tool result the model sees ("passed", or the failure
+# output), so breakage surfaces immediately without relying on the model
+# remembering to verify. Runs in the project root, 120 s cap, no approval
+# (you configured it). Default: unset.
+after_edit = "cargo check"
+
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.
 system_prompt = """
