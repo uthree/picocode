@@ -50,6 +50,39 @@ pub const WRITE_TOOLS: &[&str] = &[EditFile::NAME];
 /// Restricted to the web tools: everything else is part of the core loop.
 pub const OPTIONAL_TOOLS: &[&str] = &[WebSearch::NAME, WebFetch::NAME];
 
+/// Last-seen modification times of files read via `read_file`, checked by
+/// `edit_file` before writing: an mtime that moved since the last read means
+/// the file was changed externally (by the user, another process, or
+/// `/undo`), and blindly applying the edit would clobber that change. Only
+/// files with a recorded stamp are checked — the `old_string` exact-match
+/// requirement guards unread files on its own.
+#[derive(Clone, Default)]
+pub struct ReadStamps(
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, std::time::SystemTime>>>,
+);
+
+impl ReadStamps {
+    /// Remember `path`'s current mtime (after a successful read or write).
+    pub fn record(&self, path: &Path) {
+        if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+            self.0.lock().unwrap().insert(path.to_path_buf(), mtime);
+        }
+    }
+
+    /// Whether `path` changed on disk since it was last recorded. `false`
+    /// when it was never recorded or no longer exists (other checks cover
+    /// those).
+    pub fn is_stale(&self, path: &Path) -> bool {
+        let Some(seen) = self.0.lock().unwrap().get(path).copied() else {
+            return false;
+        };
+        match std::fs::metadata(path).and_then(|m| m.modified()) {
+            Ok(now) => now != seen,
+            Err(_) => false,
+        }
+    }
+}
+
 /// Common error type for all tools. The message is fed back to the model.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]

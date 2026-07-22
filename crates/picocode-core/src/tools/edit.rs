@@ -27,6 +27,8 @@ pub struct EditFile {
     after_edit: Option<String>,
     /// Per-turn journal of pre-edit file states, powering `/undo`.
     journal: crate::undo::UndoJournal,
+    /// Read timestamps shared with read_file (stale-write detection).
+    stamps: super::ReadStamps,
 }
 
 impl EditFile {
@@ -34,12 +36,28 @@ impl EditFile {
         root: PathBuf,
         after_edit: Option<String>,
         journal: crate::undo::UndoJournal,
+        stamps: super::ReadStamps,
     ) -> Self {
         Self {
             root,
             after_edit,
             journal,
+            stamps,
         }
+    }
+
+    /// Refuse to write over external changes: the file moved on disk since
+    /// the model last read it (user edit, another process, or `/undo`), so
+    /// the edit was decided against outdated contents.
+    fn check_stale(&self, path: &Path) -> Result<(), ToolError> {
+        if self.stamps.is_stale(path) {
+            return Err(ToolError::new(format!(
+                "{} changed on disk after you last read it (edited externally). \
+                 Re-read the file and redo the edit against the current contents.",
+                path.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Run the configured check and append its verdict to the tool output.
@@ -119,8 +137,10 @@ impl Tool for EditFile {
         // No (or empty) old_string: whole-file create/overwrite (the former
         // write_file).
         let Some(old_string) = args.old_string.filter(|s| !s.is_empty()) else {
+            self.check_stale(&path)?;
             self.journal.record(&path);
             let mut out = write_whole_file(&path, &args.new_string).await?;
+            self.stamps.record(&path);
             self.append_after_edit(&mut out).await;
             return Ok(out);
         };
@@ -150,11 +170,13 @@ impl Tool for EditFile {
                 },
             )),
             1 => {
+                self.check_stale(&path)?;
                 self.journal.record(&path);
                 let updated = content.replacen(&old_string, &args.new_string, 1);
                 tokio::fs::write(&path, &updated).await.map_err(|e| {
                     ToolError::new(format!("failed to write {}: {e}", path.display()))
                 })?;
+                self.stamps.record(&path);
                 let mut out = format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
@@ -255,7 +277,12 @@ mod tests {
     fn setup(content: &str) -> (tempfile::TempDir, EditFile) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), content).unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf(), None, Default::default());
+        let tool = EditFile::new(
+            dir.path().to_path_buf(),
+            None,
+            Default::default(),
+            Default::default(),
+        );
         (dir, tool)
     }
 
@@ -329,6 +356,7 @@ mod tests {
             dir.path().to_path_buf(),
             Some("true".into()),
             Default::default(),
+            Default::default(),
         );
         let out = tool
             .call(EditArgs {
@@ -347,6 +375,7 @@ mod tests {
             dir.path().to_path_buf(),
             Some("echo broken; exit 3".into()),
             Default::default(),
+            Default::default(),
         );
         let out = tool
             .call(EditArgs {
@@ -364,6 +393,7 @@ mod tests {
             dir.path().to_path_buf(),
             Some("true".into()),
             Default::default(),
+            Default::default(),
         );
         let err = tool
             .call(EditArgs {
@@ -374,6 +404,67 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!err.0.contains("after_edit"), "{}", err.0);
+    }
+
+    #[test]
+    fn stale_writes_are_refused_until_reread() {
+        // Runs inside one #[test] via a manual runtime so the filetime
+        // manipulation stays synchronous and explicit.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("f.txt");
+            std::fs::write(&path, "one\n").unwrap();
+            let stamps = crate::tools::ReadStamps::default();
+            let tool = EditFile::new(
+                dir.path().to_path_buf(),
+                None,
+                Default::default(),
+                stamps.clone(),
+            );
+
+            // Simulate a read, then an external change (bump mtime).
+            stamps.record(&path);
+            let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+            std::fs::File::options()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(later))
+                .unwrap();
+
+            let err = tool
+                .call(EditArgs {
+                    path: "f.txt".into(),
+                    old_string: Some("one".into()),
+                    new_string: "two".into(),
+                })
+                .await
+                .unwrap_err();
+            assert!(err.0.contains("changed on disk"), "{}", err.0);
+
+            // Re-reading (re-recording) clears the staleness; consecutive
+            // edits then keep working because writes refresh the stamp.
+            stamps.record(&path);
+            tool.call(EditArgs {
+                path: "f.txt".into(),
+                old_string: Some("one".into()),
+                new_string: "two".into(),
+            })
+            .await
+            .unwrap();
+            tool.call(EditArgs {
+                path: "f.txt".into(),
+                old_string: Some("two".into()),
+                new_string: "three".into(),
+            })
+            .await
+            .unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "three\n");
+        });
     }
 
     #[test]
@@ -390,7 +481,12 @@ mod tests {
     #[tokio::test]
     async fn omitted_old_string_creates_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let tool = EditFile::new(dir.path().to_path_buf(), None, Default::default());
+        let tool = EditFile::new(
+            dir.path().to_path_buf(),
+            None,
+            Default::default(),
+            Default::default(),
+        );
         let out = tool
             .call(EditArgs {
                 path: "sub/dir/x.txt".into(),

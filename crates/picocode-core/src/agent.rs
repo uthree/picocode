@@ -33,6 +33,7 @@ pub fn spawn(
     // The concrete `Agent<M>` type differs per provider, so the builder chain
     // lives in a macro and each arm spawns its own typed worker.
     let journal = crate::undo::UndoJournal::new();
+    let stamps = tools::ReadStamps::default();
     macro_rules! spawn_for {
         ($client:expr) => {{
             let client = $client;
@@ -45,6 +46,7 @@ pub fn spawn(
                     root.clone(),
                     cfg.read_max_lines.clone(),
                     cfg.read_max_line_bytes.clone(),
+                    stamps.clone(),
                 ))
                 .tool(tools::ListFiles::new(root.clone()))
                 .tool(tools::Grep::new(root.clone()))
@@ -52,6 +54,7 @@ pub fn spawn(
                     root.clone(),
                     cfg.after_edit.clone(),
                     journal.clone(),
+                    stamps.clone(),
                 ))
                 .tool(tools::Bash::new(
                     root,

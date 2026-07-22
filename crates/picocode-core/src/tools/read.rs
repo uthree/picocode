@@ -5,7 +5,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve};
+use super::{ReadStamps, ToolError, resolve};
 use crate::attachment::{Attachment, AttachmentKind, looks_like_text};
 use crate::config::NumHandle;
 
@@ -27,14 +27,22 @@ pub struct ReadFile {
     /// Output limits, shared with the `/config` dialog.
     max_lines: NumHandle,
     max_line_bytes: NumHandle,
+    /// Read timestamps shared with edit_file (stale-write detection).
+    stamps: ReadStamps,
 }
 
 impl ReadFile {
-    pub fn new(root: PathBuf, max_lines: NumHandle, max_line_bytes: NumHandle) -> Self {
+    pub fn new(
+        root: PathBuf,
+        max_lines: NumHandle,
+        max_line_bytes: NumHandle,
+        stamps: ReadStamps,
+    ) -> Self {
         Self {
             root,
             max_lines,
             max_line_bytes,
+            stamps,
         }
     }
 }
@@ -69,6 +77,8 @@ impl Tool for ReadFile {
         let bytes = tokio::fs::read(&path)
             .await
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;
+        // Stamp the read so edit_file can detect external changes after it.
+        self.stamps.record(&path);
 
         // Known media types don't go through the text pipeline.
         match Attachment::classify(&path).map(|a| a.kind) {
@@ -186,6 +196,7 @@ mod tests {
             root.to_path_buf(),
             NumHandle::new(2000),
             NumHandle::new(500),
+            Default::default(),
         )
     }
 
