@@ -28,13 +28,19 @@ OpenAI-compatible server (vLLM, etc.).
 
 ## Install
 
-Prebuilt TUI binaries for macOS (Apple Silicon / Intel) and Linux (x86_64)
-are on the [releases page](https://github.com/uthree/picocode/releases), or
-one line:
+Prebuilt TUI binaries for macOS (Apple Silicon / Intel), Linux (x86_64)
+and Windows (x86_64, experimental) are on the
+[releases page](https://github.com/uthree/picocode/releases), or one line:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/uthree/picocode/releases/latest/download/picocode-tui-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://github.com/uthree/picocode/releases/latest/download/picocode-tui-installer.ps1 | iex
 ```
 
 The GUI is currently built from source (see below).

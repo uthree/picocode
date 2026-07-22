@@ -168,6 +168,14 @@ fn default_system_prompt(cfg: &Config) -> String {
     } else {
         ""
     };
+    // Models default to unix command syntax; on Windows one line up front
+    // beats letting them discover cmd.exe by trial and error.
+    let os_rule = if cfg!(windows) {
+        "- You are on Windows: the bash tool runs cmd.exe, so use Windows commands \
+         (dir, type, …), not unix ones.\n"
+    } else {
+        ""
+    };
     format!(
         "You are picocode, a coding agent running in a terminal. \
          Your working directory is: {root}\n\
@@ -184,6 +192,7 @@ fn default_system_prompt(cfg: &Config) -> String {
          Rules:\n\
          - Use the tools instead of guessing about the project.\n\
          {web_rule}\
+         {os_rule}\
          - If the user denies a tool call, do not retry it; explain and ask instead.\n\
          - Keep responses concise. Respond in the language the user writes in.",
         root = cfg.root.display(),

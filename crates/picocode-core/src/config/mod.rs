@@ -268,6 +268,15 @@ fn load_file(path: &Path) -> anyhow::Result<Option<FileConfig>> {
     }
 }
 
+/// Install the process-wide TLS crypto provider (ring). reqwest is built
+/// without a bundled provider (rustls-no-provider — aws-lc needs CMake+NASM
+/// on Windows and blocks cross-builds), so this must run before anything
+/// opens an HTTPS connection. Called from `Config::from_args` and from the
+/// web tools' constructors; repeat calls are harmless no-ops.
+pub fn install_tls_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// The user's home directory: `$HOME`, or `%USERPROFILE%` on Windows.
 pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
@@ -428,6 +437,8 @@ impl Config {
     }
 
     pub fn from_args(args: Args) -> anyhow::Result<Self> {
+        install_tls_provider();
+
         // The project root is the nearest ancestor holding a picocode.toml,
         // so starting from a subdirectory finds the same config, sessions
         // and state; without one the current directory is the root.

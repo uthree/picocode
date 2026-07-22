@@ -4,6 +4,13 @@ Key bindings, slash commands, and the finer points of the picocode TUI.
 For setup see the [README](../README.md); for models, permissions and the
 config file see [configuration.md](configuration.md).
 
+## Windows
+
+Windows support is experimental: the `bash` tool (and the `!` escape and
+`after_edit` hook) runs `cmd.exe` instead of `sh`, and the system prompt
+tells the model so. Development and testing happen primarily on
+macOS/Linux — please report anything broken.
+
 ## Headless mode
 
 `picocode -p "<prompt>"` runs one prompt without the TUI: the reply

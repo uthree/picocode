@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use super::{ToolError, truncate_output};
+use super::{ToolError, shell_command, truncate_output};
 use crate::config::NumHandle;
 use crate::event::AgentEvent;
 
@@ -193,22 +193,6 @@ fn format_output(stdout: &[u8], stderr: &[u8], status: std::process::ExitStatus)
         ));
     }
     text
-}
-
-/// The platform shell: `sh -c` on unix, `cmd /C` on Windows (raw_arg keeps
-/// cmd.exe's own quoting rules intact).
-#[cfg(not(windows))]
-fn shell_command(command: &str) -> tokio::process::Command {
-    let mut c = tokio::process::Command::new("sh");
-    c.arg("-c").arg(command);
-    c
-}
-
-#[cfg(windows)]
-fn shell_command(command: &str) -> tokio::process::Command {
-    let mut c = tokio::process::Command::new("cmd");
-    c.raw_arg("/C").raw_arg(command);
-    c
 }
 
 #[cfg(test)]

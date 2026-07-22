@@ -5,7 +5,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve, truncate_output};
+use super::{ToolError, resolve, shell_command, truncate_output};
 
 /// Hard cap on the configured `after_edit` command.
 const AFTER_EDIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -75,9 +75,7 @@ impl EditFile {
 /// edit_file output. Success stays terse; failures carry the (truncated)
 /// output so the model can act on it.
 async fn run_after_edit(root: &Path, command: &str) -> String {
-    let run = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    let run = shell_command(command)
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .output();

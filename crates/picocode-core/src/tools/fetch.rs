@@ -60,6 +60,7 @@ pub struct WebFetch {
 
 impl WebFetch {
     pub fn new() -> Self {
+        crate::config::install_tls_provider();
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .user_agent(concat!("picocode/", env!("CARGO_PKG_VERSION")))

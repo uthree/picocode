@@ -33,6 +33,7 @@ pub struct WebSearch {
 
 impl WebSearch {
     pub fn new(cfg: SearchHandle) -> Self {
+        crate::config::install_tls_provider();
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
             .user_agent(concat!("picocode/", env!("CARGO_PKG_VERSION")))

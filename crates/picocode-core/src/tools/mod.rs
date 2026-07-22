@@ -126,6 +126,23 @@ pub(crate) fn resolve(root: &Path, path: &str) -> Result<PathBuf, ToolError> {
     }
 }
 
+/// The platform shell: `sh -c` on unix, `cmd /C` on Windows (raw_arg keeps
+/// cmd.exe's own quoting rules intact). Used by the bash tool, the `!`
+/// escape, and the after_edit hook.
+#[cfg(not(windows))]
+pub(crate) fn shell_command(command: &str) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("sh");
+    c.arg("-c").arg(command);
+    c
+}
+
+#[cfg(windows)]
+pub(crate) fn shell_command(command: &str) -> tokio::process::Command {
+    let mut c = tokio::process::Command::new("cmd");
+    c.raw_arg("/C").raw_arg(command);
+    c
+}
+
 /// Truncate long tool output keeping the head and tail.
 pub(crate) fn truncate_output(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
