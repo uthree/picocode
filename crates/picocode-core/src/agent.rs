@@ -345,115 +345,193 @@ async fn run_once<M>(
         // Never empty: the prompt text is always the first item.
         content: rig::OneOrMany::many(content).expect("user content starts with the prompt text"),
     };
-    let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
-    // rig's multi-turn driver needs some bound, but picocode doesn't cap
-    // turns itself: the context window (with auto-compact) is the real
-    // limit, so pass an effectively-unlimited value.
-    let mut stream = agent
-        .stream_chat(user_msg.clone(), history.clone())
-        .max_turns(usize::MAX)
-        .add_hook(hook)
-        .await;
-
     let mut got_final = false;
-    let mut reasoning_delta_seen = false;
     let mut cancelled = false;
+    let mut attempt = 0usize;
     let _ = cancel.borrow_and_update(); // discard stale signals
 
-    loop {
-        // Dropping the stream on cancel also aborts the in-flight request and
-        // any tool execution it is driving.
-        let item = tokio::select! {
-            biased;
-            _ = cancel.changed() => {
-                cancelled = true;
-                break;
+    'attempts: loop {
+        let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
+        // rig's multi-turn driver needs some bound, but picocode doesn't cap
+        // turns itself: the context window (with auto-compact) is the real
+        // limit, so pass an effectively-unlimited value.
+        let mut stream = agent
+            .stream_chat(user_msg.clone(), history.clone())
+            .max_turns(usize::MAX)
+            .add_hook(hook)
+            .await;
+
+        let mut reasoning_delta_seen = false;
+        // Whether anything arrived this attempt. Retrying is only safe while
+        // nothing has: once text streamed or a tool ran, a restart would
+        // duplicate output (and possibly side effects), so mid-turn errors
+        // are reported instead of retried.
+        let mut progress = false;
+        let mut transient: Option<String> = None;
+
+        loop {
+            // Dropping the stream on cancel also aborts the in-flight request and
+            // any tool execution it is driving.
+            let item = tokio::select! {
+                biased;
+                _ = cancel.changed() => {
+                    cancelled = true;
+                    break;
+                }
+                item = stream.next() => match item {
+                    Some(item) => item,
+                    None => break,
+                },
+            };
+            if item.is_ok() {
+                progress = true;
             }
-            item = stream.next() => match item {
-                Some(item) => item,
-                None => break,
-            },
-        };
-        match item {
-            Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
-                StreamedAssistantContent::Text(t) => {
-                    let _ = event_tx.send(AgentEvent::TextDelta(t.text)).await;
-                }
-                StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
-                    reasoning_delta_seen = true;
-                    let _ = event_tx.send(AgentEvent::ReasoningDelta(reasoning)).await;
-                }
-                StreamedAssistantContent::Reasoning(reasoning) => {
-                    // Providers that stream deltas also emit the aggregated
-                    // block; only surface it when no deltas were streamed.
-                    if !reasoning_delta_seen {
-                        let text = reasoning_text(&reasoning);
-                        if !text.is_empty() {
-                            let _ = event_tx.send(AgentEvent::ReasoningDelta(text)).await;
+            match item {
+                Ok(MultiTurnStreamItem::StreamAssistantItem(content)) => match content {
+                    StreamedAssistantContent::Text(t) => {
+                        let _ = event_tx.send(AgentEvent::TextDelta(t.text)).await;
+                    }
+                    StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                        reasoning_delta_seen = true;
+                        let _ = event_tx.send(AgentEvent::ReasoningDelta(reasoning)).await;
+                    }
+                    StreamedAssistantContent::Reasoning(reasoning) => {
+                        // Providers that stream deltas also emit the aggregated
+                        // block; only surface it when no deltas were streamed.
+                        if !reasoning_delta_seen {
+                            let text = reasoning_text(&reasoning);
+                            if !text.is_empty() {
+                                let _ = event_tx.send(AgentEvent::ReasoningDelta(text)).await;
+                            }
                         }
                     }
+                    StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                        let name = tool_call.function.name.clone();
+                        let args = tool_call.function.arguments.to_string();
+                        let _ = event_tx.send(AgentEvent::ToolCall { name, args }).await;
+                    }
+                    _ => {}
+                },
+                Ok(MultiTurnStreamItem::StreamUserItem(user_content)) =>
+                {
+                    #[allow(irrefutable_let_patterns)]
+                    if let StreamedUserContent::ToolResult { tool_result, .. } = user_content {
+                        let output = tool_result
+                            .content
+                            .iter()
+                            .filter_map(|c| match c {
+                                ToolResultContent::Text(t) => Some(t.text.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = event_tx.send(AgentEvent::ToolResult { output }).await;
+                    }
                 }
-                StreamedAssistantContent::ToolCall { tool_call, .. } => {
-                    let name = tool_call.function.name.clone();
-                    let args = tool_call.function.arguments.to_string();
-                    let _ = event_tx.send(AgentEvent::ToolCall { name, args }).await;
-                }
-                _ => {}
-            },
-            Ok(MultiTurnStreamItem::StreamUserItem(user_content)) =>
-            {
-                #[allow(irrefutable_let_patterns)]
-                if let StreamedUserContent::ToolResult { tool_result, .. } = user_content {
-                    let output = tool_result
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            ToolResultContent::Text(t) => Some(t.text.clone()),
-                            _ => None,
+                Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                    let _ = event_tx
+                        .send(AgentEvent::Usage {
+                            input: call.usage.input_tokens,
+                            output: call.usage.output_tokens,
                         })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let _ = event_tx.send(AgentEvent::ToolResult { output }).await;
+                        .await;
                 }
-            }
-            Ok(MultiTurnStreamItem::CompletionCall(call)) => {
-                let _ = event_tx
-                    .send(AgentEvent::Usage {
-                        input: call.usage.input_tokens,
-                        output: call.usage.output_tokens,
-                    })
-                    .await;
-            }
-            Ok(MultiTurnStreamItem::FinalResponse(response)) => {
-                got_final = true;
-                match response.messages {
-                    // `messages` holds this run's new messages (prompt +
-                    // assistant turns + tool results), excluding prior history.
-                    Some(new_messages) => history.extend(new_messages),
-                    None => {
-                        history.push(user_msg.clone());
-                        if !response.output.is_empty() {
-                            history.push(Message::assistant(response.output.clone()));
+                Ok(MultiTurnStreamItem::FinalResponse(response)) => {
+                    got_final = true;
+                    match response.messages {
+                        // `messages` holds this run's new messages (prompt +
+                        // assistant turns + tool results), excluding prior history.
+                        Some(new_messages) => history.extend(new_messages),
+                        None => {
+                            history.push(user_msg.clone());
+                            if !response.output.is_empty() {
+                                history.push(Message::assistant(response.output.clone()));
+                            }
                         }
                     }
                 }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                let _ = event_tx.send(AgentEvent::Error(e.to_string())).await;
+                Ok(_) => {}
+                Err(e) => {
+                    let msg = e.to_string();
+                    if !progress && attempt < RETRY_DELAYS_SECS.len() && is_transient(&msg) {
+                        transient = Some(msg);
+                        break;
+                    }
+                    let _ = event_tx.send(AgentEvent::Error(msg)).await;
+                }
             }
         }
+
+        if cancelled {
+            drop(stream);
+            let _ = event_tx.send(AgentEvent::Cancelled).await;
+            break 'attempts;
+        }
+        // Transient failure before anything happened: back off and redo the
+        // whole request (nothing to duplicate yet).
+        if let Some(msg) = transient {
+            drop(stream);
+            let delay = std::time::Duration::from_secs(RETRY_DELAYS_SECS[attempt]);
+            attempt += 1;
+            let _ = event_tx
+                .send(AgentEvent::Error(format!(
+                    "provider error: {msg} — retrying in {}s (attempt {attempt}/{})",
+                    delay.as_secs(),
+                    RETRY_DELAYS_SECS.len(),
+                )))
+                .await;
+            tokio::select! {
+                biased;
+                _ = cancel.changed() => {
+                    let _ = event_tx.send(AgentEvent::Cancelled).await;
+                    break 'attempts;
+                }
+                _ = tokio::time::sleep(delay) => {}
+            }
+            continue 'attempts;
+        }
+        break;
     }
 
-    if cancelled {
-        drop(stream);
-        let _ = event_tx.send(AgentEvent::Cancelled).await;
-    }
     if !got_final {
         // The run was cancelled or errored out; keep the user's message
         // (attachments included) so the next turn still has it as context.
         history.push(user_msg);
     }
+}
+
+/// Backoff schedule for transient provider failures at the start of a turn.
+const RETRY_DELAYS_SECS: [u64; 3] = [1, 2, 4];
+
+/// Whether a provider error is worth retrying: connection trouble, timeouts,
+/// rate limits and 5xx-style server errors (matched textually — rig flattens
+/// provider errors to strings).
+fn is_transient(error: &str) -> bool {
+    let e = error.to_ascii_lowercase();
+    [
+        "connection",
+        "connect error",
+        // reqwest's opaque transport failure (it hides the io cause).
+        "error sending request",
+        "timed out",
+        "timeout",
+        "reset",
+        "refused",
+        "broken pipe",
+        "unexpected eof",
+        "dns error",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "529",
+        "overloaded",
+        "unavailable",
+        "rate limit",
+    ]
+    .iter()
+    .any(|needle| e.contains(needle))
 }
 
 fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
@@ -505,6 +583,23 @@ mod tests {
             config_files: Vec::new(),
             context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         }
+    }
+
+    #[test]
+    fn transient_errors_are_recognized() {
+        assert!(is_transient(
+            "error trying to connect: tcp connect error: Connection refused (os error 61)"
+        ));
+        assert!(is_transient(
+            "HTTP status server error (503 Service Unavailable)"
+        ));
+        assert!(is_transient("request timed out"));
+        assert!(is_transient(
+            "CompletionError: HttpError: Http client error: error sending request for url (http://x/api/chat)"
+        ));
+        assert!(is_transient("429 Too Many Requests"));
+        assert!(!is_transient("invalid api key"));
+        assert!(!is_transient("model `nope` not found"));
     }
 
     #[test]
