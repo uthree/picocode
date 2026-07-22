@@ -35,6 +35,7 @@ crates/
     app.rs       — application state and event loop
     ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
     input.rs     — input thread, paste detection, input-box cursor math
+    clipboard.rs — Ctrl+V system-clipboard reading (files/images → attachments)
     history.rs   — shell-style ↑/↓ input history
     highlight.rs — syntax highlighting (syntect) and line diffs (similar)
     markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)

@@ -24,7 +24,7 @@ OpenAI-compatible server (vLLM, etc.).
   **pluggable web search** (DuckDuckGo / SearXNG / Brave)
 - **File attachments** — send images (and audio / PDF on providers that
   support them) with a prompt: drag & drop or 📎 in the GUI, `/attach`
-  in the TUI
+  or Ctrl+V (clipboard files and screenshots) in the TUI
 
 ## Install
 

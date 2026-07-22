@@ -195,6 +195,8 @@ pub struct App {
     pub delta_est: u64,
     /// Files staged with `/attach`, sent with the next prompt.
     pub attachments: Vec<picocode_core::attachment::Attachment>,
+    /// Counter naming the temp PNGs saved from clipboard image pastes.
+    clip_count: usize,
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
@@ -274,6 +276,7 @@ impl App {
             total_out: 0,
             delta_est: 0,
             attachments: Vec::new(),
+            clip_count: 0,
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -548,6 +551,13 @@ impl App {
             return;
         }
 
+        // Ctrl+V: paste from the system clipboard — copied files and
+        // images stage as attachments, text inserts like a terminal paste.
+        if ctrl && key.code == KeyCode::Char('v') {
+            self.paste_clipboard();
+            return;
+        }
+
         match key.code {
             // Alt+Enter (and Shift+Enter on terminals that report it) inserts
             // a newline; Ctrl+J below covers legacy raw-mode terminals.
@@ -806,28 +816,33 @@ impl App {
     /// the current provider can't take are refused with an explanation, so
     /// nothing is silently dropped later in the provider conversion.
     fn attach(&mut self, arg: &str) {
-        use picocode_core::attachment::Attachment;
         if arg == "clear" {
             self.attachments.clear();
             self.push(EntryKind::Notice, "Attachments cleared".to_string());
             return;
         }
-        let path = self.cfg.root.join(arg);
+        self.stage_file(&self.cfg.root.join(arg), arg);
+    }
+
+    /// Stage one file as an attachment, shared by `/attach` and clipboard
+    /// paste; `display` is how the file is referred to in notices.
+    fn stage_file(&mut self, path: &std::path::Path, display: &str) {
+        use picocode_core::attachment::Attachment;
         if !path.is_file() {
-            self.push(EntryKind::Error, format!("Not a file: {arg}"));
+            self.push(EntryKind::Error, format!("Not a file: {display}"));
             return;
         }
-        match Attachment::detect(&path) {
+        match Attachment::detect(path) {
             Some(att) if att.supported_by(self.cfg.provider) => {
                 if self.attachments.contains(&att) {
-                    self.push(EntryKind::Notice, format!("Already attached: {arg}"));
+                    self.push(EntryKind::Notice, format!("Already attached: {display}"));
                     return;
                 }
                 self.push(
                     EntryKind::Notice,
                     format!(
                         "📎 Attached {} ({} staged)",
-                        arg,
+                        display,
                         self.attachments.len() + 1
                     ),
                 );
@@ -2075,6 +2090,38 @@ impl App {
     fn close_blocks(&mut self) {
         self.assistant_open = false;
         self.reasoning_open = false;
+    }
+
+    /// Ctrl+V: read the system clipboard. Copied files (Finder/Explorer)
+    /// and raw image data (screenshots — saved to a temp PNG first) go
+    /// through the `/attach` staging; plain text is a normal paste. The
+    /// terminal's own paste keeps working independently of this.
+    fn paste_clipboard(&mut self) {
+        let dir = std::env::temp_dir().join(format!("picocode-{}", std::process::id()));
+        self.clip_count += 1;
+        match crate::clipboard::read(&dir, self.clip_count) {
+            Ok(Some(crate::clipboard::Pasted::Files(paths))) => {
+                for path in paths {
+                    self.stage_file(&path, &path.display().to_string());
+                }
+            }
+            Ok(Some(crate::clipboard::Pasted::Image(path))) => {
+                self.stage_file(&path, "clipboard image");
+            }
+            Ok(Some(crate::clipboard::Pasted::Text(text))) => {
+                let text = text
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .replace('\t', "    ");
+                self.insert_paste(text);
+                self.reset_completion();
+            }
+            Ok(None) => self.push(
+                EntryKind::Notice,
+                "Clipboard is empty — copy a file, an image or text first".to_string(),
+            ),
+            Err(e) => self.push(EntryKind::Error, format!("Clipboard read failed: {e}")),
+        }
     }
 
     /// Insert pasted text at the cursor: long pastes collapse into a
