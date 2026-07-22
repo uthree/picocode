@@ -14,6 +14,10 @@ picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b
                                            # OpenAI-compatible server (vLLM etc.)
 ```
 
+On the Anthropic provider, requests use the API's automatic prompt caching
+(the repeated prefix an agent loop resends — system prompt, tools, history —
+is cached server-side, cutting cost and latency; no configuration needed).
+
 `--provider` / `--model` select an ad-hoc model and take precedence over the
 config file's `[[models]]` entries and the saved state. `--base-url` is not a
 selection — it only overrides the endpoint of whatever model is active. Base

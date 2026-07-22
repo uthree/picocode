@@ -31,16 +31,17 @@ pub fn spawn(
     let cfg = cfg.clone();
 
     // The concrete `Agent<M>` type differs per provider, so the builder chain
-    // lives in a macro and each arm spawns its own typed worker.
+    // lives in a macro and each arm spawns its own typed worker. The macro
+    // takes a completion-model expression (evaluated once for the agent and
+    // once for the compactor) so an arm can pre-configure the model —
+    // Anthropic enables prompt caching this way.
     let journal = crate::undo::UndoJournal::new();
     let stamps = tools::ReadStamps::default();
     macro_rules! spawn_for {
-        ($client:expr) => {{
-            let client = $client;
+        ($model:expr) => {{
             let root = cfg.root.clone();
             let enabled = |name: &str| !cfg.disable_tools.iter().any(|t| t == name);
-            let mut builder = client
-                .agent(&cfg.model)
+            let mut builder = rig::agent::AgentBuilder::new($model)
                 .preamble(&system_prompt(&cfg))
                 .tool(tools::ReadFile::new(
                     root.clone(),
@@ -71,8 +72,7 @@ pub fn spawn(
             let agent = builder.max_tokens(8192).build();
             // A second, tool-less agent used by /compact: it only ever needs
             // to read the history and write a summary.
-            let compactor = client
-                .agent(&cfg.model)
+            let compactor = rig::agent::AgentBuilder::new($model)
                 .preamble(COMPACT_PREAMBLE)
                 .max_tokens(8192)
                 .build();
@@ -85,38 +85,50 @@ pub fn spawn(
     // With a configured base_url the client is built directly (bypassing the
     // *_BASE_URL env vars); otherwise `from_env` handles env-based setup.
     match cfg.provider {
-        Provider::Ollama => spawn_for!(match cfg.base_url.clone() {
-            Some(url) => {
-                let key = std::env::var("OLLAMA_API_KEY").unwrap_or_default();
-                ollama::Client::builder()
-                    .api_key(ollama::OllamaApiKey::from(key.as_str()))
-                    .base_url(&url)
-                    .build()?
-            }
-            None => ollama::Client::from_env()?,
-        }),
-        Provider::Anthropic => spawn_for!(match cfg.base_url.clone() {
-            Some(url) => {
-                let key = std::env::var("ANTHROPIC_API_KEY")
-                    .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY is not set"))?;
-                anthropic::Client::builder()
-                    .api_key(key)
-                    .base_url(&url)
-                    .build()?
-            }
-            None => anthropic::Client::from_env()?,
-        }),
-        Provider::Openai => spawn_for!(match cfg.base_url.clone() {
-            Some(url) => {
-                // Local OpenAI-compatible servers usually don't check the key.
-                let key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into());
-                openai::Client::builder()
-                    .api_key(&key)
-                    .base_url(&url)
-                    .build()?
-            }
-            None => openai::Client::from_env()?,
-        }),
+        Provider::Ollama => {
+            let client = match cfg.base_url.clone() {
+                Some(url) => {
+                    let key = std::env::var("OLLAMA_API_KEY").unwrap_or_default();
+                    ollama::Client::builder()
+                        .api_key(ollama::OllamaApiKey::from(key.as_str()))
+                        .base_url(&url)
+                        .build()?
+                }
+                None => ollama::Client::from_env()?,
+            };
+            spawn_for!(client.completion_model(&cfg.model));
+        }
+        Provider::Anthropic => {
+            let client = match cfg.base_url.clone() {
+                Some(url) => {
+                    let key = std::env::var("ANTHROPIC_API_KEY")
+                        .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY is not set"))?;
+                    anthropic::Client::builder()
+                        .api_key(key)
+                        .base_url(&url)
+                        .build()?
+                }
+                None => anthropic::Client::from_env()?,
+            };
+            // Automatic prompt caching: the API places and advances the
+            // cache breakpoint itself, cutting cost/latency on the long
+            // repeated prefix an agent loop resends every request.
+            spawn_for!(client.completion_model(&cfg.model).with_automatic_caching());
+        }
+        Provider::Openai => {
+            let client = match cfg.base_url.clone() {
+                Some(url) => {
+                    // Local OpenAI-compatible servers usually don't check the key.
+                    let key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into());
+                    openai::Client::builder()
+                        .api_key(&key)
+                        .base_url(&url)
+                        .build()?
+                }
+                None => openai::Client::from_env()?,
+            };
+            spawn_for!(client.completion_model(&cfg.model));
+        }
     }
     Ok(cmd_tx)
 }
