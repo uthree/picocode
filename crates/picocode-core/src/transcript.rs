@@ -21,6 +21,10 @@ pub enum EntryKind {
     Warning,
     /// The conversation summary produced by /compact.
     Summary,
+    /// The colored context-usage breakdown pushed by /status: the text is
+    /// an encoded [`crate::context::Breakdown`], rendered as a segmented
+    /// bar + legend by both front ends.
+    Context,
     Error,
     /// Rendered verbatim without wrapping (startup logo).
     Logo,

@@ -146,16 +146,24 @@ pub fn spawn(
 }
 
 fn system_prompt(cfg: &Config) -> String {
-    let mut prompt = match &cfg.system_prompt {
+    let (base, instructions) = system_prompt_parts(cfg);
+    base + &instructions
+}
+
+/// The system prompt split as (base, appended instructions block) — the
+/// context breakdown reports the two separately.
+pub(crate) fn system_prompt_parts(cfg: &Config) -> (String, String) {
+    let base = match &cfg.system_prompt {
         Some(custom) => custom.replace("{root}", &cfg.root.display().to_string()),
         None => default_system_prompt(cfg),
     };
+    let mut instructions = String::new();
     for (name, content) in &cfg.instructions {
-        prompt.push_str(&format!(
+        instructions.push_str(&format!(
             "\n\nProject instructions from {name} (follow them):\n{content}"
         ));
     }
-    prompt
+    (base, instructions)
 }
 
 fn default_system_prompt(cfg: &Config) -> String {
@@ -331,10 +339,22 @@ async fn worker<M>(
                             .await;
                     }
                 }
+                let _ = event_tx
+                    .send(AgentEvent::ContextBreakdown(crate::context::breakdown(
+                        &cfg, &history, last_ctx,
+                    )))
+                    .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
             WorkerCmd::Compact => {
                 compact(&compactor, &mut history, &event_tx, &mut cancel_rx).await;
+                // The provider hasn't measured the compacted history yet, so
+                // report estimates only (reported = 0).
+                let _ = event_tx
+                    .send(AgentEvent::ContextBreakdown(crate::context::breakdown(
+                        &cfg, &history, 0,
+                    )))
+                    .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
         }

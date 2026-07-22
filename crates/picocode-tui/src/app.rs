@@ -197,6 +197,8 @@ pub struct App {
     pub attachments: Vec<picocode_core::attachment::Attachment>,
     /// Counter naming the temp PNGs saved from clipboard image pastes.
     clip_count: usize,
+    /// Latest context composition reported by the worker, shown by /status.
+    context_info: Option<picocode_core::context::Breakdown>,
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
@@ -277,6 +279,7 @@ impl App {
             delta_est: 0,
             attachments: Vec::new(),
             clip_count: 0,
+            context_info: None,
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -698,6 +701,7 @@ impl App {
                 Command::Clear => {
                     self.entries.clear();
                     self.auto_compact_tried = false;
+                    self.context_info = None;
                     self.ctx_tokens = 0;
                     self.turn_out = 0;
                     self.total_out = 0;
@@ -1693,6 +1697,13 @@ impl App {
             },
         );
         self.push(EntryKind::Notice, text);
+        // The colored context-composition block. Before the first turn no
+        // worker report exists yet — estimate from the config alone.
+        let breakdown = self
+            .context_info
+            .clone()
+            .unwrap_or_else(|| picocode_core::context::breakdown(&self.cfg, &[], 0));
+        self.push(EntryKind::Context, breakdown.encode());
     }
 
     /// After a turn completes with nothing else running: compact the
@@ -1889,6 +1900,9 @@ impl App {
                 self.total_out += output;
                 self.delta_est = 0;
             }
+            AgentEvent::ContextBreakdown(breakdown) => {
+                self.context_info = Some(breakdown);
+            }
             AgentEvent::ModelList { label, result } => match result {
                 Ok(mut names) => {
                     names.sort();
@@ -2035,6 +2049,10 @@ impl App {
     // ----- helpers ---------------------------------------------------------
 
     fn push(&mut self, kind: EntryKind, text: String) {
+        // A pushed entry ends any streaming block: otherwise deltas arriving
+        // mid-stream (e.g. /status typed while the model generates) would be
+        // appended to this entry instead of a fresh Assistant/Reasoning one.
+        self.close_blocks();
         self.entries.push(Entry {
             kind,
             text,

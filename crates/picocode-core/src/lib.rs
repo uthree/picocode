@@ -13,6 +13,7 @@ pub mod attachment;
 pub mod clipboard;
 pub mod command;
 pub mod config;
+pub mod context;
 pub mod event;
 pub mod git;
 pub mod history;

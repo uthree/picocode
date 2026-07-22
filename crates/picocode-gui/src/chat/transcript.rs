@@ -7,6 +7,7 @@ use gpui::{AnyElement, App, Context, MouseButton, MouseDownEvent, SharedString, 
 use gpui_component::clipboard::Clipboard;
 use gpui_component::text::TextView;
 use gpui_component::{ActiveTheme, StyledExt};
+use rust_i18n::t;
 
 use picocode_core::transcript::{Entry, EntryKind};
 
@@ -324,6 +325,17 @@ impl ChatView {
                 .text_color(muted)
                 .child(entry.text.clone())
                 .into_any_element(),
+            EntryKind::Context => {
+                match picocode_core::context::Breakdown::decode(&entry.text) {
+                    Some(breakdown) => context_block(&breakdown, cx),
+                    // A breakdown from a newer version we can't parse.
+                    None => div()
+                        .text_sm()
+                        .text_color(muted)
+                        .child(entry.text.clone())
+                        .into_any_element(),
+                }
+            }
             EntryKind::Error => div()
                 .h_flex()
                 .gap_2()
@@ -429,6 +441,122 @@ pub(super) fn diff_element(
         out = out.child(el);
     }
     out.into_any_element()
+}
+
+/// Color for one context-breakdown segment (fixed palette that reads on
+/// both themes; hues match the TUI's terminal colors).
+fn context_color(kind: picocode_core::context::ContextKind) -> gpui::Rgba {
+    use picocode_core::context::ContextKind::*;
+    gpui::rgb(match kind {
+        System => 0x4c8df6,
+        Instructions => 0x27b0be,
+        User => 0x3fb950,
+        Assistant => 0xb185f2,
+        Tools => 0xd4a72c,
+        Media => 0xf47067,
+        Overhead => 0x8b949e,
+    })
+}
+
+/// The /status context block: a segmented colored bar over the window,
+/// then one legend row per non-empty segment.
+fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let window = breakdown.window.max(1);
+    let pct = |v: u64| (v as f64 / window as f64 * 100.0).round() as u64;
+    let mut title = t!(
+        "ctx_title",
+        used = breakdown.used(),
+        window = breakdown.window,
+        pct = pct(breakdown.used())
+    )
+    .to_string();
+    if breakdown.reported == 0 {
+        title.push_str(&t!("ctx_estimated"));
+    }
+
+    let mut bar = div()
+        .h_flex()
+        .h_2()
+        .w_full()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(theme.muted);
+    for (kind, tokens) in &breakdown.segments {
+        if *tokens == 0 {
+            continue;
+        }
+        bar = bar.child(
+            div()
+                .h_full()
+                .min_w(px(3.))
+                .w(gpui::relative((*tokens as f64 / window as f64) as f32))
+                .bg(context_color(*kind)),
+        );
+    }
+
+    let mut legend = div().v_flex().gap_0p5().pt_1();
+    for (kind, tokens) in &breakdown.segments {
+        if *tokens == 0 {
+            continue;
+        }
+        legend = legend.child(
+            div()
+                .h_flex()
+                .gap_2()
+                .items_center()
+                .text_sm()
+                .child(
+                    div()
+                        .size_2()
+                        .rounded_full()
+                        .flex_none()
+                        .bg(context_color(*kind)),
+                )
+                .child({
+                    let key = format!("ctx_{}", kind.key());
+                    t!(&key).to_string()
+                })
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{tokens} ({}%)", pct(*tokens))),
+                ),
+        );
+    }
+    legend = legend.child(
+        div()
+            .h_flex()
+            .gap_2()
+            .items_center()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(
+                div()
+                    .size_2()
+                    .rounded_full()
+                    .flex_none()
+                    .border_1()
+                    .border_color(theme.muted_foreground),
+            )
+            .child(t!("ctx_free").to_string())
+            .child(div().flex_1())
+            .child(format!("{} ({}%)", breakdown.free(), pct(breakdown.free()))),
+    );
+
+    div()
+        .v_flex()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.border)
+        .child(div().text_sm().font_semibold().child(title))
+        .child(bar)
+        .child(legend)
+        .into_any_element()
 }
 
 /// Escape markdown so user-typed text renders literally in a `TextView`

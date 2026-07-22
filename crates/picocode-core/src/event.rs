@@ -33,6 +33,9 @@ pub enum AgentEvent {
     },
     /// Token usage for one completion request within the run.
     Usage { input: u64, output: u64 },
+    /// Estimated context composition, refreshed at the end of each turn
+    /// (and after /compact). Backs the colored `/status` detail block.
+    ContextBreakdown(crate::context::Breakdown),
     /// Result of asking the provider which models it serves. Updates the
     /// `/model` switch candidates and the dialog when open; `label` names
     /// the queried endpoint (for error reporting).

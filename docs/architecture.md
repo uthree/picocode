@@ -19,6 +19,8 @@ crates/
                    checks
     clipboard.rs — system-clipboard reading for paste (files/images →
                    attachments), shared by both front ends
+    context.rs   — estimated context-window composition (per-kind token
+                   breakdown) backing the colored /status detail
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
     history.rs   — context savings: old-tool-output pruning and the
                    keep-recent-turns boundary used by compaction

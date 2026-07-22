@@ -254,6 +254,20 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                     Line::from(Span::styled(format!("  {s}"), Style::new().fg(Color::Gray)))
                 });
             }
+            EntryKind::Context => {
+                match picocode_core::context::Breakdown::decode(&entry.text) {
+                    Some(breakdown) => lines.extend(context_lines(&breakdown, width)),
+                    // A breakdown from a newer version we can't parse.
+                    None => {
+                        push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |_, s| {
+                            Line::from(Span::styled(
+                                format!("  {s}"),
+                                Style::new().fg(Color::DarkGray),
+                            ))
+                        })
+                    }
+                }
+            }
             EntryKind::Error => {
                 push_wrapped(&mut lines, &entry.text, width.saturating_sub(2), |i, s| {
                     let prefix = if i == 0 { "✗ " } else { "  " };
@@ -276,6 +290,101 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
             }
         }
     }
+    lines
+}
+
+/// Color for one context-breakdown segment.
+fn context_color(kind: picocode_core::context::ContextKind) -> Color {
+    use picocode_core::context::ContextKind::*;
+    match kind {
+        System => Color::Blue,
+        Instructions => Color::Cyan,
+        User => Color::Green,
+        Assistant => Color::Magenta,
+        Tools => Color::Yellow,
+        Media => Color::LightRed,
+        Overhead => Color::DarkGray,
+    }
+}
+
+/// The /status context block: a segmented colored bar over the window,
+/// then one legend line per non-empty segment.
+fn context_lines(
+    breakdown: &picocode_core::context::Breakdown,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let window = breakdown.window.max(1);
+    let pct = |v: u64| (v as f64 / window as f64 * 100.0).round() as u64;
+    let mut lines = vec![
+        Line::default(),
+        Line::from(Span::styled(
+            format!(
+                "  context breakdown — {} of {} tokens ({}%){}",
+                breakdown.used(),
+                breakdown.window,
+                pct(breakdown.used()),
+                if breakdown.reported == 0 {
+                    " — estimated"
+                } else {
+                    ""
+                },
+            ),
+            Style::new().bold(),
+        )),
+    ];
+
+    // The bar: segments scaled to the window; every non-empty segment gets
+    // at least one cell so tiny ones stay visible.
+    let bar_width = width.saturating_sub(4).min(60).max(10);
+    let mut spans = vec![Span::raw("  ")];
+    let mut cells_used = 0usize;
+    for (kind, tokens) in &breakdown.segments {
+        if *tokens == 0 {
+            continue;
+        }
+        let cells = ((*tokens as f64 / window as f64 * bar_width as f64).round() as usize)
+            .max(1)
+            .min(bar_width - cells_used.min(bar_width));
+        if cells == 0 {
+            continue;
+        }
+        cells_used += cells;
+        spans.push(Span::styled(
+            "█".repeat(cells),
+            Style::new().fg(context_color(*kind)),
+        ));
+    }
+    if cells_used < bar_width {
+        spans.push(Span::styled(
+            "░".repeat(bar_width - cells_used),
+            Style::new().fg(Color::DarkGray),
+        ));
+    }
+    lines.push(Line::from(spans));
+
+    // Legend: one colored line per non-empty segment, plus free space.
+    for (kind, tokens) in &breakdown.segments {
+        if *tokens == 0 {
+            continue;
+        }
+        lines.push(Line::from(vec![
+            Span::styled("  ■ ", Style::new().fg(context_color(*kind))),
+            Span::raw(format!("{:<24}", kind.label())),
+            Span::raw(format!("{:>8} tokens ({}%)", tokens, pct(*tokens))),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  □ ", Style::new().fg(Color::DarkGray)),
+        Span::styled(format!("{:<24}", "free"), Style::new().fg(Color::DarkGray)),
+        Span::styled(
+            format!(
+                "{:>8} tokens ({}%)",
+                breakdown.free(),
+                pct(breakdown.free())
+            ),
+            Style::new().fg(Color::DarkGray),
+        ),
+    ]));
     lines
 }
 

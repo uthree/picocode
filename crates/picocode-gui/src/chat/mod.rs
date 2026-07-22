@@ -164,6 +164,8 @@ pub struct ChatView {
     pending_attachments: Vec<Attachment>,
     /// Counter naming the temp PNGs saved from clipboard image pastes.
     clip_count: usize,
+    /// Latest context composition reported by the worker, shown by /status.
+    context_info: Option<picocode_core::context::Breakdown>,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
     /// Image opened full-size from a transcript thumbnail (click closes).
@@ -287,6 +289,7 @@ impl ChatView {
             queued: Vec::new(),
             pending_attachments: Vec::new(),
             clip_count: 0,
+            context_info: None,
             ctx_menu: None,
             image_preview: None,
             // The overdraw pre-measures entries near the viewport so
@@ -404,6 +407,9 @@ impl ChatView {
                 // Real usage supersedes the streaming estimate; the next
                 // completion in this run starts estimating from zero again.
                 self.est_out = 0;
+            }
+            AgentEvent::ContextBreakdown(breakdown) => {
+                self.context_info = Some(breakdown);
             }
             AgentEvent::ModelList { label, result } => match result {
                 Ok(mut names) => {
@@ -714,6 +720,13 @@ impl ChatView {
             },
         );
         self.push(EntryKind::Notice, text);
+        // The colored context-composition block. Before the first turn no
+        // worker report exists yet — estimate from the config alone.
+        let breakdown = self
+            .context_info
+            .clone()
+            .unwrap_or_else(|| picocode_core::context::breakdown(&self.cfg, &[], 0));
+        self.push(EntryKind::Context, breakdown.encode());
     }
 
     /// `/permissions`: show what the current mode and config rules do.
@@ -1043,6 +1056,7 @@ impl ChatView {
                     self.entries.clear();
                     self.queued.clear();
                     self.pending_attachments.clear();
+                    self.context_info = None;
                     self.tokens_in = 0;
                     self.tokens_out = 0;
                     self.est_out = 0;

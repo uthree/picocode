@@ -90,7 +90,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),
-  `/status`, `/permissions`, `/quit`.
+  `/status` (with a color-coded context breakdown — a segmented bar plus
+  legend showing how much of the window the system prompt, instructions,
+  messages, tool activity and attachments take), `/permissions`, `/quit`.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
 - **Theme**: follows the system light/dark appearance live by default; the
