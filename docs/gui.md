@@ -49,7 +49,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   and persisted settings carry over.
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
-  slash-command completion popup — Tab fills and cycles, click fills.
+  slash-command completion popup — Tab fills and cycles, click fills —
+  which also completes arguments: `/model` offers model names and
+  `/resume` session ids.
   A leading `!` runs the rest as a shell command directly (no model, no
   approval — you typed it); the output joins the transcript and the model's
   history like in the TUI. The input border turns yellow while typing a

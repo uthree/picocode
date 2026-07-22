@@ -1399,18 +1399,95 @@ impl App {
         });
     }
 
-    /// Slash-command candidates for the completion popup. Uses the locked
-    /// prefix while cycling, otherwise the current input.
-    pub fn completions(&self) -> Vec<(&'static str, &'static str)> {
+    /// Candidates for the completion popup, as (text to fill the input
+    /// with, description). Uses the locked prefix while cycling, otherwise
+    /// the current input. Before the first space these are command names;
+    /// after it, the command's argument candidates (model names, session
+    /// ids, file paths).
+    pub fn completions(&self) -> Vec<(String, String)> {
         let filter = self.comp_prefix.as_deref().unwrap_or(&self.input);
-        if !filter.starts_with('/') || filter.contains(' ') {
+        if !filter.starts_with('/') || filter.contains('\n') {
             return Vec::new();
         }
-        COMMANDS
-            .iter()
-            .copied()
-            .filter(|(cmd, _)| cmd.starts_with(filter))
-            .collect()
+        match filter.split_once(' ') {
+            None => COMMANDS
+                .iter()
+                .filter(|(cmd, _)| cmd.starts_with(filter))
+                .map(|(cmd, desc)| (cmd.to_string(), desc.to_string()))
+                .collect(),
+            Some((cmd, arg)) => self.arg_completions(cmd, arg.trim_start()),
+        }
+    }
+
+    /// Argument candidates for `cmd`, filtered by the partial `arg`.
+    fn arg_completions(&self, cmd: &str, arg: &str) -> Vec<(String, String)> {
+        let needle = arg.to_lowercase();
+        match cmd {
+            "/model" => self
+                .model_choices()
+                .into_iter()
+                .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
+                .map(|c| (format!("{cmd} {}", c.name), c.detail))
+                .collect(),
+            "/resume" => {
+                let Some(dir) = &self.sessions_dir else {
+                    return Vec::new();
+                };
+                session::list(dir)
+                    .into_iter()
+                    .filter(|s| s.id != self.session_id)
+                    .filter(|s| needle.is_empty() || s.id.to_lowercase().contains(&needle))
+                    .map(|s| {
+                        (
+                            format!("{cmd} {}", s.id),
+                            format!("{} messages · {}", s.messages, s.model),
+                        )
+                    })
+                    .collect()
+            }
+            "/attach" => self.path_completions(cmd, arg),
+            _ => Vec::new(),
+        }
+    }
+
+    /// File-path candidates under the project root for `/attach`:
+    /// completes the last path segment, directories with a trailing `/`.
+    fn path_completions(&self, cmd: &str, arg: &str) -> Vec<(String, String)> {
+        let (dir_part, file_part) = match arg.rsplit_once('/') {
+            Some((d, f)) => (d.to_string(), f.to_string()),
+            None => (String::new(), arg.to_string()),
+        };
+        let dir = self.cfg.root.join(&dir_part);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(String, String)> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                // Hidden files only when explicitly asked for.
+                if name.starts_with('.') && !file_part.starts_with('.') {
+                    return None;
+                }
+                if !name.to_lowercase().starts_with(&file_part.to_lowercase()) {
+                    return None;
+                }
+                let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
+                let rel = if dir_part.is_empty() {
+                    name
+                } else {
+                    format!("{dir_part}/{name}")
+                };
+                Some(if is_dir {
+                    (format!("{cmd} {rel}/"), "directory".to_string())
+                } else {
+                    (format!("{cmd} {rel}"), "file".to_string())
+                })
+            })
+            .collect();
+        out.sort();
+        out.truncate(30);
+        out
     }
 
     /// Tab completion: the first press fills the input with the highlighted
@@ -1435,7 +1512,7 @@ impl App {
                 (self.comp_selected + 1) % count
             };
         }
-        self.input = matches[self.comp_selected].0.to_string();
+        self.input = matches[self.comp_selected].0.clone();
         self.cursor = self.input.chars().count();
     }
 
@@ -1455,7 +1532,7 @@ impl App {
         } else {
             (self.comp_selected + 1) % count
         };
-        self.input = matches[self.comp_selected].0.to_string();
+        self.input = matches[self.comp_selected].0.clone();
         self.cursor = self.input.chars().count();
     }
 

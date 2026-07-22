@@ -191,7 +191,7 @@ pub fn resolve_partial(
         .map(|m| m.name.as_str())
         .chain(available.iter().map(String::as_str))
         .collect();
-    if candidates.iter().any(|c| *c == name) {
+    if candidates.contains(&name) {
         return PartialMatch::Unique(name.to_string());
     }
     let needle = name.to_lowercase();

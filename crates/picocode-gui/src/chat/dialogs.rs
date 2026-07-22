@@ -19,7 +19,7 @@ use crate::settings::ThemeSetting;
 use super::ChatView;
 use super::status::{menu_row, mode_name};
 use super::transcript::{diff_element, tool_style};
-use super::{Approval, COMMANDS, clip, one_line};
+use super::{Approval, clip, one_line};
 
 impl ThemeSetting {
     fn label(self) -> String {
@@ -373,15 +373,7 @@ impl ChatView {
             return None;
         }
         let value = self.input.read(cx).value().to_string();
-        if !value.starts_with('/') || value.contains(char::is_whitespace) {
-            return None;
-        }
-        let prefix = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
-        let matches: Vec<(&str, &str)> = COMMANDS
-            .iter()
-            .filter(|(name, _)| name.starts_with(&prefix))
-            .copied()
-            .collect();
+        let matches = self.completion_matches(cx);
         if matches.is_empty() {
             return None;
         }
@@ -392,12 +384,12 @@ impl ChatView {
             .v_flex()
             .max_h(px(240.))
             .overflow_y_scroll();
-        for (name, desc) in matches {
-            let fill = name.to_string();
-            let active = name == value;
+        for (ix, (fill, desc)) in matches.into_iter().enumerate() {
+            let active = fill == value;
+            let name = fill.clone();
             list = list.child(
                 div()
-                    .id(SharedString::from(format!("comp-{name}")))
+                    .id(SharedString::from(format!("comp-{ix}")))
                     .cursor_pointer()
                     .h_flex()
                     .justify_between()
@@ -412,7 +404,7 @@ impl ChatView {
                         div()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(t!(desc).to_string()),
+                            .child(desc),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.completing = true;

@@ -64,15 +64,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 // ----- command completion popup --------------------------------------------
 
-fn draw_completions(f: &mut Frame, app: &App, matches: &[(&str, &str)], input_area: Rect) {
-    const CMD_COL: usize = 8;
+fn draw_completions(f: &mut Frame, app: &App, matches: &[(String, String)], input_area: Rect) {
+    // Wide enough for the longest fill text (argument completions carry the
+    // whole command line), min 8 for the bare command names.
+    let cmd_col = matches
+        .iter()
+        .map(|(cmd, _)| cmd.chars().count())
+        .max()
+        .unwrap_or(8)
+        .max(8);
     let height = (matches.len() as u16 + 2).min(input_area.y);
     if height < 3 {
         return;
     }
     let inner_width = matches
         .iter()
-        .map(|(_, desc)| CMD_COL + desc.len() + 3)
+        .map(|(_, desc)| cmd_col + desc.len() + 3)
         .max()
         .unwrap_or(20) as u16;
     let width = (inner_width + 2).min(f.area().width.saturating_sub(2));
@@ -88,7 +95,7 @@ fn draw_completions(f: &mut Frame, app: &App, matches: &[(&str, &str)], input_ar
         .iter()
         .enumerate()
         .map(|(i, (cmd, desc))| {
-            let text = format!(" {cmd:<CMD_COL$} {desc}");
+            let text = format!(" {cmd:<cmd_col$} {desc}");
             if i == selected {
                 Line::from(Span::styled(
                     text,
@@ -96,7 +103,7 @@ fn draw_completions(f: &mut Frame, app: &App, matches: &[(&str, &str)], input_ar
                 ))
             } else {
                 Line::from(vec![
-                    Span::styled(format!(" {cmd:<CMD_COL$}"), Style::new().fg(Color::Cyan)),
+                    Span::styled(format!(" {cmd:<cmd_col$}"), Style::new().fg(Color::Cyan)),
                     Span::styled(format!(" {desc}"), Style::new().fg(Color::DarkGray)),
                 ])
             }

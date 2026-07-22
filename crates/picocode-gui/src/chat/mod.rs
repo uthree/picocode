@@ -896,7 +896,62 @@ impl ChatView {
         self.submit(window, cx);
     }
 
-    /// Tab in the input: fill the first matching slash command, or cycle
+    /// Completion candidates as (text to fill the input with, description).
+    /// Before the first space these are command names; after it, the
+    /// command's argument candidates (model names, session ids).
+    pub(super) fn completion_matches(&self, cx: &gpui::App) -> Vec<(String, String)> {
+        let value = self.input.read(cx).value().to_string();
+        if !value.starts_with('/') || value.contains('\n') {
+            return Vec::new();
+        }
+        let filter = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
+        match filter.split_once(' ') {
+            None => COMMANDS
+                .iter()
+                .filter(|(name, _)| name.starts_with(&filter))
+                .map(|(name, desc)| (name.to_string(), t!(*desc).to_string()))
+                .collect(),
+            Some((cmd, arg)) => self.arg_completions(cmd, arg.trim_start()),
+        }
+    }
+
+    /// Argument candidates for `cmd`, filtered by the partial `arg`.
+    fn arg_completions(&self, cmd: &str, arg: &str) -> Vec<(String, String)> {
+        let needle = arg.to_lowercase();
+        match cmd {
+            "/model" => models::model_choices(
+                &self.cfg.models,
+                self.cfg.active_model.as_deref(),
+                self.cfg.provider,
+                self.cfg.base_url.as_deref(),
+                &self.cfg.model,
+                &self.available_models,
+            )
+            .into_iter()
+            .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
+            .map(|c| (format!("{cmd} {}", c.name), c.detail))
+            .collect(),
+            "/resume" => {
+                let Some(dir) = &self.sessions_dir else {
+                    return Vec::new();
+                };
+                session::list(dir)
+                    .into_iter()
+                    .filter(|s| s.id != self.session_id)
+                    .filter(|s| needle.is_empty() || s.id.to_lowercase().contains(&needle))
+                    .map(|s| {
+                        (
+                            format!("{cmd} {}", s.id),
+                            format!("{} messages · {}", s.messages, s.model),
+                        )
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Tab in the input: fill the first matching candidate, or cycle
     /// through the matches of the prefix locked at the first press.
     fn accept_completion(
         &mut self,
@@ -908,27 +963,20 @@ impl ChatView {
             return;
         }
         let value = self.input.read(cx).value().to_string();
-        if !value.starts_with('/') || value.contains(char::is_whitespace) {
-            return;
-        }
         let prefix = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
-        let matches: Vec<&str> = COMMANDS
-            .iter()
-            .map(|(name, _)| *name)
-            .filter(|name| name.starts_with(&prefix))
-            .collect();
+        let matches = self.completion_matches(cx);
         if matches.is_empty() {
             self.comp_prefix = None;
             return;
         }
-        let next = match matches.iter().position(|name| *name == value) {
-            Some(i) => matches[(i + 1) % matches.len()],
-            None => matches[0],
+        let next = match matches.iter().position(|(fill, _)| *fill == value) {
+            Some(i) => matches[(i + 1) % matches.len()].0.clone(),
+            None => matches[0].0.clone(),
         };
         self.comp_prefix = Some(prefix);
         self.completing = true;
         self.input
-            .update(cx, |state, cx| state.set_value(next, window, cx));
+            .update(cx, |state, cx| state.set_value(&next, window, cx));
         cx.notify();
     }
 

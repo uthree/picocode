@@ -29,7 +29,7 @@ picocode -p "Summarize what this project does" > summary.txt
 |---|---|
 | `Enter` | Send |
 | `\` + `Enter` (or `Alt+Enter` / `Ctrl+J`) | Insert a newline (pasting multi-line text works too) |
-| `Tab` | Command completion (popup appears on `/`; repeat to cycle) |
+| `Tab` | Completion (popup appears on `/`; repeat to cycle). Works for arguments too: `/model` completes model names, `/resume` session ids, `/attach` file paths |
 | `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
 | `↑` / `↓` | Select a completion candidate; move between lines in a multi-line input; at the top/bottom line, recall previously submitted messages (shell-style input history) |
 | `y` / `n` | Approve / deny a tool call |
