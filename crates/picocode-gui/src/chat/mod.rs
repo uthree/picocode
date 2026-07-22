@@ -82,6 +82,27 @@ struct Question {
     respond: oneshot::Sender<Option<usize>>,
 }
 
+/// State of the add-model dialog (reached from the model menu): pick a
+/// provider, optionally point it at a base URL, and type or pick a model.
+struct AddModel {
+    provider: config::Provider,
+    /// Endpoint override; empty uses the provider default.
+    base_url: Entity<InputState>,
+    model: Entity<InputState>,
+    /// Models the probed endpoint reported serving ("fetch models").
+    fetched: Vec<String>,
+    /// Status line: API-key hint, fetch progress, or error.
+    note: String,
+}
+
+impl AddModel {
+    /// The base URL as the switch/probe wants it (None = provider default).
+    fn base(&self, cx: &gpui::App) -> Option<String> {
+        let value = self.base_url.read(cx).value().trim().to_string();
+        (!value.is_empty()).then_some(value)
+    }
+}
+
 pub struct ChatView {
     cfg: Config,
     entries: Vec<Entry>,
@@ -115,6 +136,8 @@ pub struct ChatView {
     session_picker: Option<Vec<session::SessionSummary>>,
     /// Whether the `/config` dialog is open.
     settings_open: bool,
+    /// Open add-model dialog (reached from the model menu), if any.
+    add_model: Option<AddModel>,
     /// Reasoning entries the user expanded (indices into `entries`);
     /// everything else renders collapsed to a one-line preview.
     expanded_reasoning: std::collections::HashSet<usize>,
@@ -248,6 +271,7 @@ impl ChatView {
             sessions_dir,
             session_picker: None,
             settings_open: false,
+            add_model: None,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
             saved,
@@ -395,6 +419,28 @@ impl ChatView {
                     }
                 }
             },
+            AgentEvent::FormModelList {
+                provider,
+                base_url,
+                result,
+            } => {
+                let current_base = self.add_model.as_ref().map(|d| d.base(cx));
+                if let Some(dlg) = &mut self.add_model {
+                    // Drop stale replies from before the dialog changed.
+                    if dlg.provider == provider && current_base == Some(base_url) {
+                        match result {
+                            Ok(mut names) => {
+                                names.sort();
+                                dlg.note = t!("add_model_fetched", n = names.len()).to_string();
+                                dlg.fetched = names;
+                            }
+                            Err(e) => {
+                                dlg.note = t!("add_model_fetch_failed", error = e).to_string()
+                            }
+                        }
+                    }
+                }
+            }
             AgentEvent::Compacted { messages, summary } => {
                 if messages == 0 {
                     self.push(EntryKind::Notice, t!("nothing_to_compact").to_string());
@@ -873,6 +919,7 @@ impl ChatView {
             || self.question.is_some()
             || self.session_picker.is_some()
             || self.settings_open
+            || self.add_model.is_some()
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1199,6 +1246,39 @@ impl ChatView {
             }
         }
 
+        self.apply_model_config(new_cfg, name, cx);
+    }
+
+    /// Switch to an explicit provider/model/base-URL combination (the
+    /// add-model dialog): an ad-hoc selection like `--provider`/`--model`
+    /// on the command line, remembered per project. Returns whether it
+    /// worked.
+    fn switch_custom(
+        &mut self,
+        provider: config::Provider,
+        model: String,
+        base_url: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.running {
+            self.push(EntryKind::Error, t!("switch_while_running").to_string());
+            cx.notify();
+            return false;
+        }
+        let mut new_cfg = self.cfg.clone();
+        new_cfg.provider = provider;
+        new_cfg.model = model.clone();
+        new_cfg.base_url = base_url;
+        new_cfg.active_model = None;
+        new_cfg.context_window = config::DEFAULT_CONTEXT_WINDOW;
+        self.apply_model_config(new_cfg, &model, cx)
+    }
+
+    /// Respawn the worker for `new_cfg` and carry the conversation over;
+    /// shared by the by-name switch and the add-model dialog. Returns
+    /// whether the switch happened (a spawn failure leaves everything
+    /// untouched).
+    fn apply_model_config(&mut self, new_cfg: Config, name: &str, cx: &mut Context<Self>) -> bool {
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched. agent::spawn calls tokio::spawn internally, so it
         // needs the runtime context entered.
@@ -1212,7 +1292,7 @@ impl ChatView {
                         t!("switch_failed", name = name, error = format!("{e:#}")).to_string(),
                     );
                     cx.notify();
-                    return;
+                    return false;
                 }
             }
         };
@@ -1254,6 +1334,94 @@ impl ChatView {
         }
         self.save_last_model();
         cx.notify();
+        true
+    }
+
+    /// Open the add-model dialog (the model menu's "+ add" row).
+    pub(super) fn open_add_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        let base_url = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("add_model_base_placeholder").to_string())
+        });
+        let model = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("add_model_model_placeholder").to_string())
+        });
+        model.update(cx, |state, cx| state.focus(window, cx));
+        self.add_model = Some(AddModel {
+            provider: self.cfg.provider,
+            base_url,
+            model,
+            fetched: Vec::new(),
+            note: self.cfg.provider.api_key_hint().to_string(),
+        });
+        cx.notify();
+    }
+
+    /// The add-model dialog's provider button: cycle to the next provider
+    /// (a different provider invalidates the fetched list).
+    pub(super) fn add_model_cycle_provider(&mut self, cx: &mut Context<Self>) {
+        if let Some(dlg) = &mut self.add_model {
+            dlg.provider = dlg.provider.cycled(1);
+            dlg.fetched.clear();
+            dlg.note = dlg.provider.api_key_hint().to_string();
+            cx.notify();
+        }
+    }
+
+    /// The add-model dialog's fetch button: probe the endpoint's model list
+    /// in the background (answer arrives as `FormModelList`).
+    pub(super) fn add_model_fetch(&mut self, cx: &mut Context<Self>) {
+        let Some(dlg) = &mut self.add_model else {
+            return;
+        };
+        let provider = dlg.provider;
+        let base = dlg.base(cx);
+        dlg.note = t!("fetching_models").to_string();
+        let event_tx = self.event_tx.clone();
+        self.rt.spawn(async move {
+            let result = models::fetch(provider, base.as_deref())
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = event_tx
+                .send(AgentEvent::FormModelList {
+                    provider,
+                    base_url: base,
+                    result,
+                })
+                .await;
+        });
+        cx.notify();
+    }
+
+    /// The add-model dialog's switch action: `model` is a fetched row's id,
+    /// or `None` for the typed field. On success the dialog closes and a
+    /// copyable `[[models]]` snippet lands in the transcript.
+    pub(super) fn add_model_switch(&mut self, model: Option<String>, cx: &mut Context<Self>) {
+        let Some(dlg) = &self.add_model else {
+            return;
+        };
+        let provider = dlg.provider;
+        let base = dlg.base(cx);
+        let model = model.unwrap_or_else(|| dlg.model.read(cx).value().trim().to_string());
+        if model.is_empty() {
+            if let Some(dlg) = &mut self.add_model {
+                dlg.note = t!("add_model_need_name").to_string();
+            }
+            cx.notify();
+            return;
+        }
+        self.add_model = None;
+        if self.switch_custom(provider, model.clone(), base.clone(), cx) {
+            self.push(
+                EntryKind::Notice,
+                t!(
+                    "keep_model_hint",
+                    snippet = models::toml_snippet(provider, &model, base.as_deref())
+                )
+                .to_string(),
+            );
+            cx.notify();
+        }
     }
 
     /// Click on the workdir label: open a native directory picker and move
@@ -1578,6 +1746,7 @@ impl Render for ChatView {
             .children(self.render_ctx_menu(window, cx))
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
+            .children(self.render_add_model(cx))
             .children(self.render_session_picker(cx))
             .children(self.render_approval(cx))
             .children(self.render_question(cx))

@@ -4,6 +4,7 @@ use rig::completion::Message;
 use tokio::sync::oneshot;
 
 use crate::attachment::Attachment;
+use crate::config::Provider;
 
 /// Events sent from the agent worker / approval hook to the TUI.
 pub enum AgentEvent {
@@ -37,6 +38,15 @@ pub enum AgentEvent {
     /// the queried endpoint (for error reporting).
     ModelList {
         label: String,
+        result: Result<Vec<String>, String>,
+    },
+    /// Result of the add-model form's model-list probe. Separate from
+    /// [`ModelList`](Self::ModelList), which caches the *current* endpoint's
+    /// models; the echoed provider/base identify which probe answered (a
+    /// stale reply after the user changed the form is dropped).
+    FormModelList {
+        provider: Provider,
+        base_url: Option<String>,
         result: Result<Vec<String>, String>,
     },
     /// The conversation history was compacted into a summary.

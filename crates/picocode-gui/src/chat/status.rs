@@ -238,6 +238,17 @@ impl ChatView {
                         ),
                     );
                 }
+                // Trailing row opening the add-model dialog.
+                list = list.child(
+                    menu_row(
+                        SharedString::from("model-add"),
+                        t!("add_model_row").to_string(),
+                        t!("add_model_row_desc").to_string(),
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.open_add_model(window, cx))),
+                );
                 panel = panel.child(list);
             }
             Menu::Background => {

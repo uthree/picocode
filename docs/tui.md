@@ -48,7 +48,7 @@ on macOS ones).
 | Command | Action |
 |---|---|
 | `!<command>` | Run a shell command directly (no approval — you typed it; output joins the context) |
-| `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over) |
+| `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over). The last row, "+ add a provider / model…", opens a form: pick a provider (←→), optionally a base URL, then type a model or fetch the endpoint's list with Tab and pick one — switching this way is an ad-hoc selection (remembered per project) and prints a ready-to-paste `[[models]]` snippet for picocode.toml |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly |
 | `/permissions` | Show the current mode and the effective allow/deny rules |
 | `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, bash timeout, read_file limits (lines / bytes per line), web search provider / result count and the auto-compact threshold (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter`. Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |

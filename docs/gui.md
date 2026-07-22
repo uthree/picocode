@@ -32,7 +32,12 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   context-usage gauge colored by pressure and a clickable model chip
   (right) opening the model menu — configured `[[models]]` entries plus
   whatever the provider reports serving, with the conversation carried
-  over on switch. While the model generates, the output-token counter
+  over on switch. The menu's "+ add a provider / model…" row opens a
+  dialog for switching to any provider, endpoint and model: cycle the
+  provider, optionally set a base URL, then type a model name or fetch
+  the endpoint's model list and click one. Ad-hoc switches are remembered
+  per project, and a ready-to-paste `[[models]]` snippet for
+  picocode.toml lands in the transcript. While the model generates, the output-token counter
   ticks live from an estimate of the streamed deltas and snaps to the
   provider-reported count at each completion boundary.
 - **Workdir line**: the project directory and git branch (with an icon)

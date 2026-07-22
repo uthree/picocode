@@ -110,10 +110,34 @@ pub struct SessionPicker {
     pub selected: usize,
 }
 
-/// State of the `/model` selection dialog.
+/// State of the `/model` selection dialog. The list is followed by a
+/// synthetic "+ add a provider / model…" row opening [`AddModelForm`].
 pub struct ModelPicker {
     pub items: Vec<ModelChoice>,
     pub selected: usize,
+}
+
+/// State of the add-model form (opened from the `/model` dialog): pick a
+/// provider, optionally point it at a base URL, and type or pick a model.
+pub struct AddModelForm {
+    pub provider: picocode_core::config::Provider,
+    /// Endpoint override; empty uses the provider default.
+    pub base_url: String,
+    pub model: String,
+    /// Focused row: 0 provider, 1 base URL, 2 model, 3.. the fetched list.
+    pub field: usize,
+    /// Models the probed endpoint reported serving (Tab fetches).
+    pub fetched: Vec<String>,
+    /// One-line status under the form: key hint, fetch progress, or error.
+    pub note: String,
+}
+
+impl AddModelForm {
+    /// The base URL as the switch/probe wants it (None = provider default).
+    pub fn base(&self) -> Option<String> {
+        let trimmed = self.base_url.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
 }
 
 /// State of the `/config` settings dialog. The rows are fixed; the values
@@ -214,6 +238,8 @@ pub struct App {
     pub session_picker: Option<SessionPicker>,
     /// Open `/model` dialog, if any (captures the arrow/Enter keys).
     pub model_picker: Option<ModelPicker>,
+    /// Open add-model form (reached from the `/model` dialog), if any.
+    pub add_model: Option<AddModelForm>,
     /// Open `/config` dialog, if any (captures the arrow/Enter keys).
     pub settings: Option<SettingsMenu>,
     should_quit: bool,
@@ -266,6 +292,7 @@ impl App {
             sessions_dir: session::sessions_dir(&cfg.root),
             session_picker: None,
             model_picker: None,
+            add_model: None,
             settings: None,
             should_quit: false,
             assistant_open: false,
@@ -468,16 +495,28 @@ impl App {
             return;
         }
 
-        // The /model dialog captures navigation keys while open.
+        // The add-model form captures keys while open.
+        if self.add_model.is_some() {
+            self.add_model_key(key).await;
+            return;
+        }
+
+        // The /model dialog captures navigation keys while open. The list
+        // is followed by a synthetic "+ add a provider / model…" row.
         if let Some(picker) = &mut self.model_picker {
-            let count = picker.items.len();
+            let count = picker.items.len() + 1;
             match key.code {
-                KeyCode::Up if count > 0 => picker.selected = (picker.selected + count - 1) % count,
-                KeyCode::Down if count > 0 => picker.selected = (picker.selected + 1) % count,
-                KeyCode::Enter if count > 0 => {
-                    let name = picker.items[picker.selected].name.clone();
-                    self.model_picker = None;
-                    self.switch_model(&name).await;
+                KeyCode::Up => picker.selected = (picker.selected + count - 1) % count,
+                KeyCode::Down => picker.selected = (picker.selected + 1) % count,
+                KeyCode::Enter => {
+                    if picker.selected < picker.items.len() {
+                        let name = picker.items[picker.selected].name.clone();
+                        self.model_picker = None;
+                        self.switch_model(&name).await;
+                    } else {
+                        self.model_picker = None;
+                        self.open_add_model();
+                    }
                 }
                 KeyCode::Esc | KeyCode::Char('q') => self.model_picker = None,
                 _ => {}
@@ -996,6 +1035,38 @@ impl App {
             }
         }
 
+        self.apply_model_config(new_cfg, name).await;
+    }
+
+    /// Switch to an explicit provider/model/base-URL combination (the
+    /// add-model form): an ad-hoc selection like `--provider`/`--model` on
+    /// the command line, remembered per project. Returns whether it worked.
+    async fn switch_custom(
+        &mut self,
+        provider: picocode_core::config::Provider,
+        model: String,
+        base_url: Option<String>,
+    ) -> bool {
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot switch models while a turn is running".to_string(),
+            );
+            return false;
+        }
+        let mut new_cfg = self.cfg.clone();
+        new_cfg.provider = provider;
+        new_cfg.model = model.clone();
+        new_cfg.base_url = base_url;
+        new_cfg.active_model = None;
+        new_cfg.context_window = picocode_core::config::DEFAULT_CONTEXT_WINDOW;
+        self.apply_model_config(new_cfg, &model).await
+    }
+
+    /// Respawn the worker for `new_cfg` and carry the conversation over;
+    /// shared by the by-name switch and the add-model form. Returns whether
+    /// the switch happened (a spawn failure leaves everything untouched).
+    async fn apply_model_config(&mut self, new_cfg: Config, name: &str) -> bool {
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
         let (new_tx, new_steer) = match picocode_core::agent::spawn(
@@ -1009,7 +1080,7 @@ impl App {
                     EntryKind::Error,
                     format!("Failed to switch to `{name}`: {e:#}"),
                 );
-                return;
+                return false;
             }
         };
 
@@ -1037,6 +1108,101 @@ impl App {
             self.refresh_models();
         }
         self.save_last_model();
+        true
+    }
+
+    /// Open the add-model form (the `/model` dialog's "+ add" row).
+    fn open_add_model(&mut self) {
+        self.add_model = Some(AddModelForm {
+            provider: self.cfg.provider,
+            base_url: String::new(),
+            model: String::new(),
+            field: 0,
+            fetched: Vec::new(),
+            note: "Tab: fetch the endpoint's model list".to_string(),
+        });
+    }
+
+    /// Key handling for the add-model form.
+    async fn add_model_key(&mut self, key: KeyEvent) {
+        let Some(form) = &mut self.add_model else {
+            return;
+        };
+        let rows = 3 + form.fetched.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.add_model = None;
+                self.open_model_picker();
+            }
+            KeyCode::Up => form.field = (form.field + rows - 1) % rows,
+            KeyCode::Down => form.field = (form.field + 1) % rows,
+            // Provider row: cycle. A different provider invalidates the
+            // fetched list.
+            KeyCode::Left | KeyCode::Right if form.field == 0 => {
+                let delta = if key.code == KeyCode::Left { -1 } else { 1 };
+                form.provider = form.provider.cycled(delta);
+                form.fetched.clear();
+                form.note = format!(
+                    "{} — Tab: fetch the endpoint's model list",
+                    form.provider.api_key_hint()
+                );
+            }
+            KeyCode::Char(c) if form.field == 1 => form.base_url.push(c),
+            KeyCode::Char(c) if form.field == 2 => form.model.push(c),
+            KeyCode::Backspace if form.field == 1 => {
+                form.base_url.pop();
+            }
+            KeyCode::Backspace if form.field == 2 => {
+                form.model.pop();
+            }
+            KeyCode::Tab => {
+                form.note = "fetching…".to_string();
+                let provider = form.provider;
+                let base = form.base();
+                let event_tx = self.event_tx.clone();
+                tokio::spawn(async move {
+                    let result = picocode_core::models::fetch(provider, base.as_deref())
+                        .await
+                        .map_err(|e| format!("{e:#}"));
+                    let _ = event_tx
+                        .send(AgentEvent::FormModelList {
+                            provider,
+                            base_url: base,
+                            result,
+                        })
+                        .await;
+                });
+            }
+            KeyCode::Enter => {
+                // A fetched row switches to that model; the form rows switch
+                // to the typed one.
+                let model = if form.field >= 3 {
+                    form.fetched[form.field - 3].clone()
+                } else {
+                    form.model.trim().to_string()
+                };
+                if model.is_empty() {
+                    form.note = "type a model name (or Tab to fetch, ↑↓ to pick one)".to_string();
+                    return;
+                }
+                let provider = form.provider;
+                let base = form.base();
+                self.add_model = None;
+                if self
+                    .switch_custom(provider, model.clone(), base.clone())
+                    .await
+                {
+                    self.push(
+                        EntryKind::Notice,
+                        format!(
+                            "To keep this model across projects, add it to picocode.toml:\n{}",
+                            picocode_core::models::toml_snippet(provider, &model, base.as_deref())
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
     }
 
     /// `/resume` with no argument: open the session-selection dialog.
@@ -1616,6 +1782,25 @@ impl App {
                     }
                 }
             },
+            AgentEvent::FormModelList {
+                provider,
+                base_url,
+                result,
+            } => {
+                if let Some(form) = &mut self.add_model {
+                    // Drop stale replies from before the form changed.
+                    if form.provider == provider && form.base() == base_url {
+                        match result {
+                            Ok(mut names) => {
+                                names.sort();
+                                form.note = format!("{} model(s) served", names.len());
+                                form.fetched = names;
+                            }
+                            Err(e) => form.note = format!("fetch failed: {e}"),
+                        }
+                    }
+                }
+            }
             AgentEvent::ShellOutput { output } => {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);

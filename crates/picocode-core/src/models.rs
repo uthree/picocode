@@ -166,9 +166,39 @@ fn parse_names(body: &serde_json::Value, provider: Provider) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A ready-to-paste `[[models]]` snippet for an ad-hoc selection, shown
+/// after switching via the add-model form so the choice can be made
+/// permanent in picocode.toml.
+pub fn toml_snippet(provider: Provider, model: &str, base_url: Option<&str>) -> String {
+    let name: String = model
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .collect();
+    let mut out = format!(
+        "[[models]]\nname = \"{name}\"\nprovider = \"{}\"\nmodel = \"{model}\"",
+        crate::config::provider_name(provider),
+    );
+    if let Some(url) = base_url {
+        out.push_str(&format!("\nbase_url = \"{url}\""));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toml_snippet_is_pasteable() {
+        let s = toml_snippet(Provider::Anthropic, "claude-haiku-4-5", None);
+        assert!(s.contains("provider = \"anthropic\""));
+        assert!(s.contains("name = \"claude-haiku-4-5\""));
+        assert!(!s.contains("base_url"));
+        let s = toml_snippet(Provider::Openai, "qwen3:4b", Some("http://host:8000/v1"));
+        assert!(s.contains("base_url = \"http://host:8000/v1\""));
+        // The snippet is valid TOML.
+        assert!(toml::from_str::<toml::Value>(&s).is_ok());
+    }
 
     #[test]
     fn base_url_prefers_config_then_env_then_default() {

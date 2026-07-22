@@ -5,6 +5,7 @@
 use gpui::prelude::*;
 use gpui::{AnyElement, App, ClipboardItem, Context, KeyDownEvent, SharedString, Window, div, px};
 use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::input::Input;
 use gpui_component::{ActiveTheme, StyledExt};
 use rust_i18n::t;
 
@@ -618,6 +619,129 @@ impl ChatView {
                                         cx.notify();
                                     })),
                             ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+impl ChatView {
+    /// The add-model dialog: provider (click cycles), base URL, model name,
+    /// and the endpoint's served models (fetched on demand; clicking one
+    /// switches to it directly).
+    pub(super) fn render_add_model(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dlg = self.add_model.as_ref()?;
+        let theme = cx.theme();
+        let provider_name = picocode_core::config::provider_name(dlg.provider);
+
+        let mut list = div().v_flex().gap_1().max_h(px(180.)).overflow_hidden();
+        if !dlg.fetched.is_empty() {
+            let mut rows = div()
+                .id("add-model-fetched")
+                .v_flex()
+                .gap_1()
+                .overflow_y_scroll();
+            for (ix, id) in dlg.fetched.iter().enumerate() {
+                let model = id.clone();
+                rows = rows.child(
+                    div()
+                        .id(SharedString::from(format!("add-model-{ix}")))
+                        .cursor_pointer()
+                        .rounded_md()
+                        .px_2()
+                        .py_0p5()
+                        .hover(|s| s.bg(theme.muted))
+                        .child(id.clone())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.add_model_switch(Some(model.clone()), cx);
+                        })),
+                );
+            }
+            list = list.child(rows);
+        }
+
+        let row = |label: String, control: AnyElement| {
+            div()
+                .h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(90.))
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .child(div().flex_1().child(control))
+        };
+
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .v_flex()
+                        .w(px(460.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(div().font_bold().child(t!("add_model_title").to_string()))
+                        .child(row(
+                            t!("row_provider").to_string(),
+                            Button::new("add-model-provider")
+                                .label(format!("‹ {provider_name} ›"))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.add_model_cycle_provider(cx)),
+                                )
+                                .into_any_element(),
+                        ))
+                        .child(row(
+                            t!("row_base_url").to_string(),
+                            Input::new(&dlg.base_url).into_any_element(),
+                        ))
+                        .child(row(
+                            t!("row_model_name").to_string(),
+                            Input::new(&dlg.model).into_any_element(),
+                        ))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(dlg.note.clone()),
+                        )
+                        .child(list)
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    Button::new("add-model-fetch")
+                                        .ghost()
+                                        .label(t!("fetch_models").to_string())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.add_model_fetch(cx)),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("add-model-cancel")
+                                        .ghost()
+                                        .label(t!("cancel").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.add_model = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("add-model-switch")
+                                        .primary()
+                                        .label(t!("switch_btn").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.add_model_switch(None, cx);
+                                        })),
+                                ),
                         ),
                 )
                 .into_any_element(),

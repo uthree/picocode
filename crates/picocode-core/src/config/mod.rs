@@ -23,6 +23,28 @@ pub fn provider_name(p: Provider) -> &'static str {
     }
 }
 
+/// All selectable providers, in the add-model form's cycle order.
+pub const PROVIDERS: &[Provider] = &[Provider::Ollama, Provider::Anthropic, Provider::Openai];
+
+impl Provider {
+    /// Neighbouring provider in the add-model form (wraps around).
+    pub fn cycled(self, delta: i64) -> Provider {
+        let ix = PROVIDERS.iter().position(|p| *p == self).unwrap_or(0) as i64;
+        let n = PROVIDERS.len() as i64;
+        PROVIDERS[((ix + delta).rem_euclid(n)) as usize]
+    }
+
+    /// Which environment variable authenticates this provider (shown in the
+    /// add-model form so a missing key is obvious up front).
+    pub fn api_key_hint(self) -> &'static str {
+        match self {
+            Provider::Ollama => "no key needed (OLLAMA_API_KEY optional)",
+            Provider::Anthropic => "uses ANTHROPIC_API_KEY",
+            Provider::Openai => "uses OPENAI_API_KEY (local servers may not check it)",
+        }
+    }
+}
+
 pub fn provider_from_name(s: &str) -> Option<Provider> {
     match s {
         "ollama" => Some(Provider::Ollama),
