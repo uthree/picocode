@@ -59,6 +59,17 @@ pub struct Args {
     #[arg(long)]
     pub bypass: bool,
 
+    /// Run one prompt without the TUI: stream the reply to stdout (tool
+    /// activity goes to stderr) and exit. Tool calls that would need
+    /// confirmation are denied unless --bypass is also given.
+    #[arg(short = 'p', long = "print", value_name = "PROMPT")]
+    pub print: Option<String>,
+
+    /// File to attach to the --print prompt (image, or anything that reads
+    /// as text). Repeatable.
+    #[arg(long, value_name = "PATH", requires = "print")]
+    pub attach: Vec<PathBuf>,
+
     /// Headless mode for debugging: run one prompt without the TUI and print
     /// events to stdout. Implies bypass mode.
     #[arg(long, hide = true)]

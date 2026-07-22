@@ -57,6 +57,13 @@ picocode --provider openai --model gpt-4o  # uses OPENAI_API_KEY
 picocode --base-url http://host:8000/v1 --provider openai --model qwen3:4b
 ```
 
+Headless (for scripts and pipes — the reply goes to stdout, tool logs to
+stderr; confirmation-needing tool calls are denied unless `--bypass`):
+
+```sh
+picocode -p "Explain the build setup" --attach Cargo.toml
+```
+
 ## Configuration
 
 picocode reads `picocode.toml` from the project root, merged over the

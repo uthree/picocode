@@ -1290,6 +1290,8 @@ impl ChatView {
             model: None,
             base_url: None,
             bypass: false,
+            print: None,
+            attach: Vec::new(),
             smoke: None,
             smoke_attach: None,
         };

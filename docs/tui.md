@@ -4,6 +4,18 @@ Key bindings, slash commands, and the finer points of the picocode TUI.
 For setup see the [README](../README.md); for models, permissions and the
 config file see [configuration.md](configuration.md).
 
+## Headless mode
+
+`picocode -p "<prompt>"` runs one prompt without the TUI: the reply
+streams to stdout (clean text, pipeable) while tool activity, notices and
+errors go to stderr. Tool calls that would need confirmation are denied —
+add `--bypass` to allow everything (isolated environments only). `--attach
+<path>` (repeatable) attaches files to the prompt.
+
+```sh
+picocode -p "Summarize what this project does" > summary.txt
+```
+
 ## Keys
 
 | Key | Action |
