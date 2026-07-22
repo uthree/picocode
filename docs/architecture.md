@@ -17,6 +17,8 @@ crates/
     attachment.rs — user file attachments (image/audio/PDF) sent as
                    multimodal message content, with per-provider support
                    checks
+    clipboard.rs — system-clipboard reading for paste (files/images →
+                   attachments), shared by both front ends
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
     history.rs   — context savings: old-tool-output pruning and the
                    keep-recent-turns boundary used by compaction
@@ -35,7 +37,6 @@ crates/
     app.rs       — application state and event loop
     ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
     input.rs     — input thread, paste detection, input-box cursor math
-    clipboard.rs — Ctrl+V system-clipboard reading (files/images → attachments)
     history.rs   — shell-style ↑/↓ input history
     highlight.rs — syntax highlighting (syntect) and line diffs (similar)
     markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)

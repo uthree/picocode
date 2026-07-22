@@ -1,5 +1,6 @@
-//! System-clipboard reading for Ctrl+V: copied files and images become
-//! staged attachments, plain text falls back to a normal paste.
+//! System-clipboard reading for paste (Ctrl+V in the TUI, Cmd+V in the
+//! GUI): copied files and images become staged attachments, plain text
+//! falls back to a normal paste.
 //!
 //! arboard exposes the clipboard flavors separately; the priority here is
 //! files (Finder/Explorer copies) → image data (screenshots) → text —

@@ -1,5 +1,4 @@
 mod app;
-mod clipboard;
 mod highlight;
 mod history;
 mod input;

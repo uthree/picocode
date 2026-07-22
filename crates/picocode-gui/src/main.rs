@@ -83,6 +83,18 @@ fn main() -> anyhow::Result<()> {
                     Some("Input"),
                 ),
                 gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
+                // The paste shortcut goes through the chat view first, which
+                // stages copied files/images as attachments and propagates
+                // for plain text — falling back to the input's own paste.
+                gpui::KeyBinding::new(
+                    if cfg!(target_os = "macos") {
+                        "cmd-v"
+                    } else {
+                        "ctrl-v"
+                    },
+                    chat::PasteClipboard,
+                    Some("Input"),
+                ),
             ]);
 
             let bounds = Bounds::centered(None, size(px(880.), px(720.)), cx);

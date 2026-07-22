@@ -23,8 +23,9 @@ OpenAI-compatible server (vLLM, etc.).
   **direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),
   **pluggable web search** (DuckDuckGo / SearXNG / Brave)
 - **File attachments** — send images (and audio / PDF on providers that
-  support them) with a prompt: drag & drop or 📎 in the GUI, `/attach`
-  or Ctrl+V (clipboard files and screenshots) in the TUI
+  support them) with a prompt: drag & drop, 📎 or ⌘V in the GUI,
+  `/attach` or Ctrl+V in the TUI — pasting clipboard files and
+  screenshots stages them as attachments
 
 ## Install
 

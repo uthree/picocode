@@ -23,8 +23,3 @@ textwrap.workspace = true
 unicode-width.workspace = true
 syntect.workspace = true
 pulldown-cmark.workspace = true
-arboard.workspace = true
-png.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true

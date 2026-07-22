@@ -24,6 +24,8 @@ rustls.workspace = true
 toml.workspace = true
 url.workspace = true
 similar.workspace = true
+arboard.workspace = true
+png.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

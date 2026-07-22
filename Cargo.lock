@@ -4978,11 +4978,13 @@ name = "picocode-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "base64",
  "clap",
  "futures",
  "html2text",
  "ignore",
+ "png 0.18.1",
  "regex",
  "reqwest",
  "rig",
@@ -5025,16 +5027,13 @@ name = "picocode-tui"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "arboard",
  "clap",
  "picocode-core",
- "png 0.18.1",
  "pulldown-cmark",
  "ratatui",
  "rig",
  "serde_json",
  "syntect",
- "tempfile",
  "textwrap",
  "tokio",
  "unicode-width",

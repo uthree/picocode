@@ -62,8 +62,11 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   while messages with attachments (and `!` commands) queue above the
   input box and run one per completed turn; pressing Stop returns the
   queued ones to the input box.
-- **Attachments**: drop files from the Finder anywhere on the window, or
-  click the 📎 button next to the input for a file picker. Images (and,
+- **Attachments**: drop files from the Finder anywhere on the window,
+  click the 📎 button next to the input for a file picker, or paste with
+  ⌘V (Ctrl+V off macOS): copied files and clipboard images (screenshots
+  — saved to a temp PNG first) are staged as attachments, while plain
+  text pastes into the input as usual. Images (and,
   depending on the provider, audio and PDFs — Ollama takes images only)
   are staged as chips above the input — image chips show a thumbnail, ✕
   removes one — and go to the model with the next prompt as multimodal

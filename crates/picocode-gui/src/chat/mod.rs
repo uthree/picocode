@@ -33,7 +33,10 @@ use crate::settings::{self, GuiSettings, ThemeSetting};
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
 
-gpui::actions!(picocode_gui, [AcceptCompletion, SubmitPrompt]);
+gpui::actions!(
+    picocode_gui,
+    [AcceptCompletion, SubmitPrompt, PasteClipboard]
+);
 
 /// Which status-bar popup menu is open.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -159,6 +162,8 @@ pub struct ChatView {
     /// Files staged (drag & drop or the attach button) to send with the
     /// next prompt, shown as chips above the input box.
     pending_attachments: Vec<Attachment>,
+    /// Counter naming the temp PNGs saved from clipboard image pastes.
+    clip_count: usize,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
     /// Image opened full-size from a transcript thumbnail (click closes).
@@ -281,6 +286,7 @@ impl ChatView {
             math_cache: crate::tex::MathCache::new(),
             queued: Vec::new(),
             pending_attachments: Vec::new(),
+            clip_count: 0,
             ctx_menu: None,
             image_preview: None,
             // The overdraw pre-measures entries near the viewport so
@@ -1219,6 +1225,32 @@ impl ChatView {
         cx.notify();
     }
 
+    /// Cmd+V (Ctrl+V off macOS) in the chat input: copied files and raw
+    /// image data (screenshots — saved to a temp PNG first) stage as
+    /// attachments. Anything else propagates so the keystroke falls back
+    /// to the input's own text paste — which also keeps text pasting
+    /// intact in dialog text fields (model filter, add-model form).
+    fn on_paste_clipboard(
+        &mut self,
+        _: &PasteClipboard,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use picocode_core::clipboard::{self, Pasted};
+        if self.dialog_open() {
+            cx.propagate();
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("picocode-{}", std::process::id()));
+        self.clip_count += 1;
+        match clipboard::read(&dir, self.clip_count) {
+            Ok(Some(Pasted::Files(paths))) => self.add_attachments(&paths, cx),
+            Ok(Some(Pasted::Image(path))) => self.add_attachments(&[path], cx),
+            // Text, empty or unreadable: let the input paste text as usual.
+            _ => cx.propagate(),
+        }
+    }
+
     /// Open a native file picker and stage the chosen files.
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -1798,6 +1830,7 @@ impl Render for ChatView {
             .bg(background)
             .on_action(cx.listener(Self::accept_completion))
             .on_action(cx.listener(Self::on_submit_prompt))
+            .on_action(cx.listener(Self::on_paste_clipboard))
             // Files dragged from the OS anywhere onto the window become
             // staged attachments for the next prompt.
             .on_drop::<gpui::ExternalPaths>(cx.listener(

@@ -2097,18 +2097,19 @@ impl App {
     /// through the `/attach` staging; plain text is a normal paste. The
     /// terminal's own paste keeps working independently of this.
     fn paste_clipboard(&mut self) {
+        use picocode_core::clipboard::{self, Pasted};
         let dir = std::env::temp_dir().join(format!("picocode-{}", std::process::id()));
         self.clip_count += 1;
-        match crate::clipboard::read(&dir, self.clip_count) {
-            Ok(Some(crate::clipboard::Pasted::Files(paths))) => {
+        match clipboard::read(&dir, self.clip_count) {
+            Ok(Some(Pasted::Files(paths))) => {
                 for path in paths {
                     self.stage_file(&path, &path.display().to_string());
                 }
             }
-            Ok(Some(crate::clipboard::Pasted::Image(path))) => {
+            Ok(Some(Pasted::Image(path))) => {
                 self.stage_file(&path, "clipboard image");
             }
-            Ok(Some(crate::clipboard::Pasted::Text(text))) => {
+            Ok(Some(Pasted::Text(text))) => {
                 let text = text
                     .replace("\r\n", "\n")
                     .replace('\r', "\n")
