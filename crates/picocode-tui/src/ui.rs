@@ -335,7 +335,7 @@ fn context_lines(
 
     // The bar: segments scaled to the window; every non-empty segment gets
     // at least one cell so tiny ones stay visible.
-    let bar_width = width.saturating_sub(4).min(60).max(10);
+    let bar_width = width.saturating_sub(4).clamp(10, 60);
     let mut spans = vec![Span::raw("  ")];
     let mut cells_used = 0usize;
     for (kind, tokens) in &breakdown.segments {
