@@ -31,7 +31,8 @@ async fn main() -> anyhow::Result<()> {
     // (e.g. a missing API key).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
-    let (cmd_tx, steer) = agent::spawn(&cfg, event_tx.clone(), cancel_rx)?;
+    let jobs = picocode_core::tools::BackgroundJobs::new();
+    let (cmd_tx, steer) = agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone())?;
 
     if let Some(prompt) = smoke {
         let attachments = smoke_attach
@@ -81,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
         std::io::stdout(),
         ratatui::crossterm::event::EnableBracketedPaste
     );
-    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, cancel_tx)
+    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, jobs, cancel_tx)
         .run(terminal, event_rx)
         .await;
     let _ = ratatui::crossterm::execute!(

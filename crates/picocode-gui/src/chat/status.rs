@@ -268,6 +268,16 @@ impl ChatView {
                         .font_bold()
                         .child(t!("bg_title").to_string()),
                 );
+                if self.bg_jobs.is_empty() {
+                    panel = panel.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(t!("bg_none").to_string()),
+                    );
+                }
                 for (id, command, started) in &self.bg_jobs {
                     let secs = started.elapsed().as_secs();
                     let elapsed = if secs >= 60 {
@@ -275,6 +285,7 @@ impl ChatView {
                     } else {
                         format!("{secs}s")
                     };
+                    let job_id = *id;
                     panel = panel.child(
                         div()
                             .px_2()
@@ -287,9 +298,28 @@ impl ChatView {
                                     .child(format!("#{id}"))
                                     .child(
                                         div()
-                                            .text_color(theme.muted_foreground)
-                                            .text_sm()
-                                            .child(t!("bg_elapsed", elapsed = elapsed).to_string()),
+                                            .h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .text_color(theme.muted_foreground)
+                                                    .text_sm()
+                                                    .child(
+                                                        t!("bg_elapsed", elapsed = elapsed)
+                                                            .to_string(),
+                                                    ),
+                                            )
+                                            .child(
+                                                gpui_component::button::Button::new(
+                                                    SharedString::from(format!("kill-{id}")),
+                                                )
+                                                .small()
+                                                .label(t!("bg_kill").to_string())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.kill_job(job_id, cx);
+                                                })),
+                                            ),
                                     ),
                             )
                             .child(

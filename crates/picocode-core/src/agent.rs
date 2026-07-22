@@ -28,6 +28,7 @@ pub fn spawn(
     cfg: &Config,
     event_tx: mpsc::Sender<AgentEvent>,
     cancel_rx: watch::Receiver<()>,
+    jobs: tools::BackgroundJobs,
 ) -> anyhow::Result<(mpsc::Sender<WorkerCmd>, crate::steer::SteerQueue)> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
     let steer = crate::steer::SteerQueue::new();
@@ -64,6 +65,7 @@ pub fn spawn(
                     root,
                     cfg.bash_timeout.clone(),
                     event_tx.clone(),
+                    jobs.clone(),
                 ))
                 .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()));
             if enabled(tools::WebSearch::NAME) {

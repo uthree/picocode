@@ -42,6 +42,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "Clear conversation history"),
     ("/compact", "Summarize history to free context"),
     ("/undo", "Revert the last turn's file edits (repeatable)"),
+    ("/jobs", "List background jobs; /jobs kill <id> stops one"),
     ("/model", "Pick a model (dialog) or switch: /model <name>"),
     ("/resume", "Pick a saved session to resume"),
     ("/read-only", "Mode: reads only, every write asks"),
@@ -248,6 +249,9 @@ pub struct App {
     /// Mid-turn steering queue shared with the worker: text sent while a
     /// turn runs is injected at the next tool-call boundary.
     steer: picocode_core::steer::SteerQueue,
+    /// Registry of running background jobs (`/jobs` list / kill). App-owned
+    /// so jobs survive worker respawns on model switches.
+    jobs: picocode_core::tools::BackgroundJobs,
     /// Signals the worker to abort the generation in progress (Esc).
     cancel_tx: watch::Sender<()>,
     /// Id of the session being written; a fresh one is issued by /clear.
@@ -273,6 +277,7 @@ impl App {
         event_tx: mpsc::Sender<AgentEvent>,
         cmd_tx: mpsc::Sender<WorkerCmd>,
         steer: picocode_core::steer::SteerQueue,
+        jobs: picocode_core::tools::BackgroundJobs,
         cancel_tx: watch::Sender<()>,
     ) -> Self {
         let mut app = Self {
@@ -307,6 +312,7 @@ impl App {
             event_tx,
             cmd_tx,
             steer,
+            jobs,
             cancel_tx,
             session_id: session::new_id(),
             sessions_dir: session::sessions_dir(&cfg.root),
@@ -726,6 +732,11 @@ impl App {
             "/undo" => {
                 let _ = self.cmd_tx.send(WorkerCmd::Undo).await;
             }
+            "/jobs" => self.show_jobs(),
+            _ if text.starts_with("/jobs kill ") => {
+                let arg = text["/jobs kill ".len()..].trim().to_string();
+                self.kill_job(&arg);
+            }
             "/permissions" => self.show_permissions(),
             "/config" | "/settings" => self.settings = Some(SettingsMenu { selected: 0 }),
             "/status" | "/usage" => self.show_status(),
@@ -912,10 +923,11 @@ impl App {
         let timeout = self.cfg.bash_timeout.clone();
         let event_tx = self.event_tx.clone();
         let cmd_tx = self.cmd_tx.clone();
+        let jobs = self.jobs.clone();
         let mut cancel = self.cancel_tx.subscribe();
         tokio::spawn(async move {
             use rig::tool::Tool;
-            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone());
+            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone(), jobs);
             let call = tool.call(picocode_core::tools::BashArgs {
                 command: command.clone(),
             });
@@ -1139,6 +1151,7 @@ impl App {
             &new_cfg,
             self.event_tx.clone(),
             self.cancel_tx.subscribe(),
+            self.jobs.clone(),
         ) {
             Ok(pair) => pair,
             Err(e) => {
@@ -1446,7 +1459,56 @@ impl App {
                     .collect()
             }
             "/attach" => self.path_completions(cmd, arg),
+            "/jobs" => self
+                .jobs
+                .list()
+                .into_iter()
+                .filter(|(id, command, _)| {
+                    let fill = format!("kill {id}");
+                    needle.is_empty()
+                        || fill.contains(&needle)
+                        || command.to_lowercase().contains(&needle)
+                })
+                .map(|(id, command, elapsed)| {
+                    (
+                        format!("{cmd} kill {id}"),
+                        format!("{}s · {command}", elapsed.as_secs()),
+                    )
+                })
+                .collect(),
             _ => Vec::new(),
+        }
+    }
+
+    /// `/jobs`: list running background jobs with their ids.
+    fn show_jobs(&mut self) {
+        let jobs = self.jobs.list();
+        if jobs.is_empty() {
+            self.push(EntryKind::Notice, "No background jobs running".to_string());
+            return;
+        }
+        let mut text = String::from("Background jobs (/jobs kill <id> stops one):");
+        for (id, command, elapsed) in jobs {
+            text.push_str(&format!(
+                "
+#{id}  {}s  {command}",
+                elapsed.as_secs()
+            ));
+        }
+        self.push(EntryKind::Notice, text);
+    }
+
+    /// `/jobs kill <id>`: stop a background job (its wrapper still reports
+    /// a completion, which balances the status-bar counter).
+    fn kill_job(&mut self, arg: &str) {
+        let Ok(id) = arg.parse::<u64>() else {
+            self.push(EntryKind::Error, format!("Invalid job id `{arg}`"));
+            return;
+        };
+        if self.jobs.kill(id) {
+            self.push(EntryKind::Notice, format!("Killed background job #{id}"));
+        } else {
+            self.push(EntryKind::Error, format!("No background job #{id}"));
         }
     }
 

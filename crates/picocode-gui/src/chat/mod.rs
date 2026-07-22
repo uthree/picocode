@@ -41,6 +41,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/clear", "cmd_clear"),
     ("/compact", "cmd_compact"),
     ("/undo", "cmd_undo"),
+    ("/jobs", "cmd_jobs"),
     ("/model", "cmd_model"),
     ("/resume", "cmd_resume"),
     ("/read-only", "cmd_read_only"),
@@ -112,6 +113,9 @@ pub struct ChatView {
     /// Mid-turn steering queue shared with the worker: text sent while a
     /// turn runs is injected at the next tool-call boundary.
     steer: picocode_core::steer::SteerQueue,
+    /// Registry of running background jobs (list / kill). App-owned so
+    /// jobs survive worker respawns on model switches.
+    pub(super) jobs: picocode_core::tools::BackgroundJobs,
     cancel_tx: watch::Sender<()>,
     /// Handle of the tokio runtime the agent worker lives on, for spawning
     /// provider requests (model lists) and model switches.
@@ -197,6 +201,7 @@ impl ChatView {
         event_tx: mpsc::Sender<AgentEvent>,
         cmd_tx: mpsc::Sender<WorkerCmd>,
         steer: picocode_core::steer::SteerQueue,
+        jobs: picocode_core::tools::BackgroundJobs,
         cancel_tx: watch::Sender<()>,
         rt: tokio::runtime::Handle,
         window: &mut Window,
@@ -269,6 +274,7 @@ impl ChatView {
             event_tx,
             cmd_tx,
             steer,
+            jobs,
             cancel_tx,
             rt,
             running: false,
@@ -1025,6 +1031,7 @@ impl ChatView {
             "/undo" => {
                 let _ = self.cmd_tx.try_send(WorkerCmd::Undo);
             }
+            "/jobs" => self.toggle_menu(Menu::Background, window, cx),
             "/quit" | "/exit" => cx.quit(),
             "/read-only" => self.select_mode(Mode::ReadOnly, cx),
             "/edit" => self.select_mode(Mode::Edit, cx),
@@ -1132,10 +1139,11 @@ impl ChatView {
         let timeout = self.cfg.bash_timeout.clone();
         let event_tx = self.event_tx.clone();
         let cmd_tx = self.cmd_tx.clone();
+        let jobs = self.jobs.clone();
         let mut cancel = self.cancel_tx.subscribe();
         self.rt.spawn(async move {
             use rig::tool::Tool;
-            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone());
+            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone(), jobs);
             let call = tool.call(picocode_core::tools::BashArgs {
                 command: command.clone(),
             });
@@ -1372,7 +1380,12 @@ impl ChatView {
         // needs the runtime context entered.
         let (new_tx, new_steer) = {
             let _guard = self.rt.enter();
-            match agent::spawn(&new_cfg, self.event_tx.clone(), self.cancel_tx.subscribe()) {
+            match agent::spawn(
+                &new_cfg,
+                self.event_tx.clone(),
+                self.cancel_tx.subscribe(),
+                self.jobs.clone(),
+            ) {
                 Ok(pair) => pair,
                 Err(e) => {
                     self.push(
@@ -1423,6 +1436,15 @@ impl ChatView {
         self.save_last_model();
         cx.notify();
         true
+    }
+
+    /// Kill a background job from the jobs popup. Its wrapper still
+    /// reports a completion, which balances the status-bar counter.
+    pub(super) fn kill_job(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.jobs.kill(id) {
+            self.push(EntryKind::Notice, t!("bg_killed", id = id).to_string());
+        }
+        cx.notify();
     }
 
     /// Open the add-model dialog (the model menu's "+ add" row).
@@ -1594,7 +1616,12 @@ impl ChatView {
 
         let (new_tx, new_steer) = {
             let _guard = self.rt.enter();
-            match agent::spawn(&new_cfg, self.event_tx.clone(), self.cancel_tx.subscribe()) {
+            match agent::spawn(
+                &new_cfg,
+                self.event_tx.clone(),
+                self.cancel_tx.subscribe(),
+                self.jobs.clone(),
+            ) {
                 Ok(pair) => pair,
                 Err(e) => {
                     self.push(

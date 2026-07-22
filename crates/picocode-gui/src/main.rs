@@ -53,9 +53,10 @@ fn main() -> anyhow::Result<()> {
     // (e.g. a missing API key).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
+    let jobs = picocode_core::tools::BackgroundJobs::new();
     let (cmd_tx, steer) = {
         let _guard = rt.enter();
-        agent::spawn(&cfg, event_tx.clone(), cancel_rx)?
+        agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone())?
     };
     // The view keeps a runtime handle (model-list fetches, model switches)
     // and the event sender (so those background jobs report back through the
@@ -96,7 +97,7 @@ fn main() -> anyhow::Result<()> {
             cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
                     let mut view = chat::ChatView::new(
-                        cfg, event_rx, event_tx, cmd_tx, steer, cancel_tx, handle, window, cx,
+                        cfg, event_rx, event_tx, cmd_tx, steer, jobs, cancel_tx, handle, window, cx,
                     );
                     if let Some(prompt) = smoke {
                         if prompt.starts_with('!') {

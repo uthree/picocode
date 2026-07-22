@@ -9,7 +9,7 @@ mod plan;
 mod read;
 mod search;
 
-pub use bash::{Bash, BashArgs};
+pub use bash::{BackgroundJobs, Bash, BashArgs};
 pub use edit::EditFile;
 pub use fetch::WebFetch;
 pub use grep::Grep;

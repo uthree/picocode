@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rig::tool::Tool;
 use serde::Deserialize;
@@ -17,6 +19,68 @@ const MAX_OUTPUT_BYTES: usize = 20_000;
 /// Ids for backgrounded (timed-out) commands, unique across the process.
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
+/// One live background job in the registry.
+struct Job {
+    command: String,
+    started: Instant,
+    /// Aborting drops the reader task, whose child has `kill_on_drop` —
+    /// the process dies with it.
+    abort: tokio::task::AbortHandle,
+}
+
+/// Registry of running background jobs, shared between the bash tool (which
+/// registers timed-out commands) and the front ends (`/jobs` list / kill).
+/// One per app, so jobs survive worker respawns on model switches.
+#[derive(Clone, Default)]
+pub struct BackgroundJobs(Arc<Mutex<HashMap<u64, Job>>>);
+
+impl BackgroundJobs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&self, id: u64, command: String, abort: tokio::task::AbortHandle) {
+        self.0.lock().unwrap().insert(
+            id,
+            Job {
+                command,
+                started: Instant::now(),
+                abort,
+            },
+        );
+    }
+
+    fn remove(&self, id: u64) {
+        self.0.lock().unwrap().remove(&id);
+    }
+
+    /// Running jobs as (id, command, elapsed), oldest first.
+    pub fn list(&self) -> Vec<(u64, String, Duration)> {
+        let mut jobs: Vec<_> = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, j)| (*id, j.command.clone(), j.started.elapsed()))
+            .collect();
+        jobs.sort_by_key(|(id, ..)| *id);
+        jobs
+    }
+
+    /// Kill job `id`: aborting the reader task drops the child process
+    /// (`kill_on_drop`), and the job's wrapper reports a `BackgroundDone`
+    /// with a "killed" note. Returns whether the job existed.
+    pub fn kill(&self, id: u64) -> bool {
+        match self.0.lock().unwrap().remove(&id) {
+            Some(job) => {
+                job.abort.abort();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct BashArgs {
     pub command: String,
@@ -28,14 +92,22 @@ pub struct Bash {
     timeout: NumHandle,
     /// Where backgrounded commands report their completion.
     notify: mpsc::Sender<AgentEvent>,
+    /// Registry the timed-out commands are tracked in (`/jobs`).
+    jobs: BackgroundJobs,
 }
 
 impl Bash {
-    pub fn new(root: PathBuf, timeout: NumHandle, notify: mpsc::Sender<AgentEvent>) -> Self {
+    pub fn new(
+        root: PathBuf,
+        timeout: NumHandle,
+        notify: mpsc::Sender<AgentEvent>,
+        jobs: BackgroundJobs,
+    ) -> Self {
         Self {
             root,
             timeout,
             notify,
+            jobs,
         }
     }
 }
@@ -134,6 +206,8 @@ impl Tool for Bash {
                 let id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
                 let command = args.command.clone();
                 let notify = self.notify.clone();
+                let jobs = self.jobs.clone();
+                jobs.insert(id, command.clone(), task.abort_handle());
                 // Status-bar job counter; the matching decrement rides on
                 // `BackgroundDone` below.
                 let _ = notify
@@ -146,8 +220,12 @@ impl Tool for Bash {
                     let output = match task.await {
                         Ok(Ok(text)) => text,
                         Ok(Err(msg)) => format!("error: {msg}"),
+                        // Aborted = killed via `/jobs kill` (the registry
+                        // entry is already gone).
+                        Err(e) if e.is_cancelled() => "(killed by the user)".to_string(),
                         Err(e) => format!("error: command task failed: {e}"),
                     };
+                    jobs.remove(id);
                     let _ = notify
                         .send(AgentEvent::BackgroundDone {
                             id,
@@ -201,7 +279,57 @@ mod tests {
 
     fn tool(root: &std::path::Path, secs: u64) -> (Bash, mpsc::Receiver<AgentEvent>) {
         let (tx, rx) = mpsc::channel(8);
-        (Bash::new(root.to_path_buf(), NumHandle::new(secs), tx), rx)
+        (
+            Bash::new(
+                root.to_path_buf(),
+                NumHandle::new(secs),
+                tx,
+                BackgroundJobs::new(),
+            ),
+            rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn background_jobs_can_be_listed_and_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let jobs = BackgroundJobs::new();
+        let tool = Bash::new(
+            dir.path().to_path_buf(),
+            NumHandle::new(1),
+            tx,
+            jobs.clone(),
+        );
+        let out = tool
+            .call(BashArgs {
+                command: "sleep 30 && echo never".into(),
+            })
+            .await
+            .unwrap();
+        assert!(out.contains("moved to background"), "{out}");
+        let _ = rx.recv().await; // BackgroundStarted
+
+        // Listed with its command…
+        let listed = jobs.list();
+        assert_eq!(listed.len(), 1);
+        let (id, command, _) = &listed[0];
+        assert_eq!(command, "sleep 30 && echo never");
+
+        // …and killing reports a completion immediately (not after 30 s).
+        assert!(jobs.kill(*id));
+        assert!(!jobs.kill(*id)); // already gone
+        let done = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("BackgroundDone within 5s")
+            .expect("event");
+        match done {
+            AgentEvent::BackgroundDone { output, .. } => {
+                assert!(output.contains("killed"), "{output}");
+            }
+            _ => panic!("expected BackgroundDone"),
+        }
+        assert!(jobs.list().is_empty());
     }
 
     #[tokio::test]
