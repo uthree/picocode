@@ -42,6 +42,9 @@ pub enum AgentEvent {
     /// The conversation history was compacted into a summary.
     /// `messages == 0` means there was nothing to compact.
     Compacted { messages: usize, summary: String },
+    /// Old tool outputs were replaced with placeholders to relieve context
+    /// pressure (the soft stage before full compaction).
+    Pruned { outputs: usize },
     /// Output of a user-typed `!` shell command.
     ShellOutput { output: String },
     /// A bash command hit its timeout and was moved to the background

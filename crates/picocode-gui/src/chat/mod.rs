@@ -403,6 +403,9 @@ impl ChatView {
                 self.flush_queued();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
+            AgentEvent::Pruned { outputs } => {
+                self.push(EntryKind::Notice, t!("pruned", n = outputs).to_string());
+            }
             AgentEvent::Undone { summary } => {
                 if summary.is_empty() {
                     self.push(EntryKind::Notice, t!("undo_nothing").to_string());

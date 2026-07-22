@@ -1605,6 +1605,12 @@ impl App {
                 self.close_blocks();
                 self.push(EntryKind::ToolOut, output);
             }
+            AgentEvent::Pruned { outputs } => {
+                self.push(
+                    EntryKind::Notice,
+                    format!("Trimmed {outputs} old tool outputs to save context"),
+                );
+            }
             AgentEvent::Undone { summary } => {
                 self.close_blocks();
                 if summary.is_empty() {

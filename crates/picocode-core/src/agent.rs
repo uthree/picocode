@@ -206,10 +206,15 @@ async fn worker<M>(
     M::StreamingResponse: GetTokenUsage,
 {
     let mut history: Vec<Message> = Vec::new();
+    // Context tokens of the last completion request, for the pruning stage.
+    let mut last_ctx: u64 = 0;
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
-            WorkerCmd::Clear => history.clear(),
+            WorkerCmd::Clear => {
+                history.clear();
+                last_ctx = 0;
+            }
             WorkerCmd::Undo => {
                 let restored = journal.undo();
                 let summary = undo_summary(&restored);
@@ -234,6 +239,19 @@ async fn worker<M>(
             }
             WorkerCmd::SeedHistory(h) => history = h,
             WorkerCmd::Prompt { text, attachments } => {
+                // Soft context stage, before full compaction is needed: at
+                // 2/3 of the auto-compact threshold, swap old tool outputs
+                // for placeholders (recent turns stay untouched).
+                let pct = cfg.auto_compact.get();
+                if pct > 0 && last_ctx >= cfg.context_window.saturating_mul(pct * 2 / 3) / 100 {
+                    let outputs = crate::history::prune_tool_outputs(
+                        &mut history,
+                        crate::history::KEEP_RECENT_TURNS,
+                    );
+                    if outputs > 0 {
+                        let _ = event_tx.send(AgentEvent::Pruned { outputs }).await;
+                    }
+                }
                 journal.begin_turn();
                 run_once(
                     &agent,
@@ -243,6 +261,7 @@ async fn worker<M>(
                     &event_tx,
                     &cfg,
                     &mut cancel_rx,
+                    &mut last_ctx,
                 )
                 .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
@@ -255,8 +274,10 @@ async fn worker<M>(
     }
 }
 
-/// Ask the tool-less compactor agent to summarize the history, then replace the
-/// history with that summary. On failure the history is left untouched.
+/// Ask the tool-less compactor agent to summarize the messages older than
+/// the last [`crate::history::KEEP_RECENT_TURNS`] user turns, then replace
+/// that older part with the summary — the recent turns (the current task's
+/// context) survive verbatim. On failure the history is left untouched.
 async fn compact<M>(
     compactor: &Agent<M>,
     history: &mut Vec<Message>,
@@ -265,7 +286,9 @@ async fn compact<M>(
 ) where
     M: CompletionModel + 'static,
 {
-    if history.is_empty() {
+    let boundary = crate::history::keep_boundary(history, crate::history::KEEP_RECENT_TURNS);
+    if boundary == 0 {
+        // Nothing older than the kept turns: nothing to compact.
         let _ = event_tx
             .send(AgentEvent::Compacted {
                 messages: 0,
@@ -275,7 +298,8 @@ async fn compact<M>(
         return;
     }
 
-    let messages = history.len();
+    let old: Vec<Message> = history[..boundary].to_vec();
+    let messages = old.len();
     let _ = cancel.borrow_and_update(); // discard stale signals
     let result = tokio::select! {
         biased;
@@ -283,7 +307,7 @@ async fn compact<M>(
             let _ = event_tx.send(AgentEvent::Cancelled).await;
             return; // history untouched
         }
-        res = async { compactor.prompt(COMPACT_REQUEST).history(history.clone()).await } => res,
+        res = async { compactor.prompt(COMPACT_REQUEST).history(old).await } => res,
     };
     match result {
         Ok(summary) => {
@@ -296,6 +320,7 @@ async fn compact<M>(
                     .await;
                 return;
             }
+            let tail: Vec<Message> = history.split_off(boundary);
             history.clear();
             history.push(Message::user(format!(
                 "Summary of our conversation so far (earlier messages were compacted to save context):\n\n{summary}"
@@ -303,6 +328,7 @@ async fn compact<M>(
             history.push(Message::assistant(
                 "Understood — I'll continue from that summary.",
             ));
+            history.extend(tail);
             let _ = event_tx
                 .send(AgentEvent::Compacted { messages, summary })
                 .await;
@@ -326,6 +352,7 @@ async fn run_once<M>(
     event_tx: &mpsc::Sender<AgentEvent>,
     cfg: &Config,
     cancel: &mut watch::Receiver<()>,
+    last_ctx: &mut u64,
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
@@ -467,6 +494,7 @@ async fn run_once<M>(
                     }
                 }
                 Ok(MultiTurnStreamItem::CompletionCall(call)) => {
+                    *last_ctx = call.usage.input_tokens;
                     let _ = event_tx
                         .send(AgentEvent::Usage {
                             input: call.usage.input_tokens,

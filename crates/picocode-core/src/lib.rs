@@ -13,6 +13,7 @@ pub mod attachment;
 pub mod config;
 pub mod event;
 pub mod git;
+pub mod history;
 pub mod models;
 pub mod report;
 pub mod session;

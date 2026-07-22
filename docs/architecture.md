@@ -16,6 +16,8 @@ crates/
                    multimodal message content, with per-provider support
                    checks
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
+    history.rs   — context savings: old-tool-output pruning and the
+                   keep-recent-turns boundary used by compaction
     models.rs    — provider model-list queries backing /model
     report.rs    — /status and /permissions text shared by both front ends
     session.rs   — session autosave/load backing /resume
