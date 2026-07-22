@@ -560,22 +560,24 @@ fn draw_session_picker(f: &mut Frame, picker: &SessionPicker) {
 
 fn draw_model_picker(f: &mut Frame, picker: &ModelPicker) {
     let screen = f.area();
-    // rows + the "+ add" row + borders + hint line, capped to the screen.
-    let area = dialog_area(
-        screen,
-        (30, 70),
-        (picker.items.len().max(1) as u16 + 4).max(6),
-    );
+    let filtered = picker.filtered();
+    // search line + rows + the "+ add" row + borders + hint line.
+    let area = dialog_area(screen, (30, 70), (filtered.len().max(1) as u16 + 5).max(7));
     let inner_width = area.width.saturating_sub(2) as usize;
-    let visible = area.height.saturating_sub(3) as usize;
+    let visible = area.height.saturating_sub(4) as usize;
     // Keep the selection inside the window when the list is long.
     let offset = (picker.selected + 1).saturating_sub(visible);
 
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line> = vec![Line::from(vec![
+        Span::styled(" search: ", Style::new().fg(Color::DarkGray)),
+        Span::styled(format!("{}▏", picker.filter), Style::new().fg(Color::Cyan)),
+    ])];
     if picker.items.is_empty() {
         lines.push(hint_line(" fetching the provider's model list…"));
+    } else if filtered.is_empty() {
+        lines.push(hint_line(" no match"));
     }
-    for (i, item) in picker.items.iter().enumerate().skip(offset).take(visible) {
+    for (i, item) in filtered.iter().enumerate().skip(offset).take(visible) {
         let marker = if item.active { "▸" } else { " " };
         let style = if item.active {
             Style::new().fg(Color::Cyan)
@@ -592,11 +594,11 @@ fn draw_model_picker(f: &mut Frame, picker: &ModelPicker) {
     // Synthetic last row opening the add-model form.
     lines.push(list_line(
         "  + add a provider / model…".to_string(),
-        picker.selected == picker.items.len(),
+        picker.selected == filtered.len(),
         inner_width,
         Style::new().fg(Color::DarkGray),
     ));
-    lines.push(hint_line(" ↑↓ select · Enter switch · Esc cancel"));
+    lines.push(hint_line(" type to search · ↑↓ · Enter switch · Esc close"));
     render_dialog(f, "Select model", Color::Cyan, area, lines);
 }
 

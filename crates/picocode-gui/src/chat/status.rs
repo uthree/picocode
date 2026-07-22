@@ -51,7 +51,9 @@ impl ChatView {
             .rounded_md()
             .px_1()
             .hover(|s| s.bg(theme.muted))
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Context, cx)))
+            .on_click(
+                cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Context, window, cx)),
+            )
             .h_flex()
             .gap_2()
             .items_center()
@@ -110,7 +112,7 @@ impl ChatView {
             .text_color(gpui::white())
             .hover(|s| s.opacity(0.85))
             .child(mode_name(mode))
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Mode, cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)));
         let model_chip = div()
             .id("model-chip")
             .cursor_pointer()
@@ -118,7 +120,7 @@ impl ChatView {
             .px_2()
             .hover(|s| s.bg(theme.muted))
             .child(self.cfg.model_label())
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_menu(Menu::Model, cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Model, window, cx)));
 
         div()
             .h_flex()
@@ -142,11 +144,9 @@ impl ChatView {
                             .hover(|s| s.bg(theme.muted))
                             .text_color(theme.warning)
                             .child(t!("bg_jobs", n = self.bg_jobs.len()).to_string())
-                            .on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.toggle_menu(Menu::Background, cx)
-                                }),
-                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_menu(Menu::Background, window, cx)
+                            }))
                     })),
             )
             .child(
@@ -201,14 +201,23 @@ impl ChatView {
                 }
             }
             Menu::Model => {
-                let choices = models::model_choices(
+                let needle = self.model_filter.read(cx).value().trim().to_lowercase();
+                let choices: Vec<_> = models::model_choices(
                     &self.cfg.models,
                     self.cfg.active_model.as_deref(),
                     self.cfg.provider,
                     self.cfg.base_url.as_deref(),
                     &self.cfg.model,
                     &self.available_models,
-                );
+                )
+                .into_iter()
+                .filter(|c| {
+                    needle.is_empty()
+                        || c.name.to_lowercase().contains(&needle)
+                        || c.detail.to_lowercase().contains(&needle)
+                })
+                .collect();
+                panel = panel.child(gpui_component::input::Input::new(&self.model_filter).small());
                 if choices.is_empty() {
                     panel = panel.child(
                         div()

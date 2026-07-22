@@ -138,6 +138,8 @@ pub struct ChatView {
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
     add_model: Option<AddModel>,
+    /// Live search box at the top of the model menu.
+    pub(super) model_filter: Entity<InputState>,
     /// Reasoning entries the user expanded (indices into `entries`);
     /// everything else renders collapsed to a one-line preview.
     expanded_reasoning: std::collections::HashSet<usize>,
@@ -208,6 +210,15 @@ impl ChatView {
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe_in(&input, window, Self::on_input_event)
             .detach();
+        let model_filter =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("filter_models").to_string()));
+        // Re-render the menu as the filter text changes.
+        cx.subscribe_in(
+            &model_filter,
+            window,
+            |_this: &mut Self, _, _: &InputEvent, _, cx| cx.notify(),
+        )
+        .detach();
 
         // Follow live system light/dark switches while the preference is
         // "system" (the startup sync happens in gpui_component::init).
@@ -272,6 +283,7 @@ impl ChatView {
             session_picker: None,
             settings_open: false,
             add_model: None,
+            model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
             saved,
@@ -742,7 +754,13 @@ impl ChatView {
 
     /// A `/config` row change. Every change applies immediately. Mirrors
     /// the TUI's `/config` dialog, plus the GUI-only theme row.
-    fn adjust_setting(&mut self, row: usize, delta: i64, cx: &mut Context<Self>) {
+    fn adjust_setting(
+        &mut self,
+        row: usize,
+        delta: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match row {
             0 => self.cycle_theme(delta, cx),
             // Same cycle as the TUI: bypass stays menu/command-only, and
@@ -775,7 +793,7 @@ impl ChatView {
             // Model: close the dialog and open the model menu.
             8 => {
                 self.settings_open = false;
-                self.toggle_menu(Menu::Model, cx);
+                self.toggle_menu(Menu::Model, window, cx);
             }
             _ => {}
         }
@@ -964,7 +982,7 @@ impl ChatView {
             "/edit" => self.select_mode(Mode::Edit, cx),
             "/plan" => self.select_mode(Mode::Plan, cx),
             "/bypass" => self.select_mode(Mode::Bypass, cx),
-            "/model" => self.toggle_menu(Menu::Model, cx),
+            "/model" => self.toggle_menu(Menu::Model, window, cx),
             "/resume" => self.open_session_picker(cx),
             "/config" | "/settings" => self.settings_open = true,
             "/status" | "/usage" => self.show_status(),
@@ -1198,6 +1216,28 @@ impl ChatView {
             cx.notify();
             return;
         }
+        // A partial name matching exactly one candidate completes itself.
+        let name = match models::resolve_partial(name, &self.cfg.models, &self.available_models) {
+            models::PartialMatch::Unique(full) => {
+                if full != name {
+                    self.push(
+                        EntryKind::Notice,
+                        t!("model_matched", partial = name, full = full).to_string(),
+                    );
+                }
+                full
+            }
+            models::PartialMatch::Ambiguous(matches) => {
+                self.push(
+                    EntryKind::Error,
+                    t!("model_ambiguous", name = name, matches = matches.join(", ")).to_string(),
+                );
+                cx.notify();
+                return;
+            }
+            models::PartialMatch::None => name.to_string(),
+        };
+        let name = name.as_str();
         let mut new_cfg = self.cfg.clone();
         match self.cfg.models.iter().find(|m| m.name == name) {
             Some(entry) => {
@@ -1549,13 +1589,19 @@ impl ChatView {
         cx.notify();
     }
 
-    fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+    fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu == Some(menu) {
             self.menu = None;
         } else {
             self.menu = Some(menu);
             if menu == Menu::Model {
                 self.refresh_models();
+                // A fresh search per open; focus it so typing filters
+                // immediately.
+                self.model_filter.update(cx, |state, cx| {
+                    state.set_value("", window, cx);
+                    state.focus(window, cx);
+                });
             }
         }
         cx.notify();

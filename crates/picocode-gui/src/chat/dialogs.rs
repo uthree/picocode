@@ -549,9 +549,9 @@ impl ChatView {
             let controls: AnyElement = if ix == model_row {
                 Button::new("cfg-model")
                     .label(value)
-                    .on_click(
-                        cx.listener(move |this, _, _, cx| this.adjust_setting(model_row, 1, cx)),
-                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.adjust_setting(model_row, 1, window, cx)
+                    }))
                     .into_any_element()
             } else {
                 div()
@@ -562,18 +562,18 @@ impl ChatView {
                         Button::new(SharedString::from(format!("cfg-dec-{ix}")))
                             .ghost()
                             .label("−")
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.adjust_setting(ix, -1, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.adjust_setting(ix, -1, window, cx)
+                            })),
                     )
                     .child(div().min_w(px(110.)).text_center().child(value))
                     .child(
                         Button::new(SharedString::from(format!("cfg-inc-{ix}")))
                             .ghost()
                             .label("+")
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.adjust_setting(ix, 1, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.adjust_setting(ix, 1, window, cx)
+                            })),
                     )
                     .into_any_element()
             };

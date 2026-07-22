@@ -112,9 +112,29 @@ pub struct SessionPicker {
 
 /// State of the `/model` selection dialog. The list is followed by a
 /// synthetic "+ add a provider / model…" row opening [`AddModelForm`].
+/// Typing filters the list live.
 pub struct ModelPicker {
     pub items: Vec<ModelChoice>,
+    /// Selected index within the *filtered* view (the add row sits at
+    /// `filtered().len()`).
     pub selected: usize,
+    /// Live search text; matches name or detail, case-insensitive.
+    pub filter: String,
+}
+
+impl ModelPicker {
+    /// The rows the dialog shows: items matching the filter.
+    pub fn filtered(&self) -> Vec<&ModelChoice> {
+        let needle = self.filter.to_lowercase();
+        self.items
+            .iter()
+            .filter(|c| {
+                needle.is_empty()
+                    || c.name.to_lowercase().contains(&needle)
+                    || c.detail.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
 }
 
 /// State of the add-model form (opened from the `/model` dialog): pick a
@@ -501,16 +521,17 @@ impl App {
             return;
         }
 
-        // The /model dialog captures navigation keys while open. The list
-        // is followed by a synthetic "+ add a provider / model…" row.
+        // The /model dialog captures keys while open: typing searches, the
+        // filtered list is followed by a synthetic "+ add…" row.
         if let Some(picker) = &mut self.model_picker {
-            let count = picker.items.len() + 1;
+            let count = picker.filtered().len() + 1;
             match key.code {
                 KeyCode::Up => picker.selected = (picker.selected + count - 1) % count,
                 KeyCode::Down => picker.selected = (picker.selected + 1) % count,
                 KeyCode::Enter => {
-                    if picker.selected < picker.items.len() {
-                        let name = picker.items[picker.selected].name.clone();
+                    let filtered = picker.filtered();
+                    if picker.selected < filtered.len() {
+                        let name = filtered[picker.selected].name.clone();
                         self.model_picker = None;
                         self.switch_model(&name).await;
                     } else {
@@ -518,7 +539,15 @@ impl App {
                         self.open_add_model();
                     }
                 }
-                KeyCode::Esc | KeyCode::Char('q') => self.model_picker = None,
+                KeyCode::Esc => self.model_picker = None,
+                KeyCode::Char(c) => {
+                    picker.filter.push(c);
+                    picker.selected = 0;
+                }
+                KeyCode::Backspace => {
+                    picker.filter.pop();
+                    picker.selected = 0;
+                }
                 _ => {}
             }
             return;
@@ -944,7 +973,11 @@ impl App {
         }
         let items = self.model_choices();
         let selected = items.iter().position(|c| c.active).unwrap_or(0);
-        self.model_picker = Some(ModelPicker { items, selected });
+        self.model_picker = Some(ModelPicker {
+            items,
+            selected,
+            filter: String::new(),
+        });
         self.refresh_models();
     }
 
@@ -968,18 +1001,30 @@ impl App {
         let Some(picker) = &self.model_picker else {
             return;
         };
-        let keep = picker.items.get(picker.selected).map(|c| c.name.clone());
+        let filter = picker.filter.clone();
+        let keep = picker
+            .filtered()
+            .get(picker.selected)
+            .map(|c| c.name.clone());
         let items = self.model_choices();
+        let rebuilt = ModelPicker {
+            items,
+            selected: 0,
+            filter,
+        };
         let selected = keep
-            .and_then(|k| items.iter().position(|c| c.name == k))
-            .or_else(|| items.iter().position(|c| c.active))
+            .and_then(|k| rebuilt.filtered().iter().position(|c| c.name == k))
             .unwrap_or(0);
-        self.model_picker = Some(ModelPicker { items, selected });
+        self.model_picker = Some(ModelPicker {
+            selected,
+            ..rebuilt
+        });
     }
 
     /// `/model <name>`: spawn a worker for the named entry — or for a model
     /// the provider reported serving — and carry the conversation history
-    /// over to it.
+    /// over to it. A partial name that matches exactly one candidate is
+    /// completed automatically.
     async fn switch_model(&mut self, name: &str) {
         if self.running > 0 {
             self.push(
@@ -988,6 +1033,27 @@ impl App {
             );
             return;
         }
+        let name = match picocode_core::models::resolve_partial(
+            name,
+            &self.cfg.models,
+            &self.available_models,
+        ) {
+            picocode_core::models::PartialMatch::Unique(full) => {
+                if full != name {
+                    self.push(EntryKind::Notice, format!("`{name}` matched {full}"));
+                }
+                full
+            }
+            picocode_core::models::PartialMatch::Ambiguous(matches) => {
+                self.push(
+                    EntryKind::Error,
+                    format!("`{name}` is ambiguous: {}", matches.join(", ")),
+                );
+                return;
+            }
+            picocode_core::models::PartialMatch::None => name.to_string(),
+        };
+        let name = name.as_str();
         let mut new_cfg = self.cfg.clone();
         match self.cfg.models.iter().find(|m| m.name == name) {
             Some(entry) => {

@@ -166,6 +166,48 @@ fn parse_names(body: &serde_json::Value, provider: Provider) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Outcome of resolving a partial model name (see [`resolve_partial`]).
+#[derive(Debug, PartialEq, Eq)]
+pub enum PartialMatch {
+    /// Nothing matched.
+    None,
+    /// Exactly one candidate matched: its canonical name (an entry name or
+    /// a served model id), ready for the by-name switch.
+    Unique(String),
+    /// Several candidates matched (listed for the error message).
+    Ambiguous(Vec<String>),
+}
+
+/// Resolve a possibly-partial model name against the switch candidates
+/// (configured entry names + served model ids). An exact match wins
+/// outright; otherwise a case-insensitive substring match must be unique.
+pub fn resolve_partial(
+    name: &str,
+    entries: &[crate::config::ModelEntry],
+    available: &[String],
+) -> PartialMatch {
+    let candidates: Vec<&str> = entries
+        .iter()
+        .map(|m| m.name.as_str())
+        .chain(available.iter().map(String::as_str))
+        .collect();
+    if candidates.iter().any(|c| *c == name) {
+        return PartialMatch::Unique(name.to_string());
+    }
+    let needle = name.to_lowercase();
+    let mut matches: Vec<&str> = candidates
+        .iter()
+        .copied()
+        .filter(|c| c.to_lowercase().contains(&needle))
+        .collect();
+    matches.dedup();
+    match matches.len() {
+        0 => PartialMatch::None,
+        1 => PartialMatch::Unique(matches[0].to_string()),
+        _ => PartialMatch::Ambiguous(matches.into_iter().map(str::to_string).collect()),
+    }
+}
+
 /// A ready-to-paste `[[models]]` snippet for an ad-hoc selection, shown
 /// after switching via the add-model form so the choice can be made
 /// permanent in picocode.toml.
@@ -187,6 +229,46 @@ pub fn toml_snippet(provider: Provider, model: &str, base_url: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_partial_matches_uniquely() {
+        let entries = vec![crate::config::ModelEntry {
+            name: "local".into(),
+            provider: Provider::Ollama,
+            model: "qwen3:4b".into(),
+            base_url: None,
+            context_window: None,
+        }];
+        let available = vec![
+            "qwen3:4b".to_string(),
+            "qwen3:8b".to_string(),
+            "gemma4:e2b".to_string(),
+        ];
+
+        // Exact name wins even when it is a substring of others.
+        assert_eq!(
+            resolve_partial("qwen3:4b", &entries, &available),
+            PartialMatch::Unique("qwen3:4b".into())
+        );
+        // Unique substring (case-insensitive) resolves.
+        assert_eq!(
+            resolve_partial("GEMMA", &entries, &available),
+            PartialMatch::Unique("gemma4:e2b".into())
+        );
+        assert_eq!(
+            resolve_partial("loc", &entries, &available),
+            PartialMatch::Unique("local".into())
+        );
+        // Ambiguous and missing names are reported as such.
+        assert!(matches!(
+            resolve_partial("qwen", &entries, &available),
+            PartialMatch::Ambiguous(_)
+        ));
+        assert_eq!(
+            resolve_partial("nope", &entries, &available),
+            PartialMatch::None
+        );
+    }
 
     #[test]
     fn toml_snippet_is_pasteable() {
