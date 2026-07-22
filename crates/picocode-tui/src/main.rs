@@ -15,6 +15,7 @@ async fn main() -> anyhow::Result<()> {
     let args = config::Args::parse();
     let smoke = args.smoke.clone();
     let smoke_attach = args.smoke_attach.clone();
+    let smoke_steer = args.smoke_steer.clone();
     let print = args.print.clone();
     let print_attach = args.attach.clone();
     let mut cfg = config::Config::from_args(args)?;
@@ -30,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     // (e.g. a missing API key).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
-    let cmd_tx = agent::spawn(&cfg, event_tx.clone(), cancel_rx)?;
+    let (cmd_tx, steer) = agent::spawn(&cfg, event_tx.clone(), cancel_rx)?;
 
     if let Some(prompt) = smoke {
         let attachments = smoke_attach
@@ -38,6 +39,14 @@ async fn main() -> anyhow::Result<()> {
             .and_then(picocode_core::attachment::Attachment::detect)
             .into_iter()
             .collect();
+        // E2E for mid-turn steering: push the text while the turn runs.
+        if let Some(text) = smoke_steer {
+            let steer = steer.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                steer.push(text);
+            });
+        }
         return run_smoke(prompt, attachments, event_rx, cmd_tx).await;
     }
     if let Some(prompt) = print {
@@ -72,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
         std::io::stdout(),
         ratatui::crossterm::event::EnableBracketedPaste
     );
-    let result = app::App::new(&cfg, event_tx, cmd_tx, cancel_tx)
+    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, cancel_tx)
         .run(terminal, event_rx)
         .await;
     let _ = ratatui::crossterm::execute!(

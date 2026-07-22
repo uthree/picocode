@@ -201,6 +201,9 @@ pub struct App {
     event_tx: mpsc::Sender<AgentEvent>,
     /// Command channel of the current worker (replaced on model switch).
     cmd_tx: mpsc::Sender<WorkerCmd>,
+    /// Mid-turn steering queue shared with the worker: text sent while a
+    /// turn runs is injected at the next tool-call boundary.
+    steer: picocode_core::steer::SteerQueue,
     /// Signals the worker to abort the generation in progress (Esc).
     cancel_tx: watch::Sender<()>,
     /// Id of the session being written; a fresh one is issued by /clear.
@@ -223,6 +226,7 @@ impl App {
         cfg: &Config,
         event_tx: mpsc::Sender<AgentEvent>,
         cmd_tx: mpsc::Sender<WorkerCmd>,
+        steer: picocode_core::steer::SteerQueue,
         cancel_tx: watch::Sender<()>,
     ) -> Self {
         let mut app = Self {
@@ -256,6 +260,7 @@ impl App {
             cfg: cfg.clone(),
             event_tx,
             cmd_tx,
+            steer,
             cancel_tx,
             session_id: session::new_id(),
             sessions_dir: session::sessions_dir(&cfg.root),
@@ -726,6 +731,15 @@ impl App {
             lang: None,
             attachments: attachments.iter().map(|a| a.name()).collect(),
         });
+        // Mid-turn text goes through the steering queue: the worker injects
+        // it at the next tool-call boundary (or runs it as a follow-up
+        // prompt of the same turn), instead of waiting in the command
+        // channel until the turn ends. Attachments can't ride a tool
+        // result, so those still queue as a regular prompt.
+        if self.running > 0 && attachments.is_empty() {
+            self.steer.push(prompt);
+            return;
+        }
         if self
             .cmd_tx
             .send(WorkerCmd::Prompt {
@@ -984,12 +998,12 @@ impl App {
 
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
-        let new_tx = match picocode_core::agent::spawn(
+        let (new_tx, new_steer) = match picocode_core::agent::spawn(
             &new_cfg,
             self.event_tx.clone(),
             self.cancel_tx.subscribe(),
         ) {
-            Ok(tx) => tx,
+            Ok(pair) => pair,
             Err(e) => {
                 self.push(
                     EntryKind::Error,
@@ -1011,6 +1025,7 @@ impl App {
         let endpoint_changed =
             new_cfg.provider != self.cfg.provider || new_cfg.base_url != self.cfg.base_url;
         self.cmd_tx = new_tx; // dropping the old sender shuts the old worker down
+        self.steer = new_steer;
         self.cfg = new_cfg;
         self.model_label = self.cfg.model_label();
         self.push(

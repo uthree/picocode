@@ -94,6 +94,11 @@ on macOS ones).
   and cyan while typing a `/` command.
 - **Workdir title**: the input box's top border shows the project directory
   (`~`-shortened) and the git branch, refreshed after each turn.
+- **Mid-turn messages**: a message sent while the model is still working is
+  steered into the running turn — delivered at the next tool-call boundary
+  (or as an immediate follow-up prompt), so the model adjusts course without
+  waiting for the turn to end. Messages with staged attachments wait for
+  the turn to finish instead.
 - **Long-running commands**: a bash command (model-invoked or `!`) still
   running after the configured timeout becomes a background job instead of
   being killed; the status bar shows `⏳ N bg` while jobs are running. When

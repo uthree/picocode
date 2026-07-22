@@ -22,6 +22,8 @@ crates/
     report.rs    — /status and /permissions text shared by both front ends
     session.rs   — session autosave/load backing /resume
     state.rs     — per-project persisted state (last-used model)
+    steer.rs     — mid-turn steering queue + rig hook (injects user
+                   messages at tool-call boundaries)
     tools/       — built-in tool implementations
     transcript.rs — renderer-agnostic transcript entries (Entry/EntryKind)
                    and diff-line parsing shared by both front ends

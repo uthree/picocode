@@ -20,14 +20,17 @@ use crate::event::{AgentEvent, WorkerCmd};
 use crate::tools;
 
 /// Build the agent for the configured provider and spawn the worker task.
-/// Returns the command channel the TUI uses to drive it. A signal on
-/// `cancel_rx` aborts the generation in progress (Esc in the TUI).
+/// Returns the command channel the front end uses to drive it, plus the
+/// steering queue for mid-turn user messages (delivered at the next
+/// tool-call boundary). A signal on `cancel_rx` aborts the generation in
+/// progress (Esc in the TUI).
 pub fn spawn(
     cfg: &Config,
     event_tx: mpsc::Sender<AgentEvent>,
     cancel_rx: watch::Receiver<()>,
-) -> anyhow::Result<mpsc::Sender<WorkerCmd>> {
+) -> anyhow::Result<(mpsc::Sender<WorkerCmd>, crate::steer::SteerQueue)> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
+    let steer = crate::steer::SteerQueue::new();
     let cfg = cfg.clone();
 
     // The concrete `Agent<M>` type differs per provider, so the builder chain
@@ -77,7 +80,14 @@ pub fn spawn(
                 .max_tokens(8192)
                 .build();
             tokio::spawn(worker(
-                agent, compactor, cmd_rx, event_tx, cfg, cancel_rx, journal,
+                agent,
+                compactor,
+                cmd_rx,
+                event_tx,
+                cfg,
+                cancel_rx,
+                journal,
+                steer.clone(),
             ));
         }};
     }
@@ -130,7 +140,7 @@ pub fn spawn(
             spawn_for!(client.completion_model(&cfg.model));
         }
     }
-    Ok(cmd_tx)
+    Ok((cmd_tx, steer))
 }
 
 fn system_prompt(cfg: &Config) -> String {
@@ -201,6 +211,7 @@ async fn worker<M>(
     cfg: Config,
     mut cancel_rx: watch::Receiver<()>,
     journal: crate::undo::UndoJournal,
+    steer: crate::steer::SteerQueue,
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
@@ -253,7 +264,19 @@ async fn worker<M>(
                     }
                 }
                 journal.begin_turn();
-                run_once(
+                // A steer message that raced the previous turn's end (pushed
+                // just as it finished) joins this prompt instead of being
+                // injected into an unrelated tool result later.
+                let text = {
+                    let mut pending = steer.drain();
+                    if pending.is_empty() {
+                        text
+                    } else {
+                        pending.push(text);
+                        pending.join("\n\n")
+                    }
+                };
+                let mut cancelled = run_once(
                     &agent,
                     &mut history,
                     text,
@@ -262,8 +285,41 @@ async fn worker<M>(
                     &cfg,
                     &mut cancel_rx,
                     &mut last_ctx,
+                    &steer,
                 )
                 .await;
+                // Steer messages that missed every tool boundary (or arrived
+                // after the last one) run as follow-up prompts of the same
+                // turn, so they are never silently dropped.
+                while !cancelled {
+                    let leftover = steer.drain();
+                    if leftover.is_empty() {
+                        break;
+                    }
+                    cancelled = run_once(
+                        &agent,
+                        &mut history,
+                        leftover.join("\n\n"),
+                        Vec::new(),
+                        &event_tx,
+                        &cfg,
+                        &mut cancel_rx,
+                        &mut last_ctx,
+                        &steer,
+                    )
+                    .await;
+                }
+                if cancelled {
+                    let dropped = steer.drain();
+                    if !dropped.is_empty() {
+                        let _ = event_tx
+                            .send(AgentEvent::Error(format!(
+                                "stopped — {} pending message(s) were not delivered",
+                                dropped.len()
+                            )))
+                            .await;
+                    }
+                }
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
             WorkerCmd::Compact => {
@@ -343,6 +399,8 @@ async fn compact<M>(
     }
 }
 
+/// Drive one prompt through the multi-turn stream. Returns whether the run
+/// was cancelled (Stop/Esc), so the worker can skip steer follow-ups.
 #[allow(clippy::too_many_arguments)]
 async fn run_once<M>(
     agent: &Agent<M>,
@@ -353,7 +411,9 @@ async fn run_once<M>(
     cfg: &Config,
     cancel: &mut watch::Receiver<()>,
     last_ctx: &mut u64,
-) where
+    steer: &crate::steer::SteerQueue,
+) -> bool
+where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
 {
@@ -424,6 +484,7 @@ async fn run_once<M>(
             .stream_chat(user_msg.clone(), history.clone())
             .max_turns(usize::MAX)
             .add_hook(hook)
+            .add_hook(crate::steer::SteerHook::new(steer.clone()))
             .await;
 
         let mut reasoning_delta_seen = false;
@@ -549,6 +610,7 @@ async fn run_once<M>(
             tokio::select! {
                 biased;
                 _ = cancel.changed() => {
+                    cancelled = true;
                     let _ = event_tx.send(AgentEvent::Cancelled).await;
                     break 'attempts;
                 }
@@ -564,6 +626,7 @@ async fn run_once<M>(
         // (attachments included) so the next turn still has it as context.
         history.push(user_msg);
     }
+    cancelled
 }
 
 /// Backoff schedule for transient provider failures at the start of a turn.

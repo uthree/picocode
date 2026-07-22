@@ -18,6 +18,7 @@ pub mod models;
 pub mod report;
 pub mod session;
 pub mod state;
+pub mod steer;
 pub mod tools;
 pub mod transcript;
 pub mod undo;

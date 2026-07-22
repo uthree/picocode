@@ -49,9 +49,12 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   approval — you typed it); the output joins the transcript and the model's
   history like in the TUI. The input border turns yellow while typing a
   `!` command and cyan for a `/` command. Messages sent while the agent
-  is still generating are not rejected: they queue above the input box
-  and are sent one per completed turn (a queued `!` command runs when
-  its turn comes); pressing Stop returns them to the input box instead.
+  is still generating are not rejected: text-only messages are steered
+  into the running turn — delivered at the next tool-call boundary (or as
+  an immediate follow-up), so the model adjusts course without waiting —
+  while messages with attachments (and `!` commands) queue above the
+  input box and run one per completed turn; pressing Stop returns the
+  queued ones to the input box.
 - **Attachments**: drop files from the Finder anywhere on the window, or
   click the 📎 button next to the input for a file picker. Images (and,
   depending on the provider, audio and PDFs — Ollama takes images only)

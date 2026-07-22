@@ -88,6 +88,9 @@ pub struct ChatView {
     input: Entity<InputState>,
     event_tx: mpsc::Sender<AgentEvent>,
     cmd_tx: mpsc::Sender<WorkerCmd>,
+    /// Mid-turn steering queue shared with the worker: text sent while a
+    /// turn runs is injected at the next tool-call boundary.
+    steer: picocode_core::steer::SteerQueue,
     cancel_tx: watch::Sender<()>,
     /// Handle of the tokio runtime the agent worker lives on, for spawning
     /// provider requests (model lists) and model switches.
@@ -168,6 +171,7 @@ impl ChatView {
         mut event_rx: mpsc::Receiver<AgentEvent>,
         event_tx: mpsc::Sender<AgentEvent>,
         cmd_tx: mpsc::Sender<WorkerCmd>,
+        steer: picocode_core::steer::SteerQueue,
         cancel_tx: watch::Sender<()>,
         rt: tokio::runtime::Handle,
         window: &mut Window,
@@ -230,6 +234,7 @@ impl ChatView {
             input,
             event_tx,
             cmd_tx,
+            steer,
             cancel_tx,
             rt,
             running: false,
@@ -940,11 +945,19 @@ impl ChatView {
                     self.run_shell(text);
                 }
             }
-            // Mid-turn prompts are held back (shown above the input box)
-            // and sent one per completed turn, instead of being rejected.
+            // Mid-turn text goes through the steering queue: the worker
+            // injects it at the next tool-call boundary (or runs it as a
+            // follow-up prompt of the same turn). Messages with attachments
+            // can't ride a tool result, so those are held back and sent
+            // one per completed turn as before.
             _ if self.running => {
                 let attachments = std::mem::take(&mut self.pending_attachments);
-                self.queued.push((text, attachments));
+                if attachments.is_empty() {
+                    self.push(EntryKind::User, text.clone());
+                    self.steer.push(text);
+                } else {
+                    self.queued.push((text, attachments));
+                }
             }
             _ => {
                 let attachments = std::mem::take(&mut self.pending_attachments);
@@ -1189,10 +1202,10 @@ impl ChatView {
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched. agent::spawn calls tokio::spawn internally, so it
         // needs the runtime context entered.
-        let new_tx = {
+        let (new_tx, new_steer) = {
             let _guard = self.rt.enter();
             match agent::spawn(&new_cfg, self.event_tx.clone(), self.cancel_tx.subscribe()) {
-                Ok(tx) => tx,
+                Ok(pair) => pair,
                 Err(e) => {
                     self.push(
                         EntryKind::Error,
@@ -1203,6 +1216,7 @@ impl ChatView {
                 }
             }
         };
+        self.steer = new_steer;
 
         // Carry the conversation over in the background; `running` blocks
         // prompts until the transfer's TurnComplete lands so a fast prompt
@@ -1297,6 +1311,7 @@ impl ChatView {
             attach: Vec::new(),
             smoke: None,
             smoke_attach: None,
+            smoke_steer: None,
         };
         let mut new_cfg = match config::Config::from_args(args) {
             Ok(cfg) => cfg,
@@ -1321,10 +1336,10 @@ impl ChatView {
         new_cfg.mode.set(self.cfg.mode.get());
         Self::apply_saved(&self.saved, &new_cfg);
 
-        let new_tx = {
+        let (new_tx, new_steer) = {
             let _guard = self.rt.enter();
             match agent::spawn(&new_cfg, self.event_tx.clone(), self.cancel_tx.subscribe()) {
-                Ok(tx) => tx,
+                Ok(pair) => pair,
                 Err(e) => {
                     self.push(
                         EntryKind::Error,
@@ -1335,6 +1350,7 @@ impl ChatView {
                 }
             }
         };
+        self.steer = new_steer;
         // Dropping the old sender shuts the old worker down; the new
         // directory starts a fresh conversation and session log.
         self.cmd_tx = new_tx;

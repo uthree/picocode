@@ -78,6 +78,11 @@ pub struct Args {
     /// File attached to the --smoke prompt (E2E for multimodal messages).
     #[arg(long, hide = true, requires = "smoke")]
     pub smoke_attach: Option<PathBuf>,
+
+    /// Text pushed into the steering queue ~1s after the --smoke prompt
+    /// starts (E2E for mid-turn injection).
+    #[arg(long, hide = true, requires = "smoke")]
+    pub smoke_steer: Option<String>,
 }
 
 // ----- config file ----------------------------------------------------------

@@ -53,7 +53,7 @@ fn main() -> anyhow::Result<()> {
     // (e.g. a missing API key).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
-    let cmd_tx = {
+    let (cmd_tx, steer) = {
         let _guard = rt.enter();
         agent::spawn(&cfg, event_tx.clone(), cancel_rx)?
     };
@@ -96,7 +96,7 @@ fn main() -> anyhow::Result<()> {
             cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
                     let mut view = chat::ChatView::new(
-                        cfg, event_rx, event_tx, cmd_tx, cancel_tx, handle, window, cx,
+                        cfg, event_rx, event_tx, cmd_tx, steer, cancel_tx, handle, window, cx,
                     );
                     if let Some(prompt) = smoke {
                         if prompt.starts_with('!') {
