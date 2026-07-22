@@ -35,28 +35,6 @@ const DIFF_MAX_LINES: usize = 30;
 
 gpui::actions!(picocode_gui, [AcceptCompletion, SubmitPrompt]);
 
-/// Slash commands the GUI supports, paired with the locale key of their
-/// description for the completion popup.
-const COMMANDS: &[(&str, &str)] = &[
-    ("/clear", "cmd_clear"),
-    ("/compact", "cmd_compact"),
-    ("/undo", "cmd_undo"),
-    ("/jobs", "cmd_jobs"),
-    ("/model", "cmd_model"),
-    ("/resume", "cmd_resume"),
-    ("/read-only", "cmd_read_only"),
-    ("/edit", "cmd_edit"),
-    ("/plan", "cmd_plan"),
-    ("/bypass", "cmd_bypass"),
-    ("/permissions", "cmd_permissions"),
-    ("/config", "cmd_config"),
-    ("/settings", "cmd_settings"),
-    ("/status", "cmd_status"),
-    ("/usage", "cmd_usage"),
-    ("/quit", "cmd_quit"),
-    ("/exit", "cmd_exit"),
-];
-
 /// Which status-bar popup menu is open.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Menu {
@@ -912,10 +890,13 @@ impl ChatView {
         }
         let filter = self.comp_prefix.clone().unwrap_or_else(|| value.clone());
         match filter.split_once(' ') {
-            None => COMMANDS
+            None => picocode_core::command::COMMANDS
                 .iter()
-                .filter(|(name, _)| name.starts_with(&filter))
-                .map(|(name, desc)| (name.to_string(), t!(*desc).to_string()))
+                .filter(|spec| spec.name.starts_with(&filter))
+                .map(|spec| {
+                    let key = format!("cmd_{}", spec.name[1..].replace('-', "_"));
+                    (spec.name.to_string(), t!(&key).to_string())
+                })
                 .collect(),
             Some((cmd, arg)) => self.arg_completions(cmd, arg.trim_start()),
         }
@@ -953,6 +934,8 @@ impl ChatView {
                     })
                     .collect()
             }
+            "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
+            "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
             _ => Vec::new(),
         }
     }
@@ -1007,70 +990,26 @@ impl ChatView {
             return;
         }
 
-        match text.as_str() {
-            "/clear" => {
-                let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
-                self.entries.clear();
-                self.queued.clear();
-                self.pending_attachments.clear();
-                self.tokens_in = 0;
-                self.tokens_out = 0;
-                self.est_out = 0;
-                // A cleared conversation starts a fresh session log.
-                self.session_id = session::new_id();
-                self.expanded_reasoning.clear();
-                self.push(EntryKind::Notice, t!("cleared").to_string());
-                self.reset_list();
+        // `!<command>`: direct shell, like the TUI. While a turn runs it
+        // joins the held-back queue and executes when the turn ends.
+        if text.starts_with('!') {
+            if self.running {
+                self.queued.push((text, Vec::new()));
+            } else {
+                self.run_shell(text);
             }
-            "/compact" => {
-                let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
-                self.push(EntryKind::Notice, t!("compacting").to_string());
-                self.running = true;
-                self.waiting = true;
-            }
-            "/undo" => {
-                let _ = self.cmd_tx.try_send(WorkerCmd::Undo);
-            }
-            "/jobs" => self.toggle_menu(Menu::Background, window, cx),
-            "/quit" | "/exit" => cx.quit(),
-            "/read-only" => self.select_mode(Mode::ReadOnly, cx),
-            "/edit" => self.select_mode(Mode::Edit, cx),
-            "/plan" => self.select_mode(Mode::Plan, cx),
-            "/bypass" => self.select_mode(Mode::Bypass, cx),
-            "/model" => self.toggle_menu(Menu::Model, window, cx),
-            "/resume" => self.open_session_picker(cx),
-            "/config" | "/settings" => self.settings_open = true,
-            "/status" | "/usage" => self.show_status(),
-            "/permissions" => self.show_permissions(),
-            _ if text.starts_with("/model ") => {
-                let name = text["/model ".len()..].trim().to_string();
-                self.switch_model(&name, cx);
-            }
-            _ if text.starts_with("/resume ") => {
-                let id = text["/resume ".len()..].trim().to_string();
-                self.resume_session(&id, cx);
-            }
-            _ if text.starts_with('/') => {
-                self.push(
-                    EntryKind::Notice,
-                    t!("not_available", cmd = text).to_string(),
-                );
-            }
-            // `!<command>`: direct shell, like the TUI. While a turn runs it
-            // joins the held-back queue and executes when the turn ends.
-            _ if text.starts_with('!') => {
-                if self.running {
-                    self.queued.push((text, Vec::new()));
-                } else {
-                    self.run_shell(text);
-                }
-            }
+            self.scroll_to_bottom();
+            cx.notify();
+            return;
+        }
+        use picocode_core::command::{Command, JobsAction, ParseOutcome};
+        match picocode_core::command::parse(&text) {
             // Mid-turn text goes through the steering queue: the worker
             // injects it at the next tool-call boundary (or runs it as a
             // follow-up prompt of the same turn). Messages with attachments
             // can't ride a tool result, so those are held back and sent
             // one per completed turn as before.
-            _ if self.running => {
+            ParseOutcome::Prompt if self.running => {
                 let attachments = std::mem::take(&mut self.pending_attachments);
                 if attachments.is_empty() {
                     self.push(EntryKind::User, text.clone());
@@ -1079,13 +1018,91 @@ impl ChatView {
                     self.queued.push((text, attachments));
                 }
             }
-            _ => {
+            ParseOutcome::Prompt => {
                 let attachments = std::mem::take(&mut self.pending_attachments);
                 self.send_prompt(text, attachments);
             }
+            ParseOutcome::Unknown { name } => {
+                self.push(
+                    EntryKind::Error,
+                    t!("unknown_command", name = name).to_string(),
+                );
+            }
+            ParseOutcome::Invalid { message } => {
+                self.push(EntryKind::Error, message);
+            }
+            ParseOutcome::Command(command) => match command {
+                Command::Clear => {
+                    let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
+                    self.entries.clear();
+                    self.queued.clear();
+                    self.pending_attachments.clear();
+                    self.tokens_in = 0;
+                    self.tokens_out = 0;
+                    self.est_out = 0;
+                    // A cleared conversation starts a fresh session log.
+                    self.session_id = session::new_id();
+                    self.expanded_reasoning.clear();
+                    self.push(EntryKind::Notice, t!("cleared").to_string());
+                    self.reset_list();
+                }
+                Command::Compact => {
+                    let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
+                    self.push(EntryKind::Notice, t!("compacting").to_string());
+                    self.running = true;
+                    self.waiting = true;
+                }
+                Command::Undo => {
+                    let _ = self.cmd_tx.try_send(WorkerCmd::Undo);
+                }
+                Command::Jobs(JobsAction::List) => self.toggle_menu(Menu::Background, window, cx),
+                Command::Jobs(JobsAction::Kill(id)) => {
+                    if !self.jobs.kill(id) {
+                        self.push(EntryKind::Error, t!("bg_no_job", id = id).to_string());
+                    } else {
+                        self.push(EntryKind::Notice, t!("bg_killed", id = id).to_string());
+                    }
+                }
+                Command::Quit => cx.quit(),
+                Command::Mode(mode) => self.select_mode(mode, cx),
+                Command::Model(None) => self.toggle_menu(Menu::Model, window, cx),
+                Command::Model(Some(name)) => self.switch_model(&name, cx),
+                Command::Resume(None) => self.open_session_picker(cx),
+                Command::Resume(Some(id)) => self.resume_session(&id, cx),
+                Command::Attach(None) => self.show_attachments(),
+                Command::Attach(Some(arg)) => self.attach_command(&arg, cx),
+                Command::Config => self.settings_open = true,
+                Command::Status => self.show_status(),
+                Command::Permissions => self.show_permissions(),
+            },
         }
         self.scroll_to_bottom();
         cx.notify();
+    }
+
+    /// `/attach`: list what is staged for the next prompt.
+    fn show_attachments(&mut self) {
+        if self.pending_attachments.is_empty() {
+            self.push(EntryKind::Notice, t!("attach_none").to_string());
+            return;
+        }
+        let names: Vec<String> = self.pending_attachments.iter().map(|a| a.name()).collect();
+        self.push(
+            EntryKind::Notice,
+            t!("attach_list", names = names.join(", ")).to_string(),
+        );
+    }
+
+    /// `/attach clear` or `/attach <path>`, sharing the drop/picker staging
+    /// logic (provider checks and notices included).
+    fn attach_command(&mut self, arg: &str, cx: &mut Context<Self>) {
+        if arg == "clear" {
+            self.pending_attachments.clear();
+            self.push(EntryKind::Notice, t!("attach_cleared").to_string());
+            return;
+        }
+        let path = self.cfg.root.join(arg);
+        self.add_attachments(&[path], cx);
     }
 
     /// Record a user prompt in the transcript and hand it to the worker.

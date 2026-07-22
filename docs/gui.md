@@ -77,10 +77,13 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
   (Cmd+C copies the selection), every code block has a copy button in its
   top-right corner, and right-clicking any transcript entry opens a
   "Copy text" menu.
-- **Commands**: `/clear`, `/compact`, `/undo` (revert the last turn's file
-  edits; repeatable — `edit_file` changes only, bash side effects are not
-  tracked), `/jobs` (background-jobs popup — also reachable from the
-  status-bar chip — with a kill button per job), `/model`, `/resume`, the mode
+- **Commands**: the same set as the TUI (one shared parser, so aliases
+  and errors behave identically): `/clear`, `/compact`, `/undo` (revert
+  the last turn's file edits; repeatable — `edit_file` changes only, bash
+  side effects are not tracked), `/jobs` (background-jobs popup — also
+  reachable from the status-bar chip — with a kill button per job) and
+  `/jobs kill <id>`, `/attach <path>` (stages like the 📎 button;
+  `/attach` lists, `/attach clear` unstages), `/model`, `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),

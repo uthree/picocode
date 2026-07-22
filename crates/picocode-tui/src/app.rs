@@ -33,34 +33,6 @@ pub const LOGO: &str = r"            ███                                  
  █████
 ░░░░░";
 
-/// Slash commands with a short description, used by the completion popup.
-pub const COMMANDS: &[(&str, &str)] = &[
-    (
-        "/attach",
-        "Attach a file to the next prompt: /attach <path>",
-    ),
-    ("/clear", "Clear conversation history"),
-    ("/compact", "Summarize history to free context"),
-    ("/undo", "Revert the last turn's file edits (repeatable)"),
-    ("/jobs", "List background jobs; /jobs kill <id> stops one"),
-    ("/model", "Pick a model (dialog) or switch: /model <name>"),
-    ("/resume", "Pick a saved session to resume"),
-    ("/read-only", "Mode: reads only, every write asks"),
-    ("/edit", "Mode: file writes run freely"),
-    ("/plan", "Mode: investigate and plan, writes blocked"),
-    (
-        "/bypass",
-        "Mode: run EVERYTHING unconfirmed (isolated envs)",
-    ),
-    ("/permissions", "Show the effective permission rules"),
-    ("/config", "Edit settings in a dialog"),
-    ("/settings", "Alias of /config"),
-    ("/status", "Show model, token usage and session info"),
-    ("/usage", "Alias of /status"),
-    ("/quit", "Exit picocode"),
-    ("/exit", "Exit picocode"),
-];
-
 pub struct PendingApproval {
     pub name: String,
     pub args: String,
@@ -698,72 +670,67 @@ impl App {
             return;
         }
 
-        match text.as_str() {
-            "/quit" | "/q" | "/exit" => self.should_quit = true,
-            "/clear" => {
-                self.entries.clear();
-                self.auto_compact_tried = false;
-                self.ctx_tokens = 0;
-                self.turn_out = 0;
-                self.total_out = 0;
-                self.delta_est = 0;
-                self.assistant_open = false;
-                self.reasoning_open = false;
-                self.follow = true;
-                self.top_line = 0;
-                let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
-                // The cleared conversation stays on disk; start a fresh log.
-                self.session_id = session::new_id();
-                self.push(EntryKind::Logo, LOGO.to_string());
-                self.push(
-                    EntryKind::Notice,
-                    "Conversation history cleared".to_string(),
-                );
+        if text.starts_with('!') {
+            self.run_shell(text);
+            return;
+        }
+        use picocode_core::command::{Command, JobsAction, ParseOutcome};
+        match picocode_core::command::parse(&text) {
+            ParseOutcome::Prompt => self.send_prompt(text.clone(), text).await,
+            ParseOutcome::Unknown { name } => {
+                self.push(EntryKind::Error, format!("Unknown command: {name}"));
             }
-            "/compact" => {
-                self.close_blocks();
-                if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
-                    self.begin_turn();
-                    self.push(EntryKind::Notice, "Compacting conversation…".to_string());
-                } else {
-                    self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+            ParseOutcome::Invalid { message } => {
+                self.push(EntryKind::Error, message);
+            }
+            ParseOutcome::Command(command) => match command {
+                Command::Quit => self.should_quit = true,
+                Command::Clear => {
+                    self.entries.clear();
+                    self.auto_compact_tried = false;
+                    self.ctx_tokens = 0;
+                    self.turn_out = 0;
+                    self.total_out = 0;
+                    self.delta_est = 0;
+                    self.assistant_open = false;
+                    self.reasoning_open = false;
+                    self.follow = true;
+                    self.top_line = 0;
+                    let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
+                    // The cleared conversation stays on disk; start a fresh
+                    // log.
+                    self.session_id = session::new_id();
+                    self.push(EntryKind::Logo, LOGO.to_string());
+                    self.push(
+                        EntryKind::Notice,
+                        "Conversation history cleared".to_string(),
+                    );
                 }
-            }
-            "/undo" => {
-                let _ = self.cmd_tx.send(WorkerCmd::Undo).await;
-            }
-            "/jobs" => self.show_jobs(),
-            _ if text.starts_with("/jobs kill ") => {
-                let arg = text["/jobs kill ".len()..].trim().to_string();
-                self.kill_job(&arg);
-            }
-            "/permissions" => self.show_permissions(),
-            "/config" | "/settings" => self.settings = Some(SettingsMenu { selected: 0 }),
-            "/status" | "/usage" => self.show_status(),
-            "/read-only" => self.set_mode(picocode_core::config::Mode::ReadOnly),
-            "/edit" => self.set_mode(picocode_core::config::Mode::Edit),
-            "/plan" => self.set_mode(picocode_core::config::Mode::Plan),
-            "/bypass" => self.set_mode(picocode_core::config::Mode::Bypass),
-            "/model" => self.open_model_picker(),
-            _ if text.starts_with("/model ") => {
-                let name = text["/model ".len()..].trim().to_string();
-                self.switch_model(&name).await;
-            }
-            "/resume" => self.open_session_picker(),
-            _ if text.starts_with("/resume ") => {
-                let id = text["/resume ".len()..].trim().to_string();
-                self.resume_session(&id).await;
-            }
-            "/attach" => self.show_attachments(),
-            _ if text.starts_with("/attach ") => {
-                let arg = text["/attach ".len()..].trim().to_string();
-                self.attach(&arg);
-            }
-            _ if text.starts_with('/') && !text.contains(' ') => {
-                self.push(EntryKind::Error, format!("Unknown command: {text}"));
-            }
-            _ if text.starts_with('!') => self.run_shell(text),
-            _ => self.send_prompt(text.clone(), text).await,
+                Command::Compact => {
+                    self.close_blocks();
+                    if self.cmd_tx.send(WorkerCmd::Compact).await.is_ok() {
+                        self.begin_turn();
+                        self.push(EntryKind::Notice, "Compacting conversation…".to_string());
+                    } else {
+                        self.push(EntryKind::Error, "The agent worker has stopped".to_string());
+                    }
+                }
+                Command::Undo => {
+                    let _ = self.cmd_tx.send(WorkerCmd::Undo).await;
+                }
+                Command::Jobs(JobsAction::List) => self.show_jobs(),
+                Command::Jobs(JobsAction::Kill(id)) => self.kill_job(id),
+                Command::Permissions => self.show_permissions(),
+                Command::Config => self.settings = Some(SettingsMenu { selected: 0 }),
+                Command::Status => self.show_status(),
+                Command::Mode(mode) => self.set_mode(mode),
+                Command::Model(None) => self.open_model_picker(),
+                Command::Model(Some(name)) => self.switch_model(&name).await,
+                Command::Resume(None) => self.open_session_picker(),
+                Command::Resume(Some(id)) => self.resume_session(&id).await,
+                Command::Attach(None) => self.show_attachments(),
+                Command::Attach(Some(arg)) => self.attach(&arg),
+            },
         }
     }
 
@@ -1423,10 +1390,10 @@ impl App {
             return Vec::new();
         }
         match filter.split_once(' ') {
-            None => COMMANDS
+            None => picocode_core::command::COMMANDS
                 .iter()
-                .filter(|(cmd, _)| cmd.starts_with(filter))
-                .map(|(cmd, desc)| (cmd.to_string(), desc.to_string()))
+                .filter(|spec| spec.name.starts_with(filter))
+                .map(|spec| (spec.name.to_string(), spec.description.to_string()))
                 .collect(),
             Some((cmd, arg)) => self.arg_completions(cmd, arg.trim_start()),
         }
@@ -1458,24 +1425,8 @@ impl App {
                     })
                     .collect()
             }
-            "/attach" => self.path_completions(cmd, arg),
-            "/jobs" => self
-                .jobs
-                .list()
-                .into_iter()
-                .filter(|(id, command, _)| {
-                    let fill = format!("kill {id}");
-                    needle.is_empty()
-                        || fill.contains(&needle)
-                        || command.to_lowercase().contains(&needle)
-                })
-                .map(|(id, command, elapsed)| {
-                    (
-                        format!("{cmd} kill {id}"),
-                        format!("{}s · {command}", elapsed.as_secs()),
-                    )
-                })
-                .collect(),
+            "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
+            "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
             _ => Vec::new(),
         }
     }
@@ -1500,56 +1451,12 @@ impl App {
 
     /// `/jobs kill <id>`: stop a background job (its wrapper still reports
     /// a completion, which balances the status-bar counter).
-    fn kill_job(&mut self, arg: &str) {
-        let Ok(id) = arg.parse::<u64>() else {
-            self.push(EntryKind::Error, format!("Invalid job id `{arg}`"));
-            return;
-        };
+    fn kill_job(&mut self, id: u64) {
         if self.jobs.kill(id) {
             self.push(EntryKind::Notice, format!("Killed background job #{id}"));
         } else {
             self.push(EntryKind::Error, format!("No background job #{id}"));
         }
-    }
-
-    /// File-path candidates under the project root for `/attach`:
-    /// completes the last path segment, directories with a trailing `/`.
-    fn path_completions(&self, cmd: &str, arg: &str) -> Vec<(String, String)> {
-        let (dir_part, file_part) = match arg.rsplit_once('/') {
-            Some((d, f)) => (d.to_string(), f.to_string()),
-            None => (String::new(), arg.to_string()),
-        };
-        let dir = self.cfg.root.join(&dir_part);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return Vec::new();
-        };
-        let mut out: Vec<(String, String)> = entries
-            .filter_map(|e| e.ok())
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                // Hidden files only when explicitly asked for.
-                if name.starts_with('.') && !file_part.starts_with('.') {
-                    return None;
-                }
-                if !name.to_lowercase().starts_with(&file_part.to_lowercase()) {
-                    return None;
-                }
-                let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-                let rel = if dir_part.is_empty() {
-                    name
-                } else {
-                    format!("{dir_part}/{name}")
-                };
-                Some(if is_dir {
-                    (format!("{cmd} {rel}/"), "directory".to_string())
-                } else {
-                    (format!("{cmd} {rel}"), "file".to_string())
-                })
-            })
-            .collect();
-        out.sort();
-        out.truncate(30);
-        out
     }
 
     /// Tab completion: the first press fills the input with the highlighted

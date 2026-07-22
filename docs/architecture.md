@@ -12,6 +12,8 @@ crates/
                    approval rules (rules), web-search settings (search)
     agent.rs     — rig agent construction and the streaming worker
     approval.rs  — approval gate for destructive tools (rig AgentHook)
+    command.rs   — shared slash-command parser and command list (both
+                   front ends execute the same parsed Command)
     attachment.rs — user file attachments (image/audio/PDF) sent as
                    multimodal message content, with per-provider support
                    checks
