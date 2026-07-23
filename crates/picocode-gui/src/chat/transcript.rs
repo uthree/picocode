@@ -465,14 +465,14 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
     let window = breakdown.window.max(1);
     let pct = |v: u64| (v as f64 / window as f64 * 100.0).round() as u64;
     let mut title = t!(
-        "ctx_title",
+        "breakdown_title",
         used = breakdown.used(),
         window = breakdown.window,
         pct = pct(breakdown.used())
     )
     .to_string();
     if breakdown.reported == 0 {
-        title.push_str(&t!("ctx_estimated"));
+        title.push_str(&t!("breakdown_estimated"));
     }
 
     let mut bar = div()
@@ -514,7 +514,7 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
                         .bg(context_color(*kind)),
                 )
                 .child({
-                    let key = format!("ctx_{}", kind.key());
+                    let key = format!("breakdown_{}", kind.key());
                     t!(&key).to_string()
                 })
                 .child(div().flex_1())
@@ -540,7 +540,7 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
                     .border_1()
                     .border_color(theme.muted_foreground),
             )
-            .child(t!("ctx_free").to_string())
+            .child(t!("breakdown_free").to_string())
             .child(div().flex_1())
             .child(format!("{} ({}%)", breakdown.free(), pct(breakdown.free()))),
     );

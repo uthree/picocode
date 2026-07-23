@@ -555,19 +555,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         // Leading gap so a truncated left side never touches the right block.
         Span::raw(" "),
     ];
-    if app.running > 0 {
-        // Only the active phase: ↑ while the request is being prefilled
-        // (waiting on the API), ↓ + tok/s while tokens stream in.
-        let text = if app.waiting {
-            format!("↑ {}  ", app.ctx_tokens)
-        } else {
-            let rate = match app.speed.rate() {
-                Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
-                None => String::new(),
-            };
-            format!("↓ {}{rate}  ", app.turn_out + app.delta_est)
+    // Output counter + tok/s while tokens stream; nothing extra while
+    // waiting on the API (the spinner already says "waiting").
+    if app.running > 0 && !app.waiting {
+        let rate = match app.speed.rate() {
+            Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
+            None => String::new(),
         };
-        right.push(Span::styled(text, dim));
+        right.push(Span::styled(
+            format!("↓ {}{rate}  ", app.turn_out + app.delta_est),
+            dim,
+        ));
     }
     right.push(Span::styled(bar, Style::new().fg(gauge_color)));
     right.push(Span::styled(rest, dim));

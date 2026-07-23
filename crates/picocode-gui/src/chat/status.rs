@@ -72,21 +72,21 @@ impl ChatView {
                     ),
             )
             .child({
-                // While running, only the active phase: ↑ while the request
-                // is being prefilled (waiting on the API), ↓ + tok/s while
+                // While running: nothing extra during the API wait (the
+                // spinner already says "waiting"), then ↓ + tok/s while
                 // tokens stream in. Idle shows both totals.
                 let counters = if self.running && self.waiting {
-                    format!("↑ {}", self.tokens_in)
+                    String::new()
                 } else if self.running {
                     let rate = match self.speed.rate() {
                         Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
                         None => String::new(),
                     };
-                    format!("↓ {}{rate}", self.tokens_out_live())
+                    format!("  ↓ {}{rate}", self.tokens_out_live())
                 } else {
-                    format!("↑ {} ↓ {}", self.tokens_in, self.tokens_out_live())
+                    format!("  ↑ {} ↓ {}", self.tokens_in, self.tokens_out_live())
                 };
-                format!("{}%  {counters}", (ratio * 100.0).round() as u64)
+                format!("{}%{counters}", (ratio * 100.0).round() as u64)
             });
 
         // Animated spinner while a turn runs; "waiting" until the first
