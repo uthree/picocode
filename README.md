@@ -31,6 +31,10 @@ OpenAI-compatible server (vLLM, etc.).
   go through the same approval flow as the built-ins. Off by default:
   no configuration, no extra tools, nothing for a small model to
   get confused by
+- **Opt-in sandbox** — `[sandbox]` in picocode.toml runs model-initiated
+  bash commands inside the OS sandbox (macOS sandbox-exec, Linux
+  Landlock): writes confined to the project root and temp, network
+  optionally blocked — a guard rail for bypass mode
 
 ## Install
 

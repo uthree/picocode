@@ -20,6 +20,7 @@ pub mod history;
 pub mod mcp;
 pub mod models;
 pub mod report;
+pub mod sandbox;
 pub mod session;
 pub mod speed;
 pub mod state;

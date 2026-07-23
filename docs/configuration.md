@@ -135,6 +135,20 @@ You are a careful coding assistant in {root}. Make minimal, verifiable
 changes and run the tests after every edit.
 """
 
+# Optional, opt-in: OS-level sandbox for model-initiated bash commands
+# (`!` commands and after_edit are user-authored and stay unsandboxed).
+# Writes are confined to the project root, the temp directories and
+# allow_write; network can be blocked. macOS uses sandbox-exec
+# (Seatbelt), Linux uses Landlock (kernel 5.13+ required — commands fail
+# instead of silently running unconfined; the TCP block needs 6.7+ and
+# stays off quietly on older kernels). Windows is not supported: bash
+# fails with a clear error while a sandbox is requested. For truly
+# untrusted work a container is still the stronger isolation.
+[sandbox]
+mode = "bypass"          # "off" (default) | "bypass" | "always"
+allow_network = false    # block network from sandboxed commands
+allow_write = ["~/.cargo"]  # extra write-allowed paths (~ expands)
+
 # Optional, opt-in: MCP (Model Context Protocol) servers. With none
 # configured no MCP code runs and nothing changes for the model — extra
 # tools confuse small local models, so this is deliberately off by

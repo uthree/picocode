@@ -28,6 +28,8 @@ crates/
                    startup, their tools join every spawned agent
     models.rs    — provider model-list queries backing /model
     report.rs    — /status and /permissions text shared by both front ends
+    sandbox.rs   — opt-in OS sandbox for model-initiated bash (macOS
+                   sandbox-exec / Linux Landlock)
     session.rs   — session autosave/load backing /resume
     state.rs     — per-project persisted state (last-used model)
     steer.rs     — mid-turn steering queue + rig hook (injects user

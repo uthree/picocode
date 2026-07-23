@@ -10,9 +10,10 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::mpsc;
 
-use super::{ToolError, shell_command, truncate_output};
+use super::{ToolError, truncate_output};
 use crate::config::NumHandle;
 use crate::event::AgentEvent;
+use crate::sandbox::SandboxCtx;
 
 const MAX_OUTPUT_BYTES: usize = 20_000;
 
@@ -94,6 +95,9 @@ pub struct Bash {
     notify: mpsc::Sender<AgentEvent>,
     /// Registry the timed-out commands are tracked in (`/jobs`).
     jobs: BackgroundJobs,
+    /// Sandbox settings + live mode; `SandboxCtx::off()` for user-typed
+    /// `!` commands.
+    sandbox: SandboxCtx,
 }
 
 impl Bash {
@@ -102,12 +106,14 @@ impl Bash {
         timeout: NumHandle,
         notify: mpsc::Sender<AgentEvent>,
         jobs: BackgroundJobs,
+        sandbox: SandboxCtx,
     ) -> Self {
         Self {
             root,
             timeout,
             notify,
             jobs,
+            sandbox,
         }
     }
 }
@@ -162,7 +168,8 @@ impl Tool for Bash {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let timeout = Duration::from_secs(self.timeout.get().max(1));
-        let mut child = shell_command(&args.command)
+        let mut child = crate::sandbox::shell_for(&args.command, &self.root, &self.sandbox)
+            .map_err(|e| ToolError::new(format!("sandbox setup failed: {e:#}")))?
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -285,6 +292,7 @@ mod tests {
                 NumHandle::new(secs),
                 tx,
                 BackgroundJobs::new(),
+                SandboxCtx::off(),
             ),
             rx,
         )
@@ -300,6 +308,7 @@ mod tests {
             NumHandle::new(1),
             tx,
             jobs.clone(),
+            SandboxCtx::off(),
         );
         let out = tool
             .call(BashArgs {

@@ -158,6 +158,17 @@ struct FileConfig {
     approval: ApprovalRules,
     #[serde(default)]
     search: SearchFileConfig,
+    #[serde(default)]
+    sandbox: SandboxFileConfig,
+}
+
+/// The `[sandbox]` section of the config file.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SandboxFileConfig {
+    mode: Option<crate::sandbox::SandboxMode>,
+    allow_network: Option<bool>,
+    allow_write: Option<Vec<PathBuf>>,
 }
 
 /// Default bash timeout in seconds.
@@ -401,6 +412,14 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
             (g, p) => p.or(g),
         },
         approval,
+        sandbox: SandboxFileConfig {
+            mode: project.sandbox.mode.or(global.sandbox.mode),
+            allow_network: project
+                .sandbox
+                .allow_network
+                .or(global.sandbox.allow_network),
+            allow_write: project.sandbox.allow_write.or(global.sandbox.allow_write),
+        },
         search: SearchFileConfig {
             provider: project.search.provider.or(global.search.provider),
             base_url: project.search.base_url.or(global.search.base_url),
@@ -474,6 +493,8 @@ pub struct Config {
     pub prompts: Vec<PromptPreset>,
     /// MCP servers to connect at startup (`[[mcp_servers]]`, opt-in).
     pub mcp_servers: Vec<McpServer>,
+    /// OS sandbox for model-initiated bash commands (`[sandbox]`, opt-in).
+    pub sandbox: crate::sandbox::SandboxSettings,
     /// Instruction files that were found: (file name, content).
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
@@ -633,6 +654,11 @@ impl Config {
             system_prompt: file.system_prompt,
             prompts: file.prompts.unwrap_or_default(),
             mcp_servers: file.mcp_servers.unwrap_or_default(),
+            sandbox: crate::sandbox::SandboxSettings {
+                mode: file.sandbox.mode.unwrap_or_default(),
+                allow_network: file.sandbox.allow_network.unwrap_or(false),
+                allow_write: file.sandbox.allow_write.unwrap_or_default(),
+            },
             instructions,
             config_files,
             context_window,

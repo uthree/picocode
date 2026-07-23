@@ -44,6 +44,8 @@ pulldown-cmark = { version = "0.13", default-features = false }
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
 tempfile = "3"
+# Linux sandbox for model-initiated bash commands (kernel LSM, no helper binary)
+landlock = "0.4"
 unicodeit = "0.2"
 rust-i18n = "3"
 sys-locale = "0.3"

@@ -1205,7 +1205,14 @@ impl ChatView {
         let mut cancel = self.cancel_tx.subscribe();
         self.rt.spawn(async move {
             use rig::tool::Tool;
-            let tool = picocode_core::tools::Bash::new(root, timeout, event_tx.clone(), jobs);
+            // User-typed `!` commands run unsandboxed by design.
+            let tool = picocode_core::tools::Bash::new(
+                root,
+                timeout,
+                event_tx.clone(),
+                jobs,
+                picocode_core::sandbox::SandboxCtx::off(),
+            );
             let call = tool.call(picocode_core::tools::BashArgs {
                 command: command.clone(),
             });

@@ -96,6 +96,7 @@ pub fn permissions_text(cfg: &Config) -> String {
          deny_bash    {}\n\
          allow_tools  {}\n\
          allow_bash   {}\n\
+         sandbox      {}\n\
          Local reads (read_file, list_files, grep) always run; file tools are \
          confined to {}. Commands with $( ), backticks or > never auto-run.",
         mode.label(),
@@ -103,6 +104,7 @@ pub fn permissions_text(cfg: &Config) -> String {
         list(&rules.deny_bash),
         list(&rules.allow_tools),
         list(&rules.allow_bash),
+        cfg.sandbox.describe(),
         cfg.root.display(),
     )
 }
