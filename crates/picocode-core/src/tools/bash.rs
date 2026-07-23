@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,28 +87,30 @@ pub struct BashArgs {
 }
 
 pub struct Bash {
-    root: PathBuf,
+    /// Backend + root: commands run on the workspace's host (local or the
+    /// remote SSH connection) inside its root.
+    ws: crate::backend::Workspace,
     /// Timeout in seconds, shared with the `/config` dialog.
     timeout: NumHandle,
     /// Where backgrounded commands report their completion.
     notify: mpsc::Sender<AgentEvent>,
     /// Registry the timed-out commands are tracked in (`/jobs`).
     jobs: BackgroundJobs,
-    /// Sandbox settings + live mode; `SandboxCtx::off()` for user-typed
-    /// `!` commands.
+    /// Sandbox settings + live mode (local only); `SandboxCtx::off()` for
+    /// user-typed `!` commands.
     sandbox: SandboxCtx,
 }
 
 impl Bash {
     pub fn new(
-        root: PathBuf,
+        ws: crate::backend::Workspace,
         timeout: NumHandle,
         notify: mpsc::Sender<AgentEvent>,
         jobs: BackgroundJobs,
         sandbox: SandboxCtx,
     ) -> Self {
         Self {
-            root,
+            ws,
             timeout,
             notify,
             jobs,
@@ -168,9 +169,11 @@ impl Tool for Bash {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let timeout = Duration::from_secs(self.timeout.get().max(1));
-        let mut child = crate::sandbox::shell_for(&args.command, &self.root, &self.sandbox)
-            .map_err(|e| ToolError::new(format!("sandbox setup failed: {e:#}")))?
-            .current_dir(&self.root)
+        let mut child = self
+            .ws
+            .backend
+            .shell(&args.command, &self.ws.root, &self.sandbox)
+            .map_err(|e| ToolError::new(format!("command setup failed: {e:#}")))?
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -288,7 +291,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(8);
         (
             Bash::new(
-                root.to_path_buf(),
+                crate::backend::Workspace::local(root.to_path_buf()),
                 NumHandle::new(secs),
                 tx,
                 BackgroundJobs::new(),
@@ -304,7 +307,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(8);
         let jobs = BackgroundJobs::new();
         let tool = Bash::new(
-            dir.path().to_path_buf(),
+            crate::backend::Workspace::local(dir.path().to_path_buf()),
             NumHandle::new(1),
             tx,
             jobs.clone(),

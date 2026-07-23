@@ -49,6 +49,10 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
         Some(list) => format!("\nmcp           {list}"),
         None => String::new(),
     };
+    let workspace = match &cfg.remote {
+        Some(spec) => format!("\nworkspace     remote — {}", spec.destination),
+        None => String::new(),
+    };
     format!(
         "Status\n\
          model         {}{entry}\n\
@@ -57,7 +61,7 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
          context       {} of {} tokens ({pct}%)\n\
          output        {}\n\
          session       {} — {} prompts, {saved}\n\
-         project       {}\n\
+         project       {}{workspace}\n\
          config        {config}\n\
          instructions  {instructions}{mcp}",
         info.model_label,

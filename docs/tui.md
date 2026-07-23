@@ -4,6 +4,20 @@ Key bindings, slash commands, and the finer points of the picocode TUI.
 For setup see the [README](../README.md); for models, permissions and the
 config file see [configuration.md](configuration.md).
 
+## Remote workspaces
+
+`picocode --remote host:/path` (or `--remote <name>` for a `[[remotes]]`
+entry) opens a project on another machine over SSH. All the tools then
+operate on the host: `read_file`, `edit_file`, `list_files` and `grep`
+run over the connection, `bash` runs on the host. Authentication is
+entirely your `ssh` setup (`~/.ssh/config`, keys, agent, ProxyJump) —
+picocode shells out to `ssh` through a ControlMaster socket and never
+handles credentials. The input box shows `host:path`. Settings come from
+the *local* config; instruction files (AGENTS.md) are read from the
+remote root; the conversation log is saved locally, keyed by host+path.
+The `[sandbox]` guard does not apply to a remote host (its bash runs with
+the host's own permissions). Unix hosts only.
+
 ## Windows
 
 Windows support is experimental: the `bash` tool (and the `!` escape and

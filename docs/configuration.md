@@ -135,6 +135,20 @@ You are a careful coding assistant in {root}. Make minimal, verifiable
 changes and run the tests after every edit.
 """
 
+# Optional: named remote workspaces for `--remote <name>`. Each opens a
+# project on another host over SSH — every tool then operates on the
+# remote (read/edit/list/grep over the connection, bash on the host).
+# Authentication is entirely your ssh setup (~/.ssh/config, keys, agent);
+# picocode never handles credentials. The conversation log stays local.
+# You can also pass `--remote host:/path` directly without an entry here.
+# Settings (this file) are read locally; instruction files (AGENTS.md)
+# come from the remote root. Note: the [sandbox] guard is local-only —
+# remote bash runs with the host's permissions. Unix hosts only.
+[[remotes]]
+name = "prod"
+host = "user@prod.example.com"    # or an ssh alias from ~/.ssh/config
+path = "/srv/app"
+
 # Optional, opt-in: OS-level sandbox for model-initiated bash commands
 # (`!` commands and after_edit are user-authored and stay unsandboxed).
 # Writes are confined to the project root, the temp directories and

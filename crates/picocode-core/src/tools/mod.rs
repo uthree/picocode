@@ -62,21 +62,21 @@ pub struct ReadStamps(
 );
 
 impl ReadStamps {
-    /// Remember `path`'s current mtime (after a successful read or write).
-    pub fn record(&self, path: &Path) {
-        if let Ok(mtime) = std::fs::metadata(path).and_then(|m| m.modified()) {
+    /// Remember `path`'s current mtime (after a successful read or write),
+    /// via the backend so remote files are stamped too.
+    pub async fn record(&self, backend: &crate::backend::Backend, path: &Path) {
+        if let Ok(mtime) = backend.mtime(path).await {
             self.0.lock().unwrap().insert(path.to_path_buf(), mtime);
         }
     }
 
-    /// Whether `path` changed on disk since it was last recorded. `false`
-    /// when it was never recorded or no longer exists (other checks cover
-    /// those).
-    pub fn is_stale(&self, path: &Path) -> bool {
+    /// Whether `path` changed since it was last recorded. `false` when it
+    /// was never recorded or no longer exists (other checks cover those).
+    pub async fn is_stale(&self, backend: &crate::backend::Backend, path: &Path) -> bool {
         let Some(seen) = self.0.lock().unwrap().get(path).copied() else {
             return false;
         };
-        match std::fs::metadata(path).and_then(|m| m.modified()) {
+        match backend.mtime(path).await {
             Ok(now) => now != seen,
             Err(_) => false,
         }

@@ -90,6 +90,12 @@ pub struct Args {
     #[arg(long)]
     pub bypass: bool,
 
+    /// Open a remote workspace over SSH: `host:/path` (host is an ssh alias
+    /// from ~/.ssh/config or user@host), or the name of a `[[remotes]]`
+    /// entry. All tools then operate on the remote host.
+    #[arg(long, value_name = "HOST:PATH")]
+    pub remote: Option<String>,
+
     /// Run one prompt without the TUI: stream the reply to stdout (tool
     /// activity goes to stderr) and exit. Tool calls that would need
     /// confirmation are denied unless --bypass is also given.
@@ -138,6 +144,8 @@ struct FileConfig {
     /// MCP servers to connect at startup (opt-in: none configured means
     /// no MCP code runs and nothing changes for the model).
     mcp_servers: Option<Vec<McpServer>>,
+    /// Named remote workspaces (`--remote <name>`).
+    remotes: Option<Vec<RemoteEntry>>,
     /// Seconds before a bash command is moved to the background (default 120).
     bash_timeout: Option<u64>,
     /// Max lines a single read_file call returns (default 2000).
@@ -191,6 +199,66 @@ pub const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
 pub struct PromptPreset {
     pub name: String,
     pub prompt: String,
+}
+
+/// A resolved remote workspace target: an ssh destination and the path
+/// on the host to use as the working directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteSpec {
+    /// ssh destination — an alias or `user@host`.
+    pub destination: String,
+    /// Working directory on the remote host.
+    pub path: PathBuf,
+}
+
+impl RemoteSpec {
+    /// Parse `host:/path` (the last colon separates host from path, so
+    /// `user@host:/srv/app` works). Resolves `name` against configured
+    /// `[[remotes]]` first.
+    pub fn parse(spec: &str, remotes: &[RemoteEntry]) -> anyhow::Result<Self> {
+        if let Some(entry) = remotes.iter().find(|r| r.name == spec) {
+            return Ok(Self {
+                destination: entry.host.clone(),
+                path: PathBuf::from(&entry.path),
+            });
+        }
+        let (host, path) = spec.rsplit_once(':').ok_or_else(|| {
+            anyhow::anyhow!("--remote expects `host:/path` (or a [[remotes]] name), got `{spec}`")
+        })?;
+        if host.is_empty() || path.is_empty() {
+            anyhow::bail!("--remote `{spec}` is missing the host or the path");
+        }
+        Ok(Self {
+            destination: host.to_string(),
+            path: PathBuf::from(path),
+        })
+    }
+
+    /// Filesystem-safe slug identifying this remote for session storage,
+    /// e.g. `ssh-user@host-srv-app`.
+    pub fn slug(&self) -> String {
+        let raw = format!("ssh-{}-{}", self.destination, self.path.display());
+        raw.chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    }
+}
+
+/// One `[[remotes]]` entry: a named remote workspace.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteEntry {
+    pub name: String,
+    /// ssh alias or `user@host`.
+    pub host: String,
+    /// Working directory on the host.
+    pub path: String,
 }
 
 /// One `[[mcp_servers]]` entry: an MCP server to connect at startup.
@@ -398,6 +466,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         // Like models: a project's preset list replaces the global one.
         prompts: project.prompts.or(global.prompts),
         mcp_servers: project.mcp_servers.or(global.mcp_servers),
+        remotes: project.remotes.or(global.remotes),
         bash_timeout: project.bash_timeout.or(global.bash_timeout),
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
@@ -432,18 +501,43 @@ fn load_instructions(root: &Path, files: &[String]) -> Vec<(String, String)> {
     files
         .iter()
         .filter_map(|name| {
-            let mut content = std::fs::read_to_string(root.join(name)).ok()?;
-            if content.len() > INSTRUCTION_FILE_MAX_BYTES {
-                let mut cut = INSTRUCTION_FILE_MAX_BYTES;
-                while !content.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                content.truncate(cut);
-                content.push_str("\n… (truncated)");
-            }
-            Some((name.clone(), content))
+            Some((
+                name.clone(),
+                cap_instruction(std::fs::read(root.join(name)).ok()?),
+            ))
         })
         .collect()
+}
+
+/// Truncate an instruction file's bytes to the cap and lossily decode.
+fn cap_instruction(bytes: Vec<u8>) -> String {
+    let mut content = String::from_utf8_lossy(&bytes).into_owned();
+    if content.len() > INSTRUCTION_FILE_MAX_BYTES {
+        let mut cut = INSTRUCTION_FILE_MAX_BYTES;
+        while !content.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        content.truncate(cut);
+        content.push_str("\n… (truncated)");
+    }
+    content
+}
+
+/// Load the instruction files from a (possibly remote) backend rooted at
+/// `root`. Used by the front ends for remote workspaces, where the files
+/// live on the host.
+pub async fn load_instructions_via(
+    backend: &crate::backend::Backend,
+    root: &Path,
+    files: &[String],
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for name in files {
+        if let Ok(bytes) = backend.read(&root.join(name)).await {
+            out.push((name.clone(), cap_instruction(bytes)));
+        }
+    }
+    out
 }
 
 // ----- resolved config ------------------------------------------------------
@@ -493,6 +587,11 @@ pub struct Config {
     pub prompts: Vec<PromptPreset>,
     /// MCP servers to connect at startup (`[[mcp_servers]]`, opt-in).
     pub mcp_servers: Vec<McpServer>,
+    /// Remote workspace target when `--remote` was given (else local).
+    pub remote: Option<RemoteSpec>,
+    /// Instruction file names to look for (loaded from the remote root by
+    /// the front end when `remote` is set).
+    pub instruction_names: Vec<String>,
     /// OS sandbox for model-initiated bash commands (`[sandbox]`, opt-in).
     pub sandbox: crate::sandbox::SandboxSettings,
     /// Instruction files that were found: (file name, content).
@@ -539,7 +638,7 @@ impl Config {
         // so starting from a subdirectory finds the same config, sessions
         // and state; without one the current directory is the root.
         let cwd = std::env::current_dir()?;
-        let root = cwd
+        let local_root = cwd
             .ancestors()
             .find(|d| d.join("picocode.toml").is_file())
             .map(Path::to_path_buf)
@@ -556,7 +655,7 @@ impl Config {
             }
             None => None,
         };
-        let project_path = root.join("picocode.toml");
+        let project_path = local_root.join("picocode.toml");
         let project = load_file(&project_path)?;
         if project.is_some() {
             config_files.push("picocode.toml".to_string());
@@ -601,7 +700,7 @@ impl Config {
         let state = if cli_selection {
             None
         } else {
-            crate::state::state_path(&root).and_then(|p| crate::state::load(&p))
+            crate::state::state_path(&local_root).and_then(|p| crate::state::load(&p))
         };
         let mut model_note = None;
         let (provider, model, base_url, active_model, context_window) = if cli_selection {
@@ -624,10 +723,28 @@ impl Config {
         };
         let base_url = args.base_url.or(base_url);
 
+        // Remote workspace: the root becomes the host path and the tools
+        // operate over SSH. Instructions come from the remote root, loaded
+        // by the front end after the connection is up (async); locally
+        // they're read now. Settings (approval, timeouts, models, …) always
+        // come from the local config.
+        let remotes = file.remotes.unwrap_or_default();
+        let remote = match &args.remote {
+            Some(spec) => Some(RemoteSpec::parse(spec, &remotes)?),
+            None => None,
+        };
+        let root = match &remote {
+            Some(spec) => spec.path.clone(),
+            None => local_root,
+        };
         let instruction_names = file
             .instructions
             .unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
-        let instructions = load_instructions(&root, &instruction_names);
+        let instructions = if remote.is_some() {
+            Vec::new()
+        } else {
+            load_instructions(&root, &instruction_names)
+        };
         let search = resolve_search(file.search, std::env::var("BRAVE_API_KEY").ok())?;
 
         Ok(Self {
@@ -654,6 +771,8 @@ impl Config {
             system_prompt: file.system_prompt,
             prompts: file.prompts.unwrap_or_default(),
             mcp_servers: file.mcp_servers.unwrap_or_default(),
+            remote,
+            instruction_names,
             sandbox: crate::sandbox::SandboxSettings {
                 mode: file.sandbox.mode.unwrap_or_default(),
                 allow_network: file.sandbox.allow_network.unwrap_or(false),

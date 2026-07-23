@@ -52,6 +52,17 @@ pub fn sessions_dir(root: &Path) -> Option<PathBuf> {
     Some(data_dir()?.join("picocode/sessions").join(slug(root)))
 }
 
+/// Sessions directory for a config: a remote workspace is keyed by its
+/// host+path slug (so remote sessions don't collide with a same-named
+/// local project and always live on the local machine).
+pub fn sessions_dir_for(cfg: &crate::config::Config) -> Option<PathBuf> {
+    let key = match &cfg.remote {
+        Some(spec) => spec.slug(),
+        None => slug(&cfg.root),
+    };
+    Some(data_dir()?.join("picocode/sessions").join(key))
+}
+
 /// Base directory for picocode's data: `$XDG_DATA_HOME`, defaulting to
 /// `~/.local/share` (with `%USERPROFILE%` as the home on Windows).
 /// Public so front ends can keep their own persisted files next to the

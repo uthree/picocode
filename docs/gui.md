@@ -8,6 +8,10 @@ same engine (`picocode-core`) as the TUI.
 cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 ```
 
+It accepts the same `--remote host:/path` flag as the TUI to open a
+project on another machine over SSH (all tools operate on the host; see
+the [TUI reference](tui.md#remote-workspaces) for the details).
+
 On macOS a prebuilt binary is also on the
 [releases page](https://github.com/uthree/picocode/releases) with its own
 shell installer (`picocode-gui-installer.sh`); launch it as

@@ -35,6 +35,11 @@ OpenAI-compatible server (vLLM, etc.).
   bash commands inside the OS sandbox (macOS sandbox-exec, Linux
   Landlock): writes confined to the project root and temp, network
   optionally blocked — a guard rail for bypass mode
+- **Remote workspaces over SSH** — `--remote host:/path` opens a project
+  on another machine: every tool (read, edit, list, grep, bash) operates
+  on the host over your existing `ssh` config (keys, agent, ProxyJump —
+  picocode never handles credentials). The conversation log stays on your
+  local machine
 
 ## Install
 

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use base64::Engine;
 use rig::tool::Tool;
 use serde::Deserialize;
@@ -7,6 +5,7 @@ use serde_json::json;
 
 use super::{ReadStamps, ToolError, resolve};
 use crate::attachment::{Attachment, AttachmentKind, looks_like_text};
+use crate::backend::Workspace;
 use crate::config::NumHandle;
 
 /// Cap on image files returned through the tool (base64 inflates by 4/3;
@@ -23,7 +22,7 @@ pub struct ReadArgs {
 }
 
 pub struct ReadFile {
-    root: PathBuf,
+    ws: Workspace,
     /// Output limits, shared with the `/config` dialog.
     max_lines: NumHandle,
     max_line_bytes: NumHandle,
@@ -33,13 +32,13 @@ pub struct ReadFile {
 
 impl ReadFile {
     pub fn new(
-        root: PathBuf,
+        ws: Workspace,
         max_lines: NumHandle,
         max_line_bytes: NumHandle,
         stamps: ReadStamps,
     ) -> Self {
         Self {
-            root,
+            ws,
             max_lines,
             max_line_bytes,
             stamps,
@@ -73,12 +72,15 @@ impl Tool for ReadFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.root, &args.path)?;
-        let bytes = tokio::fs::read(&path)
+        let path = resolve(&self.ws.root, &args.path)?;
+        let bytes = self
+            .ws
+            .backend
+            .read(&path)
             .await
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;
         // Stamp the read so edit_file can detect external changes after it.
-        self.stamps.record(&path);
+        self.stamps.record(&self.ws.backend, &path).await;
 
         // Known media types don't go through the text pipeline.
         match Attachment::classify(&path).map(|a| a.kind) {
@@ -193,7 +195,7 @@ mod tests {
 
     fn tool(root: &std::path::Path) -> ReadFile {
         ReadFile::new(
-            root.to_path_buf(),
+            Workspace::local(root.to_path_buf()),
             NumHandle::new(2000),
             NumHandle::new(500),
             Default::default(),

@@ -17,6 +17,9 @@ crates/
     attachment.rs — user file attachments (image/audio/PDF) sent as
                    multimodal message content, with per-provider support
                    checks
+    backend/     — file+shell backend the tools run through: local, or a
+                   remote host over SSH (--remote); ssh.rs drives the
+                   system ssh binary through a ControlMaster socket
     clipboard.rs — system-clipboard reading for paste (files/images →
                    attachments), shared by both front ends
     context.rs   — estimated context-window composition (per-kind token

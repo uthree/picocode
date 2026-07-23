@@ -203,6 +203,8 @@ pub struct App {
     pub speed: picocode_core::speed::SpeedMeter,
     /// MCP connections established at startup, reused across respawns.
     mcp: picocode_core::mcp::McpConnections,
+    /// Workspace backend (local or remote), reused across respawns.
+    backend: picocode_core::backend::Backend,
     /// While `Some`, the input box edits the system prompt instead of a
     /// message (`/prompt`); holds the stashed (input, cursor) to restore.
     pub prompt_edit: Option<(String, usize)>,
@@ -255,6 +257,7 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: &Config,
         event_tx: mpsc::Sender<AgentEvent>,
@@ -263,6 +266,7 @@ impl App {
         jobs: picocode_core::tools::BackgroundJobs,
         cancel_tx: watch::Sender<()>,
         mcp: picocode_core::mcp::McpConnections,
+        backend: picocode_core::backend::Backend,
     ) -> Self {
         let mut app = Self {
             entries: Vec::new(),
@@ -291,6 +295,7 @@ impl App {
             speed: picocode_core::speed::SpeedMeter::default(),
             prompt_edit: None,
             mcp,
+            backend,
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -304,7 +309,7 @@ impl App {
             jobs,
             cancel_tx,
             session_id: session::new_id(),
-            sessions_dir: session::sessions_dir(&cfg.root),
+            sessions_dir: session::sessions_dir_for(cfg),
             session_picker: None,
             model_picker: None,
             add_model: None,
@@ -1095,6 +1100,7 @@ impl App {
         self.follow = true;
 
         let root = self.cfg.root.clone();
+        let backend = self.backend.clone();
         let timeout = self.cfg.bash_timeout.clone();
         let event_tx = self.event_tx.clone();
         let cmd_tx = self.cmd_tx.clone();
@@ -1104,7 +1110,7 @@ impl App {
             use rig::tool::Tool;
             // User-typed `!` commands run unsandboxed by design.
             let tool = picocode_core::tools::Bash::new(
-                root,
+                picocode_core::backend::Workspace { backend, root },
                 timeout,
                 event_tx.clone(),
                 jobs,
@@ -1335,6 +1341,7 @@ impl App {
             self.cancel_tx.subscribe(),
             self.jobs.clone(),
             self.mcp.clone(),
+            self.backend.clone(),
         )?;
 
         // Carry the conversation over to the new worker.
@@ -1953,7 +1960,12 @@ impl App {
 
     /// "dir (branch)" for the input-box title.
     pub fn workdir_label(&self) -> String {
-        let dir = picocode_core::git::display_dir(&self.cfg.root);
+        // A remote workspace shows host:path so the box makes the target
+        // obvious; local shows the shortened directory.
+        let dir = match &self.cfg.remote {
+            Some(spec) => format!("{}:{}", self.backend.label(), spec.path.display()),
+            None => picocode_core::git::display_dir(&self.cfg.root),
+        };
         match &self.git_branch {
             Some(branch) => format!("{dir} ({branch})"),
             None => dir,

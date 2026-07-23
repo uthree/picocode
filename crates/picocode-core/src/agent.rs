@@ -30,6 +30,7 @@ pub fn spawn(
     cancel_rx: watch::Receiver<()>,
     jobs: tools::BackgroundJobs,
     mcp: crate::mcp::McpConnections,
+    backend: crate::backend::Backend,
 ) -> anyhow::Result<(mpsc::Sender<WorkerCmd>, crate::steer::SteerQueue)> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
     let steer = crate::steer::SteerQueue::new();
@@ -42,28 +43,31 @@ pub fn spawn(
     // Anthropic enables prompt caching this way.
     let journal = crate::undo::UndoJournal::new();
     let stamps = tools::ReadStamps::default();
+    let ws = crate::backend::Workspace {
+        backend: backend.clone(),
+        root: cfg.root.clone(),
+    };
     macro_rules! spawn_for {
         ($model:expr) => {{
-            let root = cfg.root.clone();
             let enabled = |name: &str| !cfg.disable_tools.iter().any(|t| t == name);
             let mut builder = rig::agent::AgentBuilder::new($model)
                 .preamble(&system_prompt(&cfg))
                 .tool(tools::ReadFile::new(
-                    root.clone(),
+                    ws.clone(),
                     cfg.read_max_lines.clone(),
                     cfg.read_max_line_bytes.clone(),
                     stamps.clone(),
                 ))
-                .tool(tools::ListFiles::new(root.clone()))
-                .tool(tools::Grep::new(root.clone()))
+                .tool(tools::ListFiles::new(ws.clone()))
+                .tool(tools::Grep::new(ws.clone()))
                 .tool(tools::EditFile::new(
-                    root.clone(),
+                    ws.clone(),
                     cfg.after_edit.clone(),
                     journal.clone(),
                     stamps.clone(),
                 ))
                 .tool(tools::Bash::new(
-                    root,
+                    ws.clone(),
                     cfg.bash_timeout.clone(),
                     event_tx.clone(),
                     jobs.clone(),
@@ -775,6 +779,8 @@ mod tests {
             system_prompt: None,
             prompts: Vec::new(),
             mcp_servers: Vec::new(),
+            remote: None,
+            instruction_names: Vec::new(),
             sandbox: crate::sandbox::SandboxSettings::default(),
             instructions: Vec::new(),
             config_files: Vec::new(),

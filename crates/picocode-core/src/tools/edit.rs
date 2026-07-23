@@ -1,11 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve, shell_command, truncate_output};
+use super::{ToolError, resolve, truncate_output};
+use crate::backend::Workspace;
 
 /// Hard cap on the configured `after_edit` command.
 const AFTER_EDIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -21,7 +22,7 @@ pub struct EditArgs {
 }
 
 pub struct EditFile {
-    root: PathBuf,
+    ws: Workspace,
     /// Shell command run after every successful write (`after_edit` in the
     /// config file); its verdict is appended to the tool result.
     after_edit: Option<String>,
@@ -33,24 +34,24 @@ pub struct EditFile {
 
 impl EditFile {
     pub fn new(
-        root: PathBuf,
+        ws: Workspace,
         after_edit: Option<String>,
         journal: crate::undo::UndoJournal,
         stamps: super::ReadStamps,
     ) -> Self {
         Self {
-            root,
+            ws,
             after_edit,
             journal,
             stamps,
         }
     }
 
-    /// Refuse to write over external changes: the file moved on disk since
-    /// the model last read it (user edit, another process, or `/undo`), so
-    /// the edit was decided against outdated contents.
-    fn check_stale(&self, path: &Path) -> Result<(), ToolError> {
-        if self.stamps.is_stale(path) {
+    /// Refuse to write over external changes: the file moved since the
+    /// model last read it (user edit, another process, or `/undo`), so the
+    /// edit was decided against outdated contents.
+    async fn check_stale(&self, path: &Path) -> Result<(), ToolError> {
+        if self.stamps.is_stale(&self.ws.backend, path).await {
             return Err(ToolError::new(format!(
                 "{} changed on disk after you last read it (edited externally). \
                  Re-read the file and redo the edit against the current contents.",
@@ -67,18 +68,25 @@ impl EditFile {
         let Some(command) = &self.after_edit else {
             return;
         };
-        out.push_str(&run_after_edit(&self.root, command).await);
+        out.push_str(&run_after_edit(&self.ws, command).await);
     }
 }
 
 /// Execute the after-edit check; the returned text is appended to the
 /// edit_file output. Success stays terse; failures carry the (truncated)
-/// output so the model can act on it.
-async fn run_after_edit(root: &Path, command: &str) -> String {
-    let run = shell_command(command)
-        .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .output();
+/// output so the model can act on it. Runs on the workspace's backend so
+/// a remote edit is verified on the remote host. The after_edit hook is
+/// user-configured, so it runs unsandboxed like `!`.
+async fn run_after_edit(ws: &Workspace, command: &str) -> String {
+    let cmd = match ws
+        .backend
+        .shell(command, &ws.root, &crate::sandbox::SandboxCtx::off())
+    {
+        Ok(cmd) => cmd,
+        Err(e) => return format!("\n\nafter_edit check (`{command}`) could not run: {e:#}"),
+    };
+    let mut cmd = cmd;
+    let run = cmd.stdin(std::process::Stdio::null()).output();
     match tokio::time::timeout(AFTER_EDIT_TIMEOUT, run).await {
         Err(_) => format!(
             "\n\nafter_edit check (`{command}`) timed out after {}s.",
@@ -130,22 +138,26 @@ impl Tool for EditFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.root, &args.path)?;
+        let path = resolve(&self.ws.root, &args.path)?;
+        let backend = &self.ws.backend;
 
         // No (or empty) old_string: whole-file create/overwrite (the former
         // write_file).
         let Some(old_string) = args.old_string.filter(|s| !s.is_empty()) else {
-            self.check_stale(&path)?;
+            self.check_stale(&path).await?;
             self.journal.record(&path);
-            let mut out = write_whole_file(&path, &args.new_string).await?;
-            self.stamps.record(&path);
+            let mut out = write_whole_file(backend, &path, &args.new_string).await?;
+            self.stamps.record(backend, &path).await;
             self.append_after_edit(&mut out).await;
             return Ok(out);
         };
 
-        let content = tokio::fs::read_to_string(&path)
+        let bytes = backend
+            .read(&path)
             .await
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;
+        let content = String::from_utf8(bytes)
+            .map_err(|_| ToolError::new(format!("{} is not a UTF-8 text file", path.display())))?;
 
         if old_string == args.new_string {
             return Err(ToolError::new("old_string and new_string are identical"));
@@ -168,13 +180,16 @@ impl Tool for EditFile {
                 },
             )),
             1 => {
-                self.check_stale(&path)?;
+                self.check_stale(&path).await?;
                 self.journal.record(&path);
                 let updated = content.replacen(&old_string, &args.new_string, 1);
-                tokio::fs::write(&path, &updated).await.map_err(|e| {
-                    ToolError::new(format!("failed to write {}: {e}", path.display()))
-                })?;
-                self.stamps.record(&path);
+                backend
+                    .write(&path, updated.as_bytes())
+                    .await
+                    .map_err(|e| {
+                        ToolError::new(format!("failed to write {}: {e}", path.display()))
+                    })?;
+                self.stamps.record(backend, &path).await;
                 let mut out = format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
@@ -251,13 +266,19 @@ fn closest_region(content: &str, needle: &str) -> Option<(usize, String)> {
 }
 
 /// Create or overwrite `path` with `content`, creating parent directories.
-async fn write_whole_file(path: &std::path::Path, content: &str) -> Result<String, ToolError> {
+async fn write_whole_file(
+    backend: &crate::backend::Backend,
+    path: &std::path::Path,
+    content: &str,
+) -> Result<String, ToolError> {
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+        backend
+            .create_dir_all(parent)
             .await
             .map_err(|e| ToolError::new(format!("failed to create {}: {e}", parent.display())))?;
     }
-    tokio::fs::write(path, content)
+    backend
+        .write(path, content.as_bytes())
         .await
         .map_err(|e| ToolError::new(format!("failed to write {}: {e}", path.display())))?;
     Ok(format!(
@@ -276,7 +297,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), content).unwrap();
         let tool = EditFile::new(
-            dir.path().to_path_buf(),
+            Workspace::local(dir.path().to_path_buf()),
             None,
             Default::default(),
             Default::default(),
@@ -351,7 +372,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f.txt"), "a\n").unwrap();
         let tool = EditFile::new(
-            dir.path().to_path_buf(),
+            Workspace::local(dir.path().to_path_buf()),
             Some("true".into()),
             Default::default(),
             Default::default(),
@@ -370,7 +391,7 @@ mod tests {
         // Failing check: exit code and output are included (also covers the
         // whole-file write path).
         let tool = EditFile::new(
-            dir.path().to_path_buf(),
+            Workspace::local(dir.path().to_path_buf()),
             Some("echo broken; exit 3".into()),
             Default::default(),
             Default::default(),
@@ -388,7 +409,7 @@ mod tests {
 
         // A failed edit runs no check.
         let tool = EditFile::new(
-            dir.path().to_path_buf(),
+            Workspace::local(dir.path().to_path_buf()),
             Some("true".into()),
             Default::default(),
             Default::default(),
@@ -418,14 +439,14 @@ mod tests {
             std::fs::write(&path, "one\n").unwrap();
             let stamps = crate::tools::ReadStamps::default();
             let tool = EditFile::new(
-                dir.path().to_path_buf(),
+                Workspace::local(dir.path().to_path_buf()),
                 None,
                 Default::default(),
                 stamps.clone(),
             );
 
             // Simulate a read, then an external change (bump mtime).
-            stamps.record(&path);
+            stamps.record(&crate::backend::Backend::Local, &path).await;
             let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
             std::fs::File::options()
                 .append(true)
@@ -446,7 +467,7 @@ mod tests {
 
             // Re-reading (re-recording) clears the staleness; consecutive
             // edits then keep working because writes refresh the stamp.
-            stamps.record(&path);
+            stamps.record(&crate::backend::Backend::Local, &path).await;
             tool.call(EditArgs {
                 path: "f.txt".into(),
                 old_string: Some("one".into()),
@@ -480,7 +501,7 @@ mod tests {
     async fn omitted_old_string_creates_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let tool = EditFile::new(
-            dir.path().to_path_buf(),
+            Workspace::local(dir.path().to_path_buf()),
             None,
             Default::default(),
             Default::default(),

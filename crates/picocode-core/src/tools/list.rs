@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::collections::BTreeSet;
 
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
 use super::{ToolError, resolve};
+use crate::backend::Workspace;
 
 const MAX_ENTRIES: usize = 500;
 
@@ -15,12 +16,12 @@ pub struct ListArgs {
 }
 
 pub struct ListFiles {
-    root: PathBuf,
+    ws: Workspace,
 }
 
 impl ListFiles {
-    pub fn new(root: PathBuf) -> Self {
-        Self { root }
+    pub fn new(ws: Workspace) -> Self {
+        Self { ws }
     }
 }
 
@@ -47,42 +48,37 @@ impl Tool for ListFiles {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let base = match &args.path {
-            Some(p) => resolve(&self.root, p)?,
-            None => self.root.clone(),
+            Some(p) => resolve(&self.ws.root, p)?,
+            None => self.ws.root.clone(),
         };
-        if !base.is_dir() {
+        if !self.ws.backend.is_dir(&base).await {
             return Err(ToolError::new(format!(
                 "{} is not a directory",
                 base.display()
             )));
         }
 
-        let base_clone = base.clone();
-        let entries = tokio::task::spawn_blocking(move || {
-            let mut entries: Vec<String> = Vec::new();
-            for entry in ignore::WalkBuilder::new(&base_clone)
-                .hidden(true)
-                .git_ignore(true)
-                .require_git(false)
-                .build()
-                .flatten()
-            {
-                let path = entry.path();
-                if path == base_clone {
-                    continue;
+        let files = self
+            .ws
+            .backend
+            .walk_files(&base)
+            .await
+            .map_err(|e| ToolError::new(format!("walk failed: {e}")))?;
+        // Files come back relative to `base`; add each file plus every
+        // ancestor directory (marked with a trailing `/`), like the
+        // gitignore-aware local walk did.
+        let mut entries: BTreeSet<String> = BTreeSet::new();
+        for file in &files {
+            let mut ancestors = file.ancestors().skip(1);
+            for dir in ancestors.by_ref() {
+                if dir.as_os_str().is_empty() {
+                    break;
                 }
-                let rel = path.strip_prefix(&base_clone).unwrap_or(path);
-                let mut s = rel.display().to_string();
-                if entry.file_type().is_some_and(|t| t.is_dir()) {
-                    s.push('/');
-                }
-                entries.push(s);
+                entries.insert(format!("{}/", dir.display()));
             }
-            entries.sort();
-            entries
-        })
-        .await
-        .map_err(|e| ToolError::new(format!("walk failed: {e}")))?;
+            entries.insert(file.display().to_string());
+        }
+        let entries: Vec<String> = entries.into_iter().collect();
 
         let total = entries.len();
         let mut out: String = entries
@@ -111,9 +107,10 @@ mod tests {
         std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
         std::fs::write(dir.path().join(".gitignore"), "ignored.txt\n").unwrap();
         std::fs::write(dir.path().join("ignored.txt"), "").unwrap();
-        let tool = ListFiles::new(dir.path().to_path_buf());
+        let tool = ListFiles::new(Workspace::local(dir.path().to_path_buf()));
         let out = tool.call(ListArgs { path: None }).await.unwrap();
         assert!(out.contains("src/main.rs"));
+        assert!(out.contains("src/"));
         assert!(!out.contains("ignored.txt"));
     }
 }

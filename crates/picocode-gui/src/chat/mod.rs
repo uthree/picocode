@@ -127,6 +127,8 @@ pub struct ChatView {
     prompt_edit: Option<Entity<InputState>>,
     /// MCP connections established at startup, reused across respawns.
     mcp: picocode_core::mcp::McpConnections,
+    /// Workspace backend (local or remote), reused across respawns.
+    backend: picocode_core::backend::Backend,
     /// Live search box at the top of the model menu.
     pub(super) model_filter: Entity<InputState>,
     /// Reasoning entries the user expanded (indices into `entries`);
@@ -196,6 +198,7 @@ impl ChatView {
         cancel_tx: watch::Sender<()>,
         rt: tokio::runtime::Handle,
         mcp: picocode_core::mcp::McpConnections,
+        backend: picocode_core::backend::Backend,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -257,7 +260,7 @@ impl ChatView {
         let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
         Self::apply_theme(theme_pref, cx);
 
-        let sessions_dir = session::sessions_dir(&cfg.root);
+        let sessions_dir = session::sessions_dir_for(&cfg);
         let git_branch = picocode_core::git::branch(&cfg.root);
         let view = Self {
             cfg,
@@ -283,6 +286,7 @@ impl ChatView {
             add_model: None,
             prompt_edit: None,
             mcp,
+            backend,
             model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
@@ -1198,6 +1202,7 @@ impl ChatView {
         self.waiting = false;
 
         let root = self.cfg.root.clone();
+        let backend = self.backend.clone();
         let timeout = self.cfg.bash_timeout.clone();
         let event_tx = self.event_tx.clone();
         let cmd_tx = self.cmd_tx.clone();
@@ -1207,7 +1212,7 @@ impl ChatView {
             use rig::tool::Tool;
             // User-typed `!` commands run unsandboxed by design.
             let tool = picocode_core::tools::Bash::new(
-                root,
+                picocode_core::backend::Workspace { backend, root },
                 timeout,
                 event_tx.clone(),
                 jobs,
@@ -1484,6 +1489,7 @@ impl ChatView {
                 self.cancel_tx.subscribe(),
                 self.jobs.clone(),
                 self.mcp.clone(),
+                self.backend.clone(),
             )
             .map_err(|e| format!("{e:#}"))?
         };
@@ -1827,6 +1833,9 @@ impl ChatView {
             model: None,
             base_url: None,
             bypass: false,
+            // Changing the working directory always opens a local project;
+            // remote workspaces are entered at startup with --remote.
+            remote: None,
             print: None,
             attach: Vec::new(),
             smoke: None,
@@ -1864,6 +1873,7 @@ impl ChatView {
                 self.cancel_tx.subscribe(),
                 self.jobs.clone(),
                 self.mcp.clone(),
+                self.backend.clone(),
             ) {
                 Ok(pair) => pair,
                 Err(e) => {
@@ -1881,7 +1891,7 @@ impl ChatView {
         // directory starts a fresh conversation and session log.
         self.cmd_tx = new_tx;
         self.cfg = new_cfg;
-        self.sessions_dir = session::sessions_dir(&self.cfg.root);
+        self.sessions_dir = session::sessions_dir_for(&self.cfg);
         self.git_branch = picocode_core::git::branch(&self.cfg.root);
         self.session_id = session::new_id();
         self.entries.clear();
