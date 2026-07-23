@@ -117,6 +117,8 @@ after_edit = "cargo check"
 
 # Optional: replace the built-in base system prompt entirely. `{root}` expands
 # to the working directory; instruction files are still appended after it.
+# The /prompt command edits this at runtime (session-only) and prints a
+# ready-to-paste snippet for this file.
 system_prompt = """
 You are a careful coding assistant working in {root}.
 Prefer small, verifiable changes.

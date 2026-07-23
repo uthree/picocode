@@ -123,6 +123,8 @@ pub struct ChatView {
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
     add_model: Option<AddModel>,
+    /// The `/prompt` system-prompt editor dialog while it is open.
+    prompt_edit: Option<Entity<InputState>>,
     /// Live search box at the top of the model menu.
     pub(super) model_filter: Entity<InputState>,
     /// Reasoning entries the user expanded (indices into `entries`);
@@ -276,6 +278,7 @@ impl ChatView {
             session_picker: None,
             settings_open: false,
             add_model: None,
+            prompt_edit: None,
             model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
@@ -1001,6 +1004,7 @@ impl ChatView {
             || self.session_picker.is_some()
             || self.settings_open
             || self.add_model.is_some()
+            || self.prompt_edit.is_some()
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1098,6 +1102,8 @@ impl ChatView {
                 Command::Resume(Some(id)) => self.resume_session(&id, cx),
                 Command::Attach(None) => self.show_attachments(),
                 Command::Attach(Some(arg)) => self.attach_command(&arg, cx),
+                Command::SystemPrompt { reset: false } => self.open_prompt_editor(window, cx),
+                Command::SystemPrompt { reset: true } => self.apply_system_prompt(None, cx),
                 Command::Config => self.settings_open = true,
                 Command::Status => self.show_status(),
                 Command::Permissions => self.show_permissions(),
@@ -1444,28 +1450,22 @@ impl ChatView {
     /// shared by the by-name switch and the add-model dialog. Returns
     /// whether the switch happened (a spawn failure leaves everything
     /// untouched).
-    fn apply_model_config(&mut self, new_cfg: Config, name: &str, cx: &mut Context<Self>) -> bool {
+    /// Respawn the worker for `new_cfg` and carry the conversation over;
+    /// shared by the model switches and the `/prompt` editor. A spawn
+    /// failure leaves everything untouched.
+    fn respawn_worker(&mut self, new_cfg: Config) -> Result<(), String> {
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched. agent::spawn calls tokio::spawn internally, so it
         // needs the runtime context entered.
         let (new_tx, new_steer) = {
             let _guard = self.rt.enter();
-            match agent::spawn(
+            agent::spawn(
                 &new_cfg,
                 self.event_tx.clone(),
                 self.cancel_tx.subscribe(),
                 self.jobs.clone(),
-            ) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    self.push(
-                        EntryKind::Error,
-                        t!("switch_failed", name = name, error = format!("{e:#}")).to_string(),
-                    );
-                    cx.notify();
-                    return false;
-                }
-            }
+            )
+            .map_err(|e| format!("{e:#}"))?
         };
         self.steer = new_steer;
 
@@ -1485,11 +1485,22 @@ impl ChatView {
             }
             let _ = event_tx.send(AgentEvent::TurnComplete).await;
         });
+        self.cfg = new_cfg;
+        Ok(())
+    }
 
+    fn apply_model_config(&mut self, new_cfg: Config, name: &str, cx: &mut Context<Self>) -> bool {
         // The cached model list belongs to the endpoint it was fetched from.
         let endpoint_changed =
             new_cfg.provider != self.cfg.provider || new_cfg.base_url != self.cfg.base_url;
-        self.cfg = new_cfg;
+        if let Err(error) = self.respawn_worker(new_cfg) {
+            self.push(
+                EntryKind::Error,
+                t!("switch_failed", name = name, error = error).to_string(),
+            );
+            cx.notify();
+            return false;
+        }
         self.push(
             EntryKind::Notice,
             t!(
@@ -1513,6 +1524,78 @@ impl ChatView {
     pub(super) fn kill_job(&mut self, id: u64, cx: &mut Context<Self>) {
         if self.jobs.kill(id) {
             self.push(EntryKind::Notice, t!("bg_killed", id = id).to_string());
+        }
+        cx.notify();
+    }
+
+    /// `/prompt`: open the system-prompt editor dialog, seeded with the
+    /// current base prompt (custom or built-in).
+    fn open_prompt_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.running {
+            self.push(EntryKind::Error, t!("prompt_while_running").to_string());
+            return;
+        }
+        let editor = cx.new(|cx| InputState::new(window, cx).auto_grow(8, 16));
+        let current = picocode_core::agent::base_system_prompt(&self.cfg);
+        editor.update(cx, |state, cx| {
+            state.set_value(&current, window, cx);
+            state.focus(window, cx);
+        });
+        self.prompt_edit = Some(editor);
+        cx.notify();
+    }
+
+    /// The prompt dialog's Apply button.
+    pub(super) fn apply_prompt_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.prompt_edit.take() else {
+            return;
+        };
+        let text = editor.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            self.push(EntryKind::Notice, t!("prompt_empty").to_string());
+            cx.notify();
+            return;
+        }
+        // Editing the built-in into itself is not a customization.
+        if self.cfg.system_prompt.is_none()
+            && text == picocode_core::agent::base_system_prompt(&self.cfg)
+        {
+            self.push(EntryKind::Notice, t!("prompt_unchanged").to_string());
+            cx.notify();
+            return;
+        }
+        self.apply_system_prompt(Some(text), cx);
+    }
+
+    /// Swap the system prompt (None = built-in default) by respawning the
+    /// worker with the conversation carried over, like a model switch.
+    pub(super) fn apply_system_prompt(&mut self, prompt: Option<String>, cx: &mut Context<Self>) {
+        if self.running {
+            self.push(EntryKind::Error, t!("prompt_while_running").to_string());
+            cx.notify();
+            return;
+        }
+        let mut new_cfg = self.cfg.clone();
+        new_cfg.system_prompt = prompt.clone();
+        match self.respawn_worker(new_cfg) {
+            Err(error) => self.push(
+                EntryKind::Error,
+                t!("prompt_failed", error = error).to_string(),
+            ),
+            Ok(()) => match prompt {
+                Some(text) => {
+                    self.push(EntryKind::Notice, t!("prompt_updated").to_string());
+                    self.push(
+                        EntryKind::Notice,
+                        t!(
+                            "keep_prompt_hint",
+                            snippet = picocode_core::config::system_prompt_snippet(&text)
+                        )
+                        .to_string(),
+                    );
+                }
+                None => self.push(EntryKind::Notice, t!("prompt_reset_done").to_string()),
+            },
         }
         cx.notify();
     }
@@ -1939,6 +2022,7 @@ impl Render for ChatView {
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
             .children(self.render_add_model(cx))
+            .children(self.render_prompt_edit(cx))
             .children(self.render_session_picker(cx))
             .children(self.render_approval(cx))
             .children(self.render_question(cx))

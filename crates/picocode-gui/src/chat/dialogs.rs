@@ -622,6 +622,75 @@ impl ChatView {
     /// The add-model dialog: provider (click cycles), base URL, model name,
     /// and the endpoint's served models (fetched on demand; clicking one
     /// switches to it directly).
+    /// The `/prompt` dialog: a multi-line editor over the base system
+    /// prompt with Apply / Reset-to-default / Cancel.
+    pub(super) fn render_prompt_edit(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editor = self.prompt_edit.as_ref()?;
+        let theme = cx.theme();
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .id("prompt-dialog")
+                        .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                            if ev.keystroke.key.as_str() == "escape" {
+                                this.prompt_edit = None;
+                                cx.notify();
+                            }
+                        }))
+                        .v_flex()
+                        .w(px(620.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(div().font_bold().child(t!("prompt_title").to_string()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(t!("prompt_hint").to_string()),
+                        )
+                        .child(Input::new(editor))
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    Button::new("prompt-reset")
+                                        .ghost()
+                                        .label(t!("prompt_reset_btn").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.prompt_edit = None;
+                                            this.apply_system_prompt(None, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("prompt-cancel")
+                                        .ghost()
+                                        .label(t!("cancel").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.prompt_edit = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("prompt-apply")
+                                        .primary()
+                                        .label(t!("prompt_apply").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.apply_prompt_edit(cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_add_model(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dlg = self.add_model.as_ref()?;
         let theme = cx.theme();

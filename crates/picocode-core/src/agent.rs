@@ -150,6 +150,12 @@ fn system_prompt(cfg: &Config) -> String {
     base + &instructions
 }
 
+/// The base system prompt (custom override or the built-in default),
+/// without the instructions block — what the `/prompt` editor shows.
+pub fn base_system_prompt(cfg: &Config) -> String {
+    system_prompt_parts(cfg).0
+}
+
 /// The system prompt split as (base, appended instructions block) — the
 /// context breakdown reports the two separately.
 pub(crate) fn system_prompt_parts(cfg: &Config) -> (String, String) {

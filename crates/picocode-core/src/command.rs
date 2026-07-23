@@ -38,6 +38,10 @@ pub enum Command {
     /// `/attach` (list), `/attach clear`, or `/attach <path>` — the front
     /// end interprets the argument.
     Attach(Option<String>),
+    /// `/prompt` (edit dialog) or `/prompt reset` (back to the built-in).
+    SystemPrompt {
+        reset: bool,
+    },
     Mode(Mode),
     Permissions,
     Config,
@@ -96,6 +100,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "/model",
         description: "Pick a model (dialog) or switch: /model <name>",
+    },
+    CommandSpec {
+        name: "/prompt",
+        description: "Edit the system prompt; /prompt reset restores the built-in",
     },
     CommandSpec {
         name: "/resume",
@@ -162,6 +170,13 @@ pub fn parse(input: &str) -> ParseOutcome {
             },
         },
         "/model" => Ok(Command::Model(arg_string())),
+        "/prompt" => match arg {
+            None | Some("") => Ok(Command::SystemPrompt { reset: false }),
+            Some("reset") => Ok(Command::SystemPrompt { reset: true }),
+            Some(arg) => Err(format!(
+                "/prompt takes no argument or `reset` (got `{arg}`)"
+            )),
+        },
         "/resume" => Ok(Command::Resume(arg_string())),
         "/attach" => Ok(Command::Attach(arg_string())),
         "/read-only" => no_arg(Command::Mode(Mode::ReadOnly), name, arg),
@@ -296,6 +311,15 @@ mod tests {
             parse("/jobs kill 3"),
             ParseOutcome::Command(Command::Jobs(JobsAction::Kill(3)))
         );
+        assert_eq!(
+            parse("/prompt"),
+            ParseOutcome::Command(Command::SystemPrompt { reset: false })
+        );
+        assert_eq!(
+            parse("/prompt reset"),
+            ParseOutcome::Command(Command::SystemPrompt { reset: true })
+        );
+        assert!(matches!(parse("/prompt foo"), ParseOutcome::Invalid { .. }));
     }
 
     #[test]

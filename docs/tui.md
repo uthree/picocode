@@ -58,6 +58,7 @@ on macOS ones).
 | `/undo` | Revert the file edits of the most recent turn that made any — modified files are restored, created files deleted — and tell the model so. Repeat to walk further back (up to 20 turns). Only `edit_file` changes are covered: side effects of `bash` (or `!`) commands are not tracked |
 | `/jobs` | List running background jobs (id, elapsed, command); `/jobs kill <id>` stops one — the kill is reported as the job's result, so the model knows too. Tab completes the ids |
 | `/attach <path>` | Stage a file to send with the next prompt: images as multimodal content (audio/PDF on providers that take them — Ollama is images-only), anything that reads as text (markdown, source code, …) inlined as text. `/attach` lists what's staged, `/attach clear` unstages all. `Ctrl+V` stages copied files and clipboard images the same way |
+| `/prompt` | Edit the system prompt in the input box (loaded with the current one; Enter applies for this session — the worker restarts with the conversation carried over — and a ready-to-paste `system_prompt` snippet for picocode.toml is shown; Esc cancels). `/prompt reset` restores the built-in default |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |

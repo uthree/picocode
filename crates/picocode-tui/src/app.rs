@@ -201,6 +201,9 @@ pub struct App {
     context_info: Option<picocode_core::context::Breakdown>,
     /// Rolling generation-speed meter behind the status bar's tok/s.
     pub speed: picocode_core::speed::SpeedMeter,
+    /// While `Some`, the input box edits the system prompt instead of a
+    /// message (`/prompt`); holds the stashed (input, cursor) to restore.
+    pub prompt_edit: Option<(String, usize)>,
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
@@ -283,6 +286,7 @@ impl App {
             clip_count: 0,
             context_info: None,
             speed: picocode_core::speed::SpeedMeter::default(),
+            prompt_edit: None,
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -639,6 +643,7 @@ impl App {
                     self.reset_completion();
                 }
             }
+            KeyCode::Esc if self.prompt_edit.is_some() => self.cancel_prompt_edit(),
             KeyCode::Esc if self.running > 0 => {
                 let _ = self.cancel_tx.send(());
             }
@@ -653,6 +658,11 @@ impl App {
     }
 
     async fn submit(&mut self) {
+        // Enter while the input box edits the system prompt applies it.
+        if self.prompt_edit.is_some() {
+            self.apply_prompt_edit().await;
+            return;
+        }
         let text = self.input.trim().to_string();
         if text.is_empty() {
             return;
@@ -747,6 +757,8 @@ impl App {
                 Command::Resume(Some(id)) => self.resume_session(&id).await,
                 Command::Attach(None) => self.show_attachments(),
                 Command::Attach(Some(arg)) => self.attach(&arg),
+                Command::SystemPrompt { reset: false } => self.open_prompt_editor(),
+                Command::SystemPrompt { reset: true } => self.apply_system_prompt(None).await,
             },
         }
     }
@@ -892,6 +904,106 @@ impl App {
             EntryKind::Notice,
             format!("Staged for the next prompt:\n{list}"),
         );
+    }
+
+    /// `/prompt`: turn the input box into a system-prompt editor loaded
+    /// with the current base prompt (custom or built-in). All the usual
+    /// editing works — multi-line via Alt+Enter / `\`+Enter, paste, Ctrl+V.
+    /// Enter applies, Esc restores the stashed draft.
+    fn open_prompt_editor(&mut self) {
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot edit the system prompt while a turn is running".to_string(),
+            );
+            return;
+        }
+        self.prompt_edit = Some((std::mem::take(&mut self.input), self.cursor));
+        self.input = picocode_core::agent::base_system_prompt(&self.cfg);
+        self.cursor = self.input.chars().count();
+        self.reset_completion();
+        self.push(
+            EntryKind::Notice,
+            "Editing the system prompt — Enter applies (this session), Esc cancels. \
+             `{root}` expands to the project root; project instructions are \
+             appended automatically."
+                .to_string(),
+        );
+    }
+
+    /// Esc in prompt-edit mode: drop the draft, restore the stashed input.
+    fn cancel_prompt_edit(&mut self) {
+        if let Some((input, cursor)) = self.prompt_edit.take() {
+            self.input = input;
+            self.cursor = cursor;
+            self.push(EntryKind::Notice, "System prompt unchanged".to_string());
+        }
+    }
+
+    /// Enter in prompt-edit mode: apply the edited prompt.
+    async fn apply_prompt_edit(&mut self) {
+        let text = expand_pastes(self.input.trim(), &self.pasted);
+        let Some((input, cursor)) = self.prompt_edit.take() else {
+            return;
+        };
+        self.input = input;
+        self.cursor = cursor;
+        if text.is_empty() {
+            self.push(
+                EntryKind::Notice,
+                "Empty prompt — system prompt unchanged (use /prompt reset for the built-in)"
+                    .to_string(),
+            );
+            return;
+        }
+        // Editing the built-in into itself is not a customization.
+        if self.cfg.system_prompt.is_none()
+            && text == picocode_core::agent::base_system_prompt(&self.cfg)
+        {
+            self.push(EntryKind::Notice, "System prompt unchanged".to_string());
+            return;
+        }
+        self.apply_system_prompt(Some(text)).await;
+    }
+
+    /// Swap the system prompt (None = built-in default) by respawning the
+    /// worker with the conversation carried over, like a model switch.
+    async fn apply_system_prompt(&mut self, prompt: Option<String>) {
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot change the system prompt while a turn is running".to_string(),
+            );
+            return;
+        }
+        let mut new_cfg = self.cfg.clone();
+        new_cfg.system_prompt = prompt.clone();
+        if let Err(e) = self.respawn_worker(new_cfg).await {
+            self.push(
+                EntryKind::Error,
+                format!("Failed to apply the system prompt: {e:#}"),
+            );
+            return;
+        }
+        match prompt {
+            Some(text) => {
+                self.push(
+                    EntryKind::Notice,
+                    "System prompt updated for this session — the next message uses it".to_string(),
+                );
+                self.push(
+                    EntryKind::Notice,
+                    format!(
+                        "To keep it, add this to picocode.toml:\n{}",
+                        picocode_core::config::system_prompt_snippet(&text)
+                    ),
+                );
+            }
+            None => self.push(
+                EntryKind::Notice,
+                "System prompt reset to the built-in default".to_string(),
+            ),
+        }
     }
 
     /// `!<command>`: run a shell command directly (no model, no approval —
@@ -1131,26 +1243,17 @@ impl App {
     }
 
     /// Respawn the worker for `new_cfg` and carry the conversation over;
-    /// shared by the by-name switch and the add-model form. Returns whether
-    /// the switch happened (a spawn failure leaves everything untouched).
-    async fn apply_model_config(&mut self, new_cfg: Config, name: &str) -> bool {
+    /// shared by the model switches and the `/prompt` editor. A spawn
+    /// failure leaves everything untouched.
+    async fn respawn_worker(&mut self, new_cfg: Config) -> anyhow::Result<()> {
         // Spawn first so a failure (e.g. missing API key) leaves the current
         // worker untouched.
-        let (new_tx, new_steer) = match picocode_core::agent::spawn(
+        let (new_tx, new_steer) = picocode_core::agent::spawn(
             &new_cfg,
             self.event_tx.clone(),
             self.cancel_tx.subscribe(),
             self.jobs.clone(),
-        ) {
-            Ok(pair) => pair,
-            Err(e) => {
-                self.push(
-                    EntryKind::Error,
-                    format!("Failed to switch to `{name}`: {e:#}"),
-                );
-                return false;
-            }
-        };
+        )?;
 
         // Carry the conversation over to the new worker.
         let (htx, hrx) = oneshot::channel();
@@ -1160,12 +1263,25 @@ impl App {
             let _ = new_tx.send(WorkerCmd::SeedHistory(history)).await;
         }
 
-        // The cached model list belongs to the endpoint it was fetched from.
-        let endpoint_changed =
-            new_cfg.provider != self.cfg.provider || new_cfg.base_url != self.cfg.base_url;
         self.cmd_tx = new_tx; // dropping the old sender shuts the old worker down
         self.steer = new_steer;
         self.cfg = new_cfg;
+        Ok(())
+    }
+
+    /// Switch to `new_cfg`'s model: respawn and report. Shared by the
+    /// by-name switch and the add-model form.
+    async fn apply_model_config(&mut self, new_cfg: Config, name: &str) -> bool {
+        // The cached model list belongs to the endpoint it was fetched from.
+        let endpoint_changed =
+            new_cfg.provider != self.cfg.provider || new_cfg.base_url != self.cfg.base_url;
+        if let Err(e) = self.respawn_worker(new_cfg).await {
+            self.push(
+                EntryKind::Error,
+                format!("Failed to switch to `{name}`: {e:#}"),
+            );
+            return false;
+        }
         self.model_label = self.cfg.model_label();
         self.push(
             EntryKind::Notice,
@@ -1407,6 +1523,10 @@ impl App {
     /// after it, the command's argument candidates (model names, session
     /// ids, file paths).
     pub fn completions(&self) -> Vec<(String, String)> {
+        // The prompt editor's content is never a command.
+        if self.prompt_edit.is_some() {
+            return Vec::new();
+        }
         let filter = self.comp_prefix.as_deref().unwrap_or(&self.input);
         if !filter.starts_with('/') || filter.contains('\n') {
             return Vec::new();
@@ -1545,6 +1665,11 @@ impl App {
         } else if !up && row + 1 < rows {
             self.move_input_line(false);
         } else {
+            // No history recall while the input box edits the system
+            // prompt — a stray ↑ must not overwrite the draft.
+            if self.prompt_edit.is_some() {
+                return;
+            }
             let recalled = if up {
                 self.input_history.prev(&self.input)
             } else {

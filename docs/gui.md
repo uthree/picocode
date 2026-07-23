@@ -96,7 +96,10 @@ signing/notarization) may come later.
   side effects are not tracked), `/jobs` (background-jobs popup — also
   reachable from the status-bar chip — with a kill button per job) and
   `/jobs kill <id>`, `/attach <path>` (stages like the 📎 button;
-  `/attach` lists, `/attach clear` unstages), `/model`, `/resume`, the mode
+  `/attach` lists, `/attach clear` unstages), `/prompt` (a dialog editing
+  the system prompt — applies to this session with the conversation
+  carried over, and prints a picocode.toml snippet to persist it;
+  `/prompt reset` restores the built-in), `/model`, `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),

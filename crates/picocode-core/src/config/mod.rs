@@ -23,6 +23,15 @@ pub fn provider_name(p: Provider) -> &'static str {
     }
 }
 
+/// A ready-to-paste picocode.toml snippet keeping a custom system prompt
+/// (shown after `/prompt` applies one). A prompt containing `"""` cannot
+/// be expressed in a TOML multi-line basic string as-is, so its quotes
+/// are escaped.
+pub fn system_prompt_snippet(prompt: &str) -> String {
+    let body = prompt.trim_end().replace("\"\"\"", "\\\"\\\"\\\"");
+    format!("system_prompt = \"\"\"\n{body}\n\"\"\"")
+}
+
 /// All selectable providers, in the add-model form's cycle order.
 pub const PROVIDERS: &[Provider] = &[Provider::Ollama, Provider::Anthropic, Provider::Openai];
 
