@@ -166,6 +166,8 @@ pub struct ChatView {
     clip_count: usize,
     /// Latest context composition reported by the worker, shown by /status.
     context_info: Option<picocode_core::context::Breakdown>,
+    /// Rolling generation-speed meter behind the status bar's tok/s.
+    pub(super) speed: picocode_core::speed::SpeedMeter,
     /// Open right-click menu: (transcript entry index, click position).
     ctx_menu: Option<(usize, Point<Pixels>)>,
     /// Image opened full-size from a transcript thumbnail (click closes).
@@ -290,6 +292,7 @@ impl ChatView {
             pending_attachments: Vec::new(),
             clip_count: 0,
             context_info: None,
+            speed: picocode_core::speed::SpeedMeter::default(),
             ctx_menu: None,
             image_preview: None,
             // The overdraw pre-measures entries near the viewport so
@@ -358,11 +361,13 @@ impl ChatView {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
                 self.est_out += est_tokens(&s);
+                self.speed.record(est_tokens(&s));
                 self.append(EntryKind::Assistant, &s);
             }
             AgentEvent::ReasoningDelta(s) => {
                 self.waiting = false;
                 self.est_out += est_tokens(&s);
+                self.speed.record(est_tokens(&s));
                 self.append(EntryKind::Reasoning, &s);
             }
             AgentEvent::ToolCall { name, args } => {
@@ -509,6 +514,7 @@ impl ChatView {
                 }
             }
             AgentEvent::Cancelled => {
+                self.speed.reset();
                 self.push(EntryKind::Notice, t!("cancelled").to_string());
                 // Stop means stop: give held-back prompts to the input box
                 // (and their attachments back to the staging row) instead of
@@ -540,6 +546,7 @@ impl ChatView {
             AgentEvent::TurnComplete => {
                 self.running = false;
                 self.waiting = false;
+                self.speed.reset();
                 // A cancelled or failed completion never reports usage; drop
                 // its estimate rather than carrying it into the idle counter.
                 self.est_out = 0;

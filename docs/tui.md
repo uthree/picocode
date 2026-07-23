@@ -65,10 +65,12 @@ on macOS ones).
 ## Display details
 
 - **Status bar**: token usage on the right — a flat tqdm-style context-window
-  gauge (green/yellow/red by pressure) plus a live `↑ prefill ↓ decode`
-  counter while generating. The activity indicator distinguishes *waiting*
-  (request sent, no tokens yet) from *running* (tokens streaming). The
-  permission mode is shown on the left.
+  gauge (green/yellow/red by pressure) plus a live counter for the active
+  phase while generating: `↑ prefill` while waiting on the API, `↓ decode`
+  with the generation speed (`tok/s`, over a rolling window) while tokens
+  stream. The activity indicator distinguishes *waiting* (request sent, no
+  tokens yet) from *running* (tokens streaming). The permission mode is
+  shown on the left.
 - **Markdown rendering**: replies are rendered — headings, bold/italic,
   inline code, lists, quotes, links, and tables (box-drawn, column-aligned).
   Fenced code blocks are syntax-highlighted (via syntect, language taken

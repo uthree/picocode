@@ -20,6 +20,7 @@ pub mod history;
 pub mod models;
 pub mod report;
 pub mod session;
+pub mod speed;
 pub mod state;
 pub mod steer;
 pub mod tools;

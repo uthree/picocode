@@ -199,6 +199,8 @@ pub struct App {
     clip_count: usize,
     /// Latest context composition reported by the worker, shown by /status.
     context_info: Option<picocode_core::context::Breakdown>,
+    /// Rolling generation-speed meter behind the status bar's tok/s.
+    pub speed: picocode_core::speed::SpeedMeter,
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
@@ -280,6 +282,7 @@ impl App {
             attachments: Vec::new(),
             clip_count: 0,
             context_info: None,
+            speed: picocode_core::speed::SpeedMeter::default(),
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -1819,6 +1822,7 @@ impl App {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
                 self.delta_est += 1;
+                self.speed.record(1);
                 if !self.assistant_open {
                     self.close_blocks();
                     self.push(EntryKind::Assistant, String::new());
@@ -1829,6 +1833,7 @@ impl App {
             AgentEvent::ReasoningDelta(s) => {
                 self.waiting = false;
                 self.delta_est += 1;
+                self.speed.record(1);
                 if !self.reasoning_open {
                     self.close_blocks();
                     self.push(EntryKind::Reasoning, String::new());
@@ -1998,6 +2003,7 @@ impl App {
             }
             AgentEvent::Cancelled => {
                 self.waiting = false;
+                self.speed.reset();
                 self.close_blocks();
                 // A cancelled stream drops the questioning tool future, so an
                 // open dialog can no longer deliver its answer — close it.
@@ -2030,6 +2036,7 @@ impl App {
                 self.running = self.running.saturating_sub(1);
                 // A queued prompt starts processing right away.
                 self.waiting = self.running > 0;
+                self.speed.reset();
                 self.close_blocks();
                 if self.running == 0 {
                     // Any dialog still open belongs to a dropped tool future.

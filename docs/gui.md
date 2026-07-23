@@ -44,9 +44,12 @@ signing/notarization) may come later.
   provider, optionally set a base URL, then type a model name or fetch
   the endpoint's model list and click one. Ad-hoc switches are remembered
   per project, and a ready-to-paste `[[models]]` snippet for
-  picocode.toml lands in the transcript. While the model generates, the output-token counter
-  ticks live from an estimate of the streamed deltas and snaps to the
-  provider-reported count at each completion boundary.
+  picocode.toml lands in the transcript. While the model generates, the
+  counter shows only the active phase — `↑` while the request is prefilled,
+  then a `↓` output counter ticking live from an estimate of the streamed
+  deltas (with the generation speed in `tok/s` over a rolling window) that
+  snaps to the provider-reported count at each completion boundary; idle
+  shows both totals.
 - **Workdir line**: the project directory and git branch (with an icon)
   sit above the input box, refreshed after each turn. Clicking the
   directory opens a native folder picker and moves the project root

@@ -556,10 +556,18 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" "),
     ];
     if app.running > 0 {
-        right.push(Span::styled(
-            format!("↑ {} ↓ {}  ", app.ctx_tokens, app.turn_out + app.delta_est),
-            dim,
-        ));
+        // Only the active phase: ↑ while the request is being prefilled
+        // (waiting on the API), ↓ + tok/s while tokens stream in.
+        let text = if app.waiting {
+            format!("↑ {}  ", app.ctx_tokens)
+        } else {
+            let rate = match app.speed.rate() {
+                Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
+                None => String::new(),
+            };
+            format!("↓ {}{rate}  ", app.turn_out + app.delta_est)
+        };
+        right.push(Span::styled(text, dim));
     }
     right.push(Span::styled(bar, Style::new().fg(gauge_color)));
     right.push(Span::styled(rest, dim));
