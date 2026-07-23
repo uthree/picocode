@@ -99,7 +99,8 @@ signing/notarization) may come later.
   `/attach` lists, `/attach clear` unstages), `/prompt` (a dialog editing
   the system prompt — applies to this session with the conversation
   carried over, and prints a picocode.toml snippet to persist it;
-  `/prompt reset` restores the built-in), `/model`, `/resume`, the mode
+  `/prompt <name>` switches to a `[[prompts]]` preset, `/prompt reset`
+  restores the built-in), `/model`, `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),

@@ -132,6 +132,9 @@ struct FileConfig {
     /// Replaces the built-in base system prompt. `{root}` expands to the
     /// working directory. Instruction files are still appended after it.
     system_prompt: Option<String>,
+    /// Named system-prompt presets, switchable at runtime with
+    /// `/prompt <name>`.
+    prompts: Option<Vec<PromptPreset>>,
     /// Seconds before a bash command is moved to the background (default 120).
     bash_timeout: Option<u64>,
     /// Max lines a single read_file call returns (default 2000).
@@ -165,6 +168,16 @@ pub const DEFAULT_AUTO_COMPACT: u64 = 85;
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
 pub const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
+
+/// One named `[[prompts]]` preset in the config file: a full replacement
+/// for the base system prompt (`{root}` expands, instructions are still
+/// appended), applied at runtime with `/prompt <name>`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PromptPreset {
+    pub name: String,
+    pub prompt: String,
+}
 
 /// One switchable `[[models]]` entry in the config file.
 #[derive(Clone, Debug, Deserialize)]
@@ -348,6 +361,8 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         models,
         instructions: project.instructions.or(global.instructions),
         system_prompt: project.system_prompt.or(global.system_prompt),
+        // Like models: a project's preset list replaces the global one.
+        prompts: project.prompts.or(global.prompts),
         bash_timeout: project.bash_timeout.or(global.bash_timeout),
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
@@ -430,6 +445,9 @@ pub struct Config {
     pub after_edit: Option<String>,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
+    /// Named system-prompt presets (`[[prompts]]`), switchable with
+    /// `/prompt <name>`.
+    pub prompts: Vec<PromptPreset>,
     /// Instruction files that were found: (file name, content).
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
@@ -587,6 +605,7 @@ impl Config {
             disable_tools,
             after_edit: file.after_edit.filter(|c| !c.trim().is_empty()),
             system_prompt: file.system_prompt,
+            prompts: file.prompts.unwrap_or_default(),
             instructions,
             config_files,
             context_window,

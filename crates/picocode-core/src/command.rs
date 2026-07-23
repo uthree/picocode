@@ -24,6 +24,18 @@ pub enum JobsAction {
     Kill(u64),
 }
 
+/// What the `/prompt` command should do.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PromptAction {
+    /// `/prompt`: open the editor.
+    Edit,
+    /// `/prompt reset`: back to the built-in default.
+    Reset,
+    /// `/prompt <name>`: switch to a `[[prompts]]` preset (the front end
+    /// resolves the name against the config).
+    Preset(String),
+}
+
 /// A parsed slash command, ready for the front end to execute.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -38,10 +50,8 @@ pub enum Command {
     /// `/attach` (list), `/attach clear`, or `/attach <path>` — the front
     /// end interprets the argument.
     Attach(Option<String>),
-    /// `/prompt` (edit dialog) or `/prompt reset` (back to the built-in).
-    SystemPrompt {
-        reset: bool,
-    },
+    /// `/prompt` and its argument forms (see [`PromptAction`]).
+    SystemPrompt(PromptAction),
     Mode(Mode),
     Permissions,
     Config,
@@ -103,7 +113,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "/prompt",
-        description: "Edit the system prompt; /prompt reset restores the built-in",
+        description: "Edit the system prompt; /prompt <preset> switches, /prompt reset restores",
     },
     CommandSpec {
         name: "/resume",
@@ -170,13 +180,11 @@ pub fn parse(input: &str) -> ParseOutcome {
             },
         },
         "/model" => Ok(Command::Model(arg_string())),
-        "/prompt" => match arg {
-            None | Some("") => Ok(Command::SystemPrompt { reset: false }),
-            Some("reset") => Ok(Command::SystemPrompt { reset: true }),
-            Some(arg) => Err(format!(
-                "/prompt takes no argument or `reset` (got `{arg}`)"
-            )),
-        },
+        "/prompt" => Ok(Command::SystemPrompt(match arg {
+            None | Some("") => PromptAction::Edit,
+            Some("reset") => PromptAction::Reset,
+            Some(name) => PromptAction::Preset(name.to_string()),
+        })),
         "/resume" => Ok(Command::Resume(arg_string())),
         "/attach" => Ok(Command::Attach(arg_string())),
         "/read-only" => no_arg(Command::Mode(Mode::ReadOnly), name, arg),
@@ -248,6 +256,32 @@ pub fn path_completions(root: &std::path::Path, cmd: &str, arg: &str) -> Vec<(St
     out
 }
 
+/// `/prompt` argument candidates: the configured `[[prompts]]` preset
+/// names plus `reset`, filtered by the partial argument.
+pub fn prompt_completions(
+    prompts: &[crate::config::PromptPreset],
+    cmd: &str,
+    arg: &str,
+) -> Vec<(String, String)> {
+    let needle = arg.to_lowercase();
+    let mut out: Vec<(String, String)> = prompts
+        .iter()
+        .filter(|p| needle.is_empty() || p.name.to_lowercase().contains(&needle))
+        .map(|p| {
+            let first = p.prompt.lines().next().unwrap_or_default();
+            let detail: String = first.chars().take(48).collect();
+            (format!("{cmd} {}", p.name), detail)
+        })
+        .collect();
+    if "reset".contains(&needle) {
+        out.push((
+            format!("{cmd} reset"),
+            "restore the built-in default".to_string(),
+        ));
+    }
+    out
+}
+
 /// `/jobs kill <id>` candidates from the running-jobs registry, filtered
 /// by the partial argument (id or command substring).
 pub fn jobs_completions(
@@ -313,13 +347,16 @@ mod tests {
         );
         assert_eq!(
             parse("/prompt"),
-            ParseOutcome::Command(Command::SystemPrompt { reset: false })
+            ParseOutcome::Command(Command::SystemPrompt(PromptAction::Edit))
         );
         assert_eq!(
             parse("/prompt reset"),
-            ParseOutcome::Command(Command::SystemPrompt { reset: true })
+            ParseOutcome::Command(Command::SystemPrompt(PromptAction::Reset))
         );
-        assert!(matches!(parse("/prompt foo"), ParseOutcome::Invalid { .. }));
+        assert_eq!(
+            parse("/prompt strict"),
+            ParseOutcome::Command(Command::SystemPrompt(PromptAction::Preset("strict".into())))
+        );
     }
 
     #[test]

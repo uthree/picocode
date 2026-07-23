@@ -148,3 +148,6 @@ prompt_empty: "Empty prompt — system prompt unchanged (Reset restores the buil
 prompt_while_running: "Cannot change the system prompt while a turn is running"
 prompt_failed: "Failed to apply the system prompt: %{error}"
 keep_prompt_hint: "To keep this prompt, add it to picocode.toml:\n%{snippet}"
+prompt_no_presets: "No [[prompts]] presets configured in picocode.toml"
+prompt_unknown_preset: "Unknown prompt preset `%{name}` (available: %{names})"
+prompt_preset_switched: "System prompt switched to preset `%{name}`"

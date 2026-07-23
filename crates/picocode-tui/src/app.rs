@@ -757,8 +757,14 @@ impl App {
                 Command::Resume(Some(id)) => self.resume_session(&id).await,
                 Command::Attach(None) => self.show_attachments(),
                 Command::Attach(Some(arg)) => self.attach(&arg),
-                Command::SystemPrompt { reset: false } => self.open_prompt_editor(),
-                Command::SystemPrompt { reset: true } => self.apply_system_prompt(None).await,
+                Command::SystemPrompt(action) => {
+                    use picocode_core::command::PromptAction;
+                    match action {
+                        PromptAction::Edit => self.open_prompt_editor(),
+                        PromptAction::Reset => self.apply_system_prompt(None).await,
+                        PromptAction::Preset(name) => self.apply_prompt_preset(&name).await,
+                    }
+                }
             },
         }
     }
@@ -966,23 +972,87 @@ impl App {
         self.apply_system_prompt(Some(text)).await;
     }
 
+    /// `/prompt <name>`: switch to a `[[prompts]]` preset (exact name, or
+    /// a unique case-insensitive substring like /model).
+    async fn apply_prompt_preset(&mut self, name: &str) {
+        let names = || {
+            self.cfg
+                .prompts
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if self.cfg.prompts.is_empty() {
+            self.push(
+                EntryKind::Error,
+                "No [[prompts]] presets configured in picocode.toml".to_string(),
+            );
+            return;
+        }
+        let needle = name.to_lowercase();
+        let exact = self.cfg.prompts.iter().find(|p| p.name == name);
+        let matches: Vec<_> = self
+            .cfg
+            .prompts
+            .iter()
+            .filter(|p| p.name.to_lowercase().contains(&needle))
+            .collect();
+        let preset = match (exact, matches.as_slice()) {
+            (Some(p), _) => p,
+            (None, [p]) => p,
+            (None, []) => {
+                let names = names();
+                self.push(
+                    EntryKind::Error,
+                    format!("Unknown prompt preset `{name}` (available: {names})"),
+                );
+                return;
+            }
+            (None, many) => {
+                let names = many.iter().map(|p| p.name.as_str()).collect::<Vec<_>>();
+                self.push(
+                    EntryKind::Error,
+                    format!("`{name}` is ambiguous: {}", names.join(", ")),
+                );
+                return;
+            }
+        };
+        let (preset_name, text) = (preset.name.clone(), preset.prompt.clone());
+        if self.set_system_prompt(Some(text)).await {
+            self.push(
+                EntryKind::Notice,
+                format!("System prompt switched to preset `{preset_name}`"),
+            );
+        }
+    }
+
     /// Swap the system prompt (None = built-in default) by respawning the
     /// worker with the conversation carried over, like a model switch.
-    async fn apply_system_prompt(&mut self, prompt: Option<String>) {
+    /// Returns whether it happened; pushes the errors, callers the notices.
+    async fn set_system_prompt(&mut self, prompt: Option<String>) -> bool {
         if self.running > 0 {
             self.push(
                 EntryKind::Error,
                 "Cannot change the system prompt while a turn is running".to_string(),
             );
-            return;
+            return false;
         }
         let mut new_cfg = self.cfg.clone();
-        new_cfg.system_prompt = prompt.clone();
+        new_cfg.system_prompt = prompt;
         if let Err(e) = self.respawn_worker(new_cfg).await {
             self.push(
                 EntryKind::Error,
                 format!("Failed to apply the system prompt: {e:#}"),
             );
+            return false;
+        }
+        true
+    }
+
+    /// The editor's apply / `/prompt reset`, with their notices.
+    async fn apply_system_prompt(&mut self, prompt: Option<String>) {
+        if !self.set_system_prompt(prompt.clone()).await {
             return;
         }
         match prompt {
@@ -1569,6 +1639,7 @@ impl App {
             }
             "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
             "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
+            "/prompt" => picocode_core::command::prompt_completions(&self.cfg.prompts, cmd, arg),
             _ => Vec::new(),
         }
     }

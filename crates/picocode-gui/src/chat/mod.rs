@@ -965,6 +965,7 @@ impl ChatView {
             }
             "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
             "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
+            "/prompt" => picocode_core::command::prompt_completions(&self.cfg.prompts, cmd, arg),
             _ => Vec::new(),
         }
     }
@@ -1102,8 +1103,14 @@ impl ChatView {
                 Command::Resume(Some(id)) => self.resume_session(&id, cx),
                 Command::Attach(None) => self.show_attachments(),
                 Command::Attach(Some(arg)) => self.attach_command(&arg, cx),
-                Command::SystemPrompt { reset: false } => self.open_prompt_editor(window, cx),
-                Command::SystemPrompt { reset: true } => self.apply_system_prompt(None, cx),
+                Command::SystemPrompt(action) => {
+                    use picocode_core::command::PromptAction;
+                    match action {
+                        PromptAction::Edit => self.open_prompt_editor(window, cx),
+                        PromptAction::Reset => self.apply_system_prompt(None, cx),
+                        PromptAction::Preset(name) => self.apply_prompt_preset(&name, cx),
+                    }
+                }
                 Command::Config => self.settings_open = true,
                 Command::Status => self.show_status(),
                 Command::Permissions => self.show_permissions(),
@@ -1567,35 +1574,104 @@ impl ChatView {
         self.apply_system_prompt(Some(text), cx);
     }
 
-    /// Swap the system prompt (None = built-in default) by respawning the
-    /// worker with the conversation carried over, like a model switch.
-    pub(super) fn apply_system_prompt(&mut self, prompt: Option<String>, cx: &mut Context<Self>) {
-        if self.running {
-            self.push(EntryKind::Error, t!("prompt_while_running").to_string());
+    /// `/prompt <name>`: switch to a `[[prompts]]` preset (exact name, or
+    /// a unique case-insensitive substring like /model).
+    fn apply_prompt_preset(&mut self, name: &str, cx: &mut Context<Self>) {
+        if self.cfg.prompts.is_empty() {
+            self.push(EntryKind::Error, t!("prompt_no_presets").to_string());
             cx.notify();
             return;
         }
+        let needle = name.to_lowercase();
+        let exact = self.cfg.prompts.iter().find(|p| p.name == name);
+        let matches: Vec<_> = self
+            .cfg
+            .prompts
+            .iter()
+            .filter(|p| p.name.to_lowercase().contains(&needle))
+            .collect();
+        let preset = match (exact, matches.as_slice()) {
+            (Some(p), _) => p,
+            (None, [p]) => p,
+            (None, []) => {
+                let names = self
+                    .cfg
+                    .prompts
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.push(
+                    EntryKind::Error,
+                    t!("prompt_unknown_preset", name = name, names = names).to_string(),
+                );
+                cx.notify();
+                return;
+            }
+            (None, many) => {
+                let names = many
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.push(
+                    EntryKind::Error,
+                    t!("model_ambiguous", name = name, matches = names).to_string(),
+                );
+                cx.notify();
+                return;
+            }
+        };
+        let (preset_name, text) = (preset.name.clone(), preset.prompt.clone());
+        if self.set_system_prompt(Some(text), cx) {
+            self.push(
+                EntryKind::Notice,
+                t!("prompt_preset_switched", name = preset_name).to_string(),
+            );
+        }
+        cx.notify();
+    }
+
+    /// Swap the system prompt (None = built-in default) by respawning the
+    /// worker with the conversation carried over, like a model switch.
+    /// Returns whether it happened; pushes the errors, callers the notices.
+    fn set_system_prompt(&mut self, prompt: Option<String>, cx: &mut Context<Self>) -> bool {
+        if self.running {
+            self.push(EntryKind::Error, t!("prompt_while_running").to_string());
+            cx.notify();
+            return false;
+        }
         let mut new_cfg = self.cfg.clone();
-        new_cfg.system_prompt = prompt.clone();
-        match self.respawn_worker(new_cfg) {
-            Err(error) => self.push(
+        new_cfg.system_prompt = prompt;
+        if let Err(error) = self.respawn_worker(new_cfg) {
+            self.push(
                 EntryKind::Error,
                 t!("prompt_failed", error = error).to_string(),
-            ),
-            Ok(()) => match prompt {
-                Some(text) => {
-                    self.push(EntryKind::Notice, t!("prompt_updated").to_string());
-                    self.push(
-                        EntryKind::Notice,
-                        t!(
-                            "keep_prompt_hint",
-                            snippet = picocode_core::config::system_prompt_snippet(&text)
-                        )
-                        .to_string(),
-                    );
-                }
-                None => self.push(EntryKind::Notice, t!("prompt_reset_done").to_string()),
-            },
+            );
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
+    /// The editor's apply / `/prompt reset`, with their notices.
+    pub(super) fn apply_system_prompt(&mut self, prompt: Option<String>, cx: &mut Context<Self>) {
+        if !self.set_system_prompt(prompt.clone(), cx) {
+            return;
+        }
+        match prompt {
+            Some(text) => {
+                self.push(EntryKind::Notice, t!("prompt_updated").to_string());
+                self.push(
+                    EntryKind::Notice,
+                    t!(
+                        "keep_prompt_hint",
+                        snippet = picocode_core::config::system_prompt_snippet(&text)
+                    )
+                    .to_string(),
+                );
+            }
+            None => self.push(EntryKind::Notice, t!("prompt_reset_done").to_string()),
         }
         cx.notify();
     }

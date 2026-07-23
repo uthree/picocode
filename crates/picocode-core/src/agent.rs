@@ -760,6 +760,7 @@ mod tests {
             disable_tools: Vec::new(),
             after_edit: None,
             system_prompt: None,
+            prompts: Vec::new(),
             instructions: Vec::new(),
             config_files: Vec::new(),
             context_window: crate::config::DEFAULT_CONTEXT_WINDOW,

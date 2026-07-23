@@ -148,3 +148,6 @@ prompt_empty: "空のプロンプトです — 変更しません (組み込み�
 prompt_while_running: "生成中はシステムプロンプトを変更できません"
 prompt_failed: "システムプロンプトの適用に失敗しました: %{error}"
 keep_prompt_hint: "このプロンプトを保持するには picocode.toml に追加してください:\n%{snippet}"
+prompt_no_presets: "picocode.toml に [[prompts]] プリセットがありません"
+prompt_unknown_preset: "プリセット `%{name}` は見つかりません (利用可能: %{names})"
+prompt_preset_switched: "システムプロンプトをプリセット `%{name}` に切り替えました"

@@ -124,6 +124,17 @@ You are a careful coding assistant working in {root}.
 Prefer small, verifiable changes.
 """
 
+# Optional: named system-prompt presets, switched at runtime with
+# `/prompt <name>` (Tab completes the names). Each is a full replacement
+# for the base prompt, like `system_prompt`; a project's list replaces
+# the global one.
+[[prompts]]
+name = "strict"
+prompt = """
+You are a careful coding assistant in {root}. Make minimal, verifiable
+changes and run the tests after every edit.
+"""
+
 [[models]]
 name = "local"
 provider = "ollama"
