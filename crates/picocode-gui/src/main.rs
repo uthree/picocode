@@ -54,9 +54,14 @@ fn main() -> anyhow::Result<()> {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
     let jobs = picocode_core::tools::BackgroundJobs::new();
+    // Opt-in MCP servers connect once here; failures are shown, not fatal.
+    let (mcp, mcp_errors) = rt.block_on(picocode_core::mcp::connect_all(&cfg.mcp_servers));
+    for error in mcp_errors {
+        let _ = event_tx.try_send(picocode_core::event::AgentEvent::Error(error));
+    }
     let (cmd_tx, steer) = {
         let _guard = rt.enter();
-        agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone())?
+        agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone(), mcp.clone())?
     };
     // The view keeps a runtime handle (model-list fetches, model switches)
     // and the event sender (so those background jobs report back through the
@@ -109,7 +114,8 @@ fn main() -> anyhow::Result<()> {
             cx.open_window(options, |window, cx| {
                 let view = cx.new(|cx| {
                     let mut view = chat::ChatView::new(
-                        cfg, event_rx, event_tx, cmd_tx, steer, jobs, cancel_tx, handle, window, cx,
+                        cfg, event_rx, event_tx, cmd_tx, steer, jobs, cancel_tx, handle, mcp,
+                        window, cx,
                     );
                     if let Some(prompt) = smoke {
                         if prompt.starts_with('!') {

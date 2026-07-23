@@ -125,6 +125,8 @@ pub struct ChatView {
     add_model: Option<AddModel>,
     /// The `/prompt` system-prompt editor dialog while it is open.
     prompt_edit: Option<Entity<InputState>>,
+    /// MCP connections established at startup, reused across respawns.
+    mcp: picocode_core::mcp::McpConnections,
     /// Live search box at the top of the model menu.
     pub(super) model_filter: Entity<InputState>,
     /// Reasoning entries the user expanded (indices into `entries`);
@@ -193,6 +195,7 @@ impl ChatView {
         jobs: picocode_core::tools::BackgroundJobs,
         cancel_tx: watch::Sender<()>,
         rt: tokio::runtime::Handle,
+        mcp: picocode_core::mcp::McpConnections,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -279,6 +282,7 @@ impl ChatView {
             settings_open: false,
             add_model: None,
             prompt_edit: None,
+            mcp,
             model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
@@ -727,6 +731,7 @@ impl ChatView {
                 session_id: &self.session_id,
                 prompts,
                 sessions_dir: self.sessions_dir.as_deref(),
+                mcp: (!self.mcp.is_empty()).then(|| self.mcp.summary()),
             },
         );
         self.push(EntryKind::Notice, text);
@@ -1471,6 +1476,7 @@ impl ChatView {
                 self.event_tx.clone(),
                 self.cancel_tx.subscribe(),
                 self.jobs.clone(),
+                self.mcp.clone(),
             )
             .map_err(|e| format!("{e:#}"))?
         };
@@ -1850,6 +1856,7 @@ impl ChatView {
                 self.event_tx.clone(),
                 self.cancel_tx.subscribe(),
                 self.jobs.clone(),
+                self.mcp.clone(),
             ) {
                 Ok(pair) => pair,
                 Err(e) => {

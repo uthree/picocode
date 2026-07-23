@@ -135,6 +135,9 @@ struct FileConfig {
     /// Named system-prompt presets, switchable at runtime with
     /// `/prompt <name>`.
     prompts: Option<Vec<PromptPreset>>,
+    /// MCP servers to connect at startup (opt-in: none configured means
+    /// no MCP code runs and nothing changes for the model).
+    mcp_servers: Option<Vec<McpServer>>,
     /// Seconds before a bash command is moved to the background (default 120).
     bash_timeout: Option<u64>,
     /// Max lines a single read_file call returns (default 2000).
@@ -177,6 +180,26 @@ pub const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
 pub struct PromptPreset {
     pub name: String,
     pub prompt: String,
+}
+
+/// One `[[mcp_servers]]` entry: an MCP server to connect at startup.
+/// Exactly one of `command` (stdio child process) or `url` (streamable
+/// HTTP) must be set.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServer {
+    pub name: String,
+    /// Executable for a stdio server (e.g. `npx`).
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment variables for the child process.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Endpoint of a streamable-HTTP server (e.g. `http://localhost:8000/mcp`).
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// One switchable `[[models]]` entry in the config file.
@@ -363,6 +386,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         system_prompt: project.system_prompt.or(global.system_prompt),
         // Like models: a project's preset list replaces the global one.
         prompts: project.prompts.or(global.prompts),
+        mcp_servers: project.mcp_servers.or(global.mcp_servers),
         bash_timeout: project.bash_timeout.or(global.bash_timeout),
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
@@ -448,6 +472,8 @@ pub struct Config {
     /// Named system-prompt presets (`[[prompts]]`), switchable with
     /// `/prompt <name>`.
     pub prompts: Vec<PromptPreset>,
+    /// MCP servers to connect at startup (`[[mcp_servers]]`, opt-in).
+    pub mcp_servers: Vec<McpServer>,
     /// Instruction files that were found: (file name, content).
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
@@ -606,6 +632,7 @@ impl Config {
             after_edit: file.after_edit.filter(|c| !c.trim().is_empty()),
             system_prompt: file.system_prompt,
             prompts: file.prompts.unwrap_or_default(),
+            mcp_servers: file.mcp_servers.unwrap_or_default(),
             instructions,
             config_files,
             context_window,

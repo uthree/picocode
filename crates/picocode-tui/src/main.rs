@@ -32,7 +32,15 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
     let jobs = picocode_core::tools::BackgroundJobs::new();
-    let (cmd_tx, steer) = agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone())?;
+    // Opt-in MCP servers connect once here; failures are shown, not fatal.
+    let (mcp, mcp_errors) = picocode_core::mcp::connect_all(&cfg.mcp_servers).await;
+    for error in mcp_errors {
+        let _ = event_tx
+            .send(picocode_core::event::AgentEvent::Error(error))
+            .await;
+    }
+    let (cmd_tx, steer) =
+        agent::spawn(&cfg, event_tx.clone(), cancel_rx, jobs.clone(), mcp.clone())?;
 
     if let Some(prompt) = smoke {
         let attachments = smoke_attach
@@ -82,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         std::io::stdout(),
         ratatui::crossterm::event::EnableBracketedPaste
     );
-    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, jobs, cancel_tx)
+    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, jobs, cancel_tx, mcp)
         .run(terminal, event_rx)
         .await;
     let _ = ratatui::crossterm::execute!(

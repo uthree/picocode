@@ -26,6 +26,11 @@ OpenAI-compatible server (vLLM, etc.).
   support them) with a prompt: drag & drop, 📎 or ⌘V in the GUI,
   `/attach` or Ctrl+V in the TUI — pasting clipboard files and
   screenshots stages them as attachments
+- **Opt-in MCP** — connect Model Context Protocol servers (stdio or
+  streamable HTTP) via `[[mcp_servers]]` in picocode.toml; their tools
+  go through the same approval flow as the built-ins. Off by default:
+  no configuration, no extra tools, nothing for a small model to
+  get confused by
 
 ## Install
 

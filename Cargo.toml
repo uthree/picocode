@@ -16,7 +16,10 @@ picocode-core = { path = "crates/picocode-core" }
 # CMake+NASM on Windows and blocks cross-builds. TLS instead comes from our
 # reqwest dep (rustls-no-provider) with the pure-Rust ring provider, which
 # the binaries install as the process default at startup.
-rig = { version = "0.40", default-features = false, features = ["reqwest", "derive"] }
+rig = { version = "0.40", default-features = false, features = ["reqwest", "derive", "rmcp"] }
+# MCP client (opt-in via [[mcp_servers]]): stdio child-process servers plus
+# streamable-HTTP ones; TLS comes from our process-default ring provider.
+rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "fs", "time"] }
 ratatui = "0.30"

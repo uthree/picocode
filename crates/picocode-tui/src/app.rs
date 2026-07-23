@@ -201,6 +201,8 @@ pub struct App {
     context_info: Option<picocode_core::context::Breakdown>,
     /// Rolling generation-speed meter behind the status bar's tok/s.
     pub speed: picocode_core::speed::SpeedMeter,
+    /// MCP connections established at startup, reused across respawns.
+    mcp: picocode_core::mcp::McpConnections,
     /// While `Some`, the input box edits the system prompt instead of a
     /// message (`/prompt`); holds the stashed (input, cursor) to restore.
     pub prompt_edit: Option<(String, usize)>,
@@ -260,6 +262,7 @@ impl App {
         steer: picocode_core::steer::SteerQueue,
         jobs: picocode_core::tools::BackgroundJobs,
         cancel_tx: watch::Sender<()>,
+        mcp: picocode_core::mcp::McpConnections,
     ) -> Self {
         let mut app = Self {
             entries: Vec::new(),
@@ -287,6 +290,7 @@ impl App {
             context_info: None,
             speed: picocode_core::speed::SpeedMeter::default(),
             prompt_edit: None,
+            mcp,
             background_jobs: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
@@ -1323,6 +1327,7 @@ impl App {
             self.event_tx.clone(),
             self.cancel_tx.subscribe(),
             self.jobs.clone(),
+            self.mcp.clone(),
         )?;
 
         // Carry the conversation over to the new worker.
@@ -1893,6 +1898,7 @@ impl App {
                 session_id: &self.session_id,
                 prompts,
                 sessions_dir: self.sessions_dir.as_deref(),
+                mcp: (!self.mcp.is_empty()).then(|| self.mcp.summary()),
             },
         );
         self.push(EntryKind::Notice, text);

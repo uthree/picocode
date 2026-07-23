@@ -18,6 +18,8 @@ pub struct StatusInfo<'a> {
     /// User prompts in the transcript so far.
     pub prompts: usize,
     pub sessions_dir: Option<&'a Path>,
+    /// Connected MCP servers ("name (n tools), …"), if any.
+    pub mcp: Option<String>,
 }
 
 /// The `/status` (alias `/usage`) overview block.
@@ -43,6 +45,10 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
         let names: Vec<&str> = cfg.instructions.iter().map(|(n, _)| n.as_str()).collect();
         names.join(", ")
     };
+    let mcp = match &info.mcp {
+        Some(list) => format!("\nmcp           {list}"),
+        None => String::new(),
+    };
     format!(
         "Status\n\
          model         {}{entry}\n\
@@ -53,7 +59,7 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
          session       {} — {} prompts, {saved}\n\
          project       {}\n\
          config        {config}\n\
-         instructions  {instructions}",
+         instructions  {instructions}{mcp}",
         info.model_label,
         cfg.mode.get().label(),
         info.ctx_tokens,

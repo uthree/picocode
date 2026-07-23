@@ -50,7 +50,10 @@ impl<M: CompletionModel> AgentHook<M> for ApprovalHook {
             return Flow::Continue;
         };
         let command = bash_command(tool_name, args);
-        let destructive = DESTRUCTIVE_TOOLS.contains(&tool_name);
+        // Unknown names are external (MCP) tools: they can do anything,
+        // so they need approval like the destructive built-ins.
+        let destructive =
+            DESTRUCTIVE_TOOLS.contains(&tool_name) || !crate::tools::ALL_TOOLS.contains(&tool_name);
         match self
             .rules
             .decide(self.mode.get(), tool_name, command.as_deref(), destructive)

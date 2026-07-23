@@ -29,6 +29,7 @@ pub fn spawn(
     event_tx: mpsc::Sender<AgentEvent>,
     cancel_rx: watch::Receiver<()>,
     jobs: tools::BackgroundJobs,
+    mcp: crate::mcp::McpConnections,
 ) -> anyhow::Result<(mpsc::Sender<WorkerCmd>, crate::steer::SteerQueue)> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>(32);
     let steer = crate::steer::SteerQueue::new();
@@ -73,6 +74,14 @@ pub fn spawn(
             }
             if enabled(tools::WebFetch::NAME) {
                 builder = builder.tool(tools::WebFetch::new());
+            }
+            // Opt-in MCP tools: the connections were established at app
+            // startup and are shared across respawns. The approval hook
+            // treats their (unknown) names as destructive, so they ask
+            // by default.
+            let mut builder = builder;
+            for server in mcp.servers.iter() {
+                builder = builder.rmcp_tools(server.tools.clone(), server.sink.clone());
             }
             let agent = builder.max_tokens(8192).build();
             // A second, tool-less agent used by /compact: it only ever needs
@@ -761,6 +770,7 @@ mod tests {
             after_edit: None,
             system_prompt: None,
             prompts: Vec::new(),
+            mcp_servers: Vec::new(),
             instructions: Vec::new(),
             config_files: Vec::new(),
             context_window: crate::config::DEFAULT_CONTEXT_WINDOW,

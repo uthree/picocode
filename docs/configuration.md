@@ -135,6 +135,25 @@ You are a careful coding assistant in {root}. Make minimal, verifiable
 changes and run the tests after every edit.
 """
 
+# Optional, opt-in: MCP (Model Context Protocol) servers. With none
+# configured no MCP code runs and nothing changes for the model — extra
+# tools confuse small local models, so this is deliberately off by
+# default. Servers connect once at startup (a failure is shown and
+# skipped); their tools join the agent's tool set and, being unknown to
+# the approval rules, ask for confirmation like the destructive
+# built-ins (allow-list them via [approval] allow_tools to auto-run).
+# Exactly one of `command` (stdio child process) or `url`
+# (streamable HTTP) per server.
+[[mcp_servers]]
+name = "time"
+command = "uvx"
+args = ["mcp-server-time"]
+# env = { SOME_TOKEN = "…" }        # extra env for the child process
+
+#[[mcp_servers]]
+#name = "remote"
+#url = "http://localhost:8000/mcp"
+
 [[models]]
 name = "local"
 provider = "ollama"

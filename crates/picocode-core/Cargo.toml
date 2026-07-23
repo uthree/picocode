@@ -8,6 +8,7 @@ description = "Shared engine for the picocode coding agent (tools, agent loop, s
 
 [dependencies]
 rig.workspace = true
+rmcp.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
