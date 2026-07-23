@@ -170,8 +170,8 @@ fn sandboxed(
 ) -> anyhow::Result<tokio::process::Command> {
     use anyhow::Context as _;
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, CompatLevel, PathBeneath, PathFd, Ruleset, RulesetAttr,
-        RulesetCreatedAttr,
+        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+        RulesetAttr, RulesetCreatedAttr,
     };
 
     // Filesystem confinement is a hard requirement: an unsupported kernel
