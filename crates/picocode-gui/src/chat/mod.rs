@@ -975,6 +975,7 @@ impl ChatView {
             "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
             "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
             "/prompt" => picocode_core::command::prompt_completions(&self.cfg.prompts, cmd, arg),
+            "/remote" => picocode_core::command::remote_completions(&self.cfg.remotes, cmd, arg),
             _ => Vec::new(),
         }
     }
@@ -1120,6 +1121,13 @@ impl ChatView {
                         PromptAction::Preset(name) => self.apply_prompt_preset(&name, cx),
                     }
                 }
+                Command::Remote(None) => {
+                    self.push(
+                        EntryKind::Notice,
+                        picocode_core::report::remotes_text(&self.cfg),
+                    );
+                }
+                Command::Remote(Some(target)) => self.switch_workspace(&target, cx),
                 Command::Config => self.settings_open = true,
                 Command::Status => self.show_status(),
                 Command::Permissions => self.show_permissions(),
@@ -1828,21 +1836,9 @@ impl ChatView {
             cx.notify();
             return;
         }
-        let args = config::Args {
-            provider: None,
-            model: None,
-            base_url: None,
-            bypass: false,
-            // Changing the working directory always opens a local project;
-            // remote workspaces are entered at startup with --remote.
-            remote: None,
-            print: None,
-            attach: Vec::new(),
-            smoke: None,
-            smoke_attach: None,
-            smoke_steer: None,
-        };
-        let mut new_cfg = match config::Config::from_args(args) {
+        // Changing the working directory always opens a local project;
+        // remote workspaces are entered with `/remote` (or --remote).
+        let mut new_cfg = match config::Config::from_args(config::Args::for_workspace(None)) {
             Ok(cfg) => cfg,
             Err(e) => {
                 self.push(
@@ -1908,6 +1904,139 @@ impl ChatView {
             t!(
                 "workdir_changed",
                 dir = picocode_core::git::display_dir(&self.cfg.root),
+                model = self.cfg.model_label()
+            )
+            .to_string(),
+        );
+        self.reset_list();
+        self.save_last_model();
+        cx.notify();
+    }
+
+    /// `/remote <target>`: open another workspace. Connecting can block for
+    /// a while (SSH auth, ProxyJump), so it runs on the tokio runtime and
+    /// the swap happens back on the UI thread once it succeeds — a failed
+    /// connection leaves the current workspace untouched.
+    fn switch_workspace(&mut self, target: &str, cx: &mut Context<Self>) {
+        use picocode_core::workspace;
+
+        if self.running {
+            self.push(EntryKind::Error, t!("remote_while_running").to_string());
+            return;
+        }
+        let spec = match workspace::parse_target(target, &self.cfg.remotes) {
+            Ok(spec) => spec,
+            Err(e) => {
+                self.push(
+                    EntryKind::Error,
+                    t!("remote_failed", error = format!("{e:#}")).to_string(),
+                );
+                return;
+            }
+        };
+        if spec.as_ref().map(|s| s.to_arg()) == self.cfg.remote.as_ref().map(|s| s.to_arg()) {
+            self.push(EntryKind::Notice, t!("remote_same").to_string());
+            return;
+        }
+        let label = match &spec {
+            Some(spec) => spec.to_arg(),
+            None => t!("remote_local").to_string(),
+        };
+        self.push(
+            EntryKind::Notice,
+            t!("remote_opening", target = label.clone()).to_string(),
+        );
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.rt.spawn(async move {
+            let opened = workspace::open(spec.as_ref())
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(opened);
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(opened) = rx.await else { return };
+            let _ = this.update(cx, |view, cx| {
+                match opened {
+                    Ok((cfg, backend)) => view.apply_workspace(cfg, backend, cx),
+                    Err(error) => {
+                        view.push(
+                            EntryKind::Error,
+                            t!("remote_failed", error = error).to_string(),
+                        );
+                    }
+                }
+                view.scroll_to_bottom();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Adopt a freshly opened workspace: respawn the worker on its backend
+    /// and start a new conversation there (a different workspace gets its
+    /// own session log, like launching picocode in it).
+    fn apply_workspace(
+        &mut self,
+        mut new_cfg: Config,
+        backend: picocode_core::backend::Backend,
+        cx: &mut Context<Self>,
+    ) {
+        // The new workspace selects no model of its own: keep the current one.
+        if new_cfg.model.is_empty() {
+            new_cfg.provider = self.cfg.provider;
+            new_cfg.model = self.cfg.model.clone();
+            new_cfg.base_url = self.cfg.base_url.clone();
+            new_cfg.active_model = None;
+            new_cfg.context_window = self.cfg.context_window;
+        }
+        // Keep the current permission mode and the persisted /config values.
+        new_cfg.mode.set(self.cfg.mode.get());
+        Self::apply_saved(&self.saved, &new_cfg);
+
+        let (new_tx, new_steer) = {
+            let _guard = self.rt.enter();
+            match agent::spawn(
+                &new_cfg,
+                self.event_tx.clone(),
+                self.cancel_tx.subscribe(),
+                self.jobs.clone(),
+                self.mcp.clone(),
+                backend.clone(),
+            ) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    self.push(
+                        EntryKind::Error,
+                        t!("remote_failed", error = format!("{e:#}")).to_string(),
+                    );
+                    return;
+                }
+            }
+        };
+        self.steer = new_steer;
+        // Dropping the old sender shuts the old worker down.
+        self.cmd_tx = new_tx;
+        self.cfg = new_cfg;
+        self.backend = backend;
+        self.sessions_dir = session::sessions_dir_for(&self.cfg);
+        self.git_branch = picocode_core::git::branch(&self.cfg.root);
+        self.session_id = session::new_id();
+        self.entries.clear();
+        self.queued.clear();
+        self.pending_attachments.clear();
+        self.expanded_reasoning.clear();
+        self.tokens_in = 0;
+        self.tokens_out = 0;
+        self.est_out = 0;
+        self.available_models.clear();
+        self.refresh_models();
+        self.push(
+            EntryKind::Notice,
+            t!(
+                "remote_switched",
+                host = self.backend.label(),
+                dir = self.cfg.root.display().to_string(),
                 model = self.cfg.model_label()
             )
             .to_string(),

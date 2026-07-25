@@ -41,6 +41,8 @@ crates/
     transcript.rs — renderer-agnostic transcript entries (Entry/EntryKind)
                    and diff-line parsing shared by both front ends
     undo.rs      — per-turn journal of pre-edit file states backing /undo
+    workspace.rs — opening/switching the workspace (config + backend):
+                   startup connect and the /remote switch share it
   picocode-tui/src/      — the ratatui front end (binary `picocode`)
     main.rs      — entry point (+ --smoke headless debug mode)
     app.rs       — application state and event loop

@@ -774,6 +774,13 @@ impl App {
                         PromptAction::Preset(name) => self.apply_prompt_preset(&name).await,
                     }
                 }
+                Command::Remote(None) => {
+                    self.push(
+                        EntryKind::Notice,
+                        picocode_core::report::remotes_text(&self.cfg),
+                    );
+                }
+                Command::Remote(Some(target)) => self.switch_workspace(&target).await,
             },
         }
     }
@@ -1358,6 +1365,115 @@ impl App {
         Ok(())
     }
 
+    /// `/remote <target>`: open another workspace. The target's config is
+    /// re-resolved from scratch (a remote one adds the host's own
+    /// picocode.toml and instruction files) and the worker respawns on the
+    /// new backend. The conversation does not travel along — a different
+    /// workspace starts a fresh session log, like launching picocode there.
+    /// Nothing changes until the connection is up, so a failed switch
+    /// leaves the current workspace running.
+    async fn switch_workspace(&mut self, target: &str) {
+        use picocode_core::workspace;
+
+        if self.running > 0 {
+            self.push(
+                EntryKind::Error,
+                "Cannot change the workspace while a turn is running".to_string(),
+            );
+            return;
+        }
+        let spec = match workspace::parse_target(target, &self.cfg.remotes) {
+            Ok(spec) => spec,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("{e:#}"));
+                return;
+            }
+        };
+        if spec.as_ref().map(|s| s.to_arg()) == self.cfg.remote.as_ref().map(|s| s.to_arg()) {
+            self.push(EntryKind::Notice, "Already on that workspace".to_string());
+            return;
+        }
+        let label = match &spec {
+            Some(spec) => spec.to_arg(),
+            None => "the local workspace".to_string(),
+        };
+        self.push(EntryKind::Notice, format!("Opening {label}…"));
+
+        let (mut new_cfg, backend) = match workspace::open(spec.as_ref()).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
+                return;
+            }
+        };
+        // The new workspace selects no model of its own: keep the current one.
+        if new_cfg.model.is_empty() {
+            new_cfg.provider = self.cfg.provider;
+            new_cfg.model = self.cfg.model.clone();
+            new_cfg.base_url = self.cfg.base_url.clone();
+            new_cfg.active_model = None;
+            new_cfg.context_window = self.cfg.context_window;
+        }
+        new_cfg.mode.set(self.cfg.mode.get());
+
+        let (new_tx, new_steer) = match picocode_core::agent::spawn(
+            &new_cfg,
+            self.event_tx.clone(),
+            self.cancel_tx.subscribe(),
+            self.jobs.clone(),
+            self.mcp.clone(),
+            backend.clone(),
+        ) {
+            Ok(pair) => pair,
+            Err(e) => {
+                self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
+                return;
+            }
+        };
+        // Dropping the old sender shuts the old worker down.
+        self.cmd_tx = new_tx;
+        self.steer = new_steer;
+        self.cfg = new_cfg;
+        self.backend = backend;
+        self.model_label = self.cfg.model_label();
+        self.sessions_dir = session::sessions_dir_for(&self.cfg);
+        self.session_id = session::new_id();
+        self.git_branch = picocode_core::git::branch(&self.cfg.root);
+        self.entries.clear();
+        self.attachments.clear();
+        self.available_models.clear();
+        self.auto_compact_tried = false;
+        self.context_info = None;
+        self.ctx_tokens = 0;
+        self.turn_out = 0;
+        self.total_out = 0;
+        self.delta_est = 0;
+        self.assistant_open = false;
+        self.reasoning_open = false;
+        self.follow = true;
+        self.top_line = 0;
+        self.push(EntryKind::Logo, LOGO.to_string());
+        self.push(
+            EntryKind::Notice,
+            format!(
+                "Workspace: {} — {} ({})",
+                self.backend.label(),
+                self.cfg.root.display(),
+                self.model_label
+            ),
+        );
+        if !self.cfg.instructions.is_empty() {
+            let names: Vec<&str> = self
+                .cfg
+                .instructions
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect();
+            self.push(EntryKind::Notice, format!("Loaded {}", names.join(", ")));
+        }
+        self.refresh_models();
+    }
+
     /// Switch to `new_cfg`'s model: respawn and report. Shared by the
     /// by-name switch and the add-model form.
     async fn apply_model_config(&mut self, new_cfg: Config, name: &str) -> bool {
@@ -1659,6 +1775,7 @@ impl App {
             "/attach" => picocode_core::command::path_completions(&self.cfg.root, cmd, arg),
             "/jobs" => picocode_core::command::jobs_completions(&self.jobs, cmd, arg),
             "/prompt" => picocode_core::command::prompt_completions(&self.cfg.prompts, cmd, arg),
+            "/remote" => picocode_core::command::remote_completions(&self.cfg.remotes, cmd, arg),
             _ => Vec::new(),
         }
     }

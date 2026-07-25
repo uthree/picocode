@@ -12,11 +12,21 @@ operate on the host: `read_file`, `edit_file`, `list_files` and `grep`
 run over the connection, `bash` runs on the host. Authentication is
 entirely your `ssh` setup (`~/.ssh/config`, keys, agent, ProxyJump) —
 picocode shells out to `ssh` through a ControlMaster socket and never
-handles credentials. The input box shows `host:path`. Settings come from
-the *local* config; instruction files (AGENTS.md) are read from the
-remote root; the conversation log is saved locally, keyed by host+path.
-The `[sandbox]` guard does not apply to a remote host (its bash runs with
-the host's own permissions). Unix hosts only.
+handles credentials. The input box shows `host:path`. The conversation
+log is saved locally, keyed by host+path.
+
+The host's own `picocode.toml` and instruction files (AGENTS.md) apply on
+top of your local config, so a remote project keeps its approval rules,
+`after_edit` hook, system prompt and limits. What the host cannot change
+is anything that would run or connect from *your* machine: `[[models]]`,
+`[[mcp_servers]]`, `[sandbox]` and `[search]` are always taken from the
+local config. The `[sandbox]` guard does not apply to a remote host
+either (its bash runs with the host's own permissions). Unix hosts only.
+
+`/remote` shows the open workspace and the configured `[[remotes]]`;
+`/remote <name|host:/path>` switches to another one without restarting,
+and `/remote local` comes back. Switching reconnects and starts a fresh
+conversation in the new workspace (the old session log stays on disk).
 
 ## Windows
 
@@ -73,6 +83,7 @@ on macOS ones).
 | `/jobs` | List running background jobs (id, elapsed, command); `/jobs kill <id>` stops one — the kill is reported as the job's result, so the model knows too. Tab completes the ids |
 | `/attach <path>` | Stage a file to send with the next prompt: images as multimodal content (audio/PDF on providers that take them — Ollama is images-only), anything that reads as text (markdown, source code, …) inlined as text. `/attach` lists what's staged, `/attach clear` unstages all. `Ctrl+V` stages copied files and clipboard images the same way |
 | `/prompt` | Edit the system prompt in the input box (loaded with the current one; Enter applies for this session — the worker restarts with the conversation carried over — and a ready-to-paste `system_prompt` snippet for picocode.toml is shown; Esc cancels). `/prompt <name>` switches to a `[[prompts]]` preset (Tab completes; unique substrings resolve), `/prompt reset` restores the built-in default |
+| `/remote` | Show the open workspace and the configured `[[remotes]]`. `/remote <name\|host:/path>` switches to another workspace without restarting (Tab completes the names), `/remote local` comes back. The new workspace reconnects, applies its own picocode.toml and instruction files, and starts a fresh conversation |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |

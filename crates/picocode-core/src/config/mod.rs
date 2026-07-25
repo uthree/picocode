@@ -122,13 +122,33 @@ pub struct Args {
     pub smoke_steer: Option<String>,
 }
 
+impl Args {
+    /// The arguments for re-resolving the config when the workspace changes
+    /// at runtime (`/remote`, the GUI's directory picker): no CLI overrides,
+    /// so every setting comes from the config files again.
+    pub fn for_workspace(remote: Option<String>) -> Self {
+        Self {
+            provider: None,
+            model: None,
+            base_url: None,
+            bypass: false,
+            remote,
+            print: None,
+            attach: Vec::new(),
+            smoke: None,
+            smoke_attach: None,
+            smoke_steer: None,
+        }
+    }
+}
+
 // ----- config file ----------------------------------------------------------
 
 /// On-disk config (`picocode.toml` in the project root, merged over
 /// `~/.config/picocode/config.toml`).
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FileConfig {
+pub(crate) struct FileConfig {
     /// Name of the `[[models]]` entry to use at startup (default: the first).
     default_model: Option<String>,
     /// Named model entries, switchable at runtime with `/model <name>`.
@@ -232,6 +252,12 @@ impl RemoteSpec {
             destination: host.to_string(),
             path: PathBuf::from(path),
         })
+    }
+
+    /// The `host:/path` form, as `--remote` would take it (used to
+    /// re-resolve the config when switching workspaces at runtime).
+    pub fn to_arg(&self) -> String {
+        format!("{}:{}", self.destination, self.path.display())
     }
 
     /// Filesystem-safe slug identifying this remote for session storage,
@@ -497,6 +523,73 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
     }
 }
 
+/// The numeric and list settings of a merged file config, validated.
+struct Settings {
+    bash_timeout: u64,
+    read_max_lines: u64,
+    read_max_line_bytes: u64,
+    auto_compact: u64,
+    disable_tools: Vec<String>,
+}
+
+/// Validate and default the settings a config file can carry. Shared by
+/// the startup resolution and the remote-workspace reload so a host's
+/// `picocode.toml` is checked exactly like a local one.
+fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
+    validate_tool_lists(&file.approval)?;
+    let bash_timeout = file.bash_timeout.unwrap_or(DEFAULT_BASH_TIMEOUT);
+    if bash_timeout == 0 {
+        anyhow::bail!("bash_timeout must be at least 1 second");
+    }
+    let read_max_lines = file.read_max_lines.unwrap_or(DEFAULT_READ_MAX_LINES);
+    let read_max_line_bytes = file
+        .read_max_line_bytes
+        .unwrap_or(DEFAULT_READ_MAX_LINE_BYTES);
+    if read_max_lines == 0 || read_max_line_bytes == 0 {
+        anyhow::bail!("read_max_lines and read_max_line_bytes must be at least 1");
+    }
+    let auto_compact = file.auto_compact.unwrap_or(DEFAULT_AUTO_COMPACT);
+    if auto_compact > 99 {
+        anyhow::bail!("auto_compact must be 0 (off) to 99 (percent of the context window)");
+    }
+    let mut disable_tools = file.disable_tools.clone().unwrap_or_default();
+    disable_tools.sort();
+    disable_tools.dedup();
+    for name in &disable_tools {
+        if !crate::tools::OPTIONAL_TOOLS.contains(&name.as_str()) {
+            anyhow::bail!(
+                "disable_tools: `{name}` cannot be disabled (only {} can)",
+                crate::tools::OPTIONAL_TOOLS.join(", ")
+            );
+        }
+    }
+    Ok(Settings {
+        bash_timeout,
+        read_max_lines,
+        read_max_line_bytes,
+        auto_compact,
+        disable_tools,
+    })
+}
+
+/// Strip the sections of a remote workspace's `picocode.toml` that describe
+/// the *local* machine rather than the workspace: the model roster (whose
+/// endpoints and API keys are local), MCP servers (stdio ones would be
+/// launched as local child processes), the OS sandbox (a local-only guard)
+/// and the web-search settings (local network + local API key). What
+/// remains — approval rules, instruction files, the system prompt and its
+/// presets, `after_edit`, the timeouts and output limits — genuinely
+/// belongs to the project being worked on.
+fn workspace_only(mut file: FileConfig) -> FileConfig {
+    file.models = None;
+    file.default_model = None;
+    file.mcp_servers = None;
+    file.remotes = None;
+    file.sandbox = SandboxFileConfig::default();
+    file.search = SearchFileConfig::default();
+    file
+}
+
 fn load_instructions(root: &Path, files: &[String]) -> Vec<(String, String)> {
     files
         .iter()
@@ -589,9 +682,15 @@ pub struct Config {
     pub mcp_servers: Vec<McpServer>,
     /// Remote workspace target when `--remote` was given (else local).
     pub remote: Option<RemoteSpec>,
+    /// Named remote workspaces from the local config (`[[remotes]]`),
+    /// selectable at runtime with `/remote <name>`.
+    pub remotes: Vec<RemoteEntry>,
     /// Instruction file names to look for (loaded from the remote root by
     /// the front end when `remote` is set).
     pub instruction_names: Vec<String>,
+    /// The merged local config file, kept so a remote workspace's own
+    /// `picocode.toml` can be merged over it after the connection is up.
+    pub(crate) local_file: FileConfig,
     /// OS sandbox for model-initiated bash commands (`[sandbox]`, opt-in).
     pub sandbox: crate::sandbox::SandboxSettings,
     /// Instruction files that were found: (file name, content).
@@ -662,35 +761,9 @@ impl Config {
         }
         let file = merge(global.unwrap_or_default(), project.unwrap_or_default());
 
-        let models = file.models.unwrap_or_default();
+        let models = file.models.clone().unwrap_or_default();
         validate_models(&models, file.default_model.as_deref())?;
-        validate_tool_lists(&file.approval)?;
-        let bash_timeout = file.bash_timeout.unwrap_or(DEFAULT_BASH_TIMEOUT);
-        if bash_timeout == 0 {
-            anyhow::bail!("bash_timeout must be at least 1 second");
-        }
-        let read_max_lines = file.read_max_lines.unwrap_or(DEFAULT_READ_MAX_LINES);
-        let read_max_line_bytes = file
-            .read_max_line_bytes
-            .unwrap_or(DEFAULT_READ_MAX_LINE_BYTES);
-        if read_max_lines == 0 || read_max_line_bytes == 0 {
-            anyhow::bail!("read_max_lines and read_max_line_bytes must be at least 1");
-        }
-        let auto_compact = file.auto_compact.unwrap_or(DEFAULT_AUTO_COMPACT);
-        if auto_compact > 99 {
-            anyhow::bail!("auto_compact must be 0 (off) to 99 (percent of the context window)");
-        }
-        let mut disable_tools = file.disable_tools.unwrap_or_default();
-        disable_tools.sort();
-        disable_tools.dedup();
-        for name in &disable_tools {
-            if !crate::tools::OPTIONAL_TOOLS.contains(&name.as_str()) {
-                anyhow::bail!(
-                    "disable_tools: `{name}` cannot be disabled (only {} can)",
-                    crate::tools::OPTIONAL_TOOLS.join(", ")
-                );
-            }
-        }
+        let settings = resolve_settings(&file)?;
 
         // Startup model precedence: CLI flags > last-used state > config
         // default_model / first entry > empty (main() picks the first model
@@ -724,11 +797,10 @@ impl Config {
         let base_url = args.base_url.or(base_url);
 
         // Remote workspace: the root becomes the host path and the tools
-        // operate over SSH. Instructions come from the remote root, loaded
-        // by the front end after the connection is up (async); locally
-        // they're read now. Settings (approval, timeouts, models, …) always
-        // come from the local config.
-        let remotes = file.remotes.unwrap_or_default();
+        // operate over SSH. The host's own picocode.toml and instruction
+        // files are applied by `apply_workspace_settings` once the
+        // connection is up (async); locally they're read now.
+        let remotes = file.remotes.clone().unwrap_or_default();
         let remote = match &args.remote {
             Some(spec) => Some(RemoteSpec::parse(spec, &remotes)?),
             None => None,
@@ -739,13 +811,14 @@ impl Config {
         };
         let instruction_names = file
             .instructions
+            .clone()
             .unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
         let instructions = if remote.is_some() {
             Vec::new()
         } else {
             load_instructions(&root, &instruction_names)
         };
-        let search = resolve_search(file.search, std::env::var("BRAVE_API_KEY").ok())?;
+        let search = resolve_search(file.search.clone(), std::env::var("BRAVE_API_KEY").ok())?;
 
         Ok(Self {
             provider,
@@ -754,34 +827,84 @@ impl Config {
             models,
             active_model,
             model_note,
-            bash_timeout: NumHandle::new(bash_timeout),
-            read_max_lines: NumHandle::new(read_max_lines),
-            read_max_line_bytes: NumHandle::new(read_max_line_bytes),
-            auto_compact: NumHandle::new(auto_compact),
+            bash_timeout: NumHandle::new(settings.bash_timeout),
+            read_max_lines: NumHandle::new(settings.read_max_lines),
+            read_max_line_bytes: NumHandle::new(settings.read_max_line_bytes),
+            auto_compact: NumHandle::new(settings.auto_compact),
             root,
-            approval: RulesHandle::new(file.approval),
+            approval: RulesHandle::new(file.approval.clone()),
             mode: ModeHandle::new(if args.bypass {
                 Mode::Bypass
             } else {
                 Mode::default()
             }),
             search: SearchHandle::new(search),
-            disable_tools,
-            after_edit: file.after_edit.filter(|c| !c.trim().is_empty()),
-            system_prompt: file.system_prompt,
-            prompts: file.prompts.unwrap_or_default(),
-            mcp_servers: file.mcp_servers.unwrap_or_default(),
+            disable_tools: settings.disable_tools,
+            after_edit: file.after_edit.clone().filter(|c| !c.trim().is_empty()),
+            system_prompt: file.system_prompt.clone(),
+            prompts: file.prompts.clone().unwrap_or_default(),
+            mcp_servers: file.mcp_servers.clone().unwrap_or_default(),
             remote,
+            remotes,
             instruction_names,
             sandbox: crate::sandbox::SandboxSettings {
                 mode: file.sandbox.mode.unwrap_or_default(),
                 allow_network: file.sandbox.allow_network.unwrap_or(false),
-                allow_write: file.sandbox.allow_write.unwrap_or_default(),
+                allow_write: file.sandbox.allow_write.clone().unwrap_or_default(),
             },
             instructions,
             config_files,
             context_window,
+            local_file: file,
         })
+    }
+
+    /// Apply a remote workspace's own `picocode.toml` (merged over the local
+    /// config) and load its instruction files. Called by the front ends once
+    /// the SSH connection is up; a no-op for a local workspace, where
+    /// `from_args` already read both.
+    ///
+    /// Only workspace-shaped settings are taken from the host (see
+    /// [`workspace_only`]) — the model roster, MCP servers, the OS sandbox
+    /// and web search stay under local control, so opening a remote
+    /// workspace never makes the local machine run something it was not
+    /// already configured to run.
+    pub async fn apply_workspace_settings(
+        &mut self,
+        backend: &crate::backend::Backend,
+    ) -> anyhow::Result<()> {
+        if !backend.is_remote() {
+            return Ok(());
+        }
+        let path = self.root.join("picocode.toml");
+        let file = match backend.read(&path).await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                let remote: FileConfig = toml::from_str(&text)
+                    .with_context(|| format!("invalid config file: {}", path.display()))?;
+                self.config_files
+                    .push(format!("{}:picocode.toml", backend.label()));
+                merge(self.local_file.clone(), workspace_only(remote))
+            }
+            Err(_) => self.local_file.clone(),
+        };
+
+        let settings = resolve_settings(&file)?;
+        self.bash_timeout.set(settings.bash_timeout);
+        self.read_max_lines.set(settings.read_max_lines);
+        self.read_max_line_bytes.set(settings.read_max_line_bytes);
+        self.auto_compact.set(settings.auto_compact);
+        self.disable_tools = settings.disable_tools;
+        self.approval = RulesHandle::new(file.approval);
+        self.after_edit = file.after_edit.filter(|c| !c.trim().is_empty());
+        self.system_prompt = file.system_prompt;
+        self.prompts = file.prompts.unwrap_or_default();
+        self.instruction_names = file
+            .instructions
+            .unwrap_or_else(|| vec!["AGENTS.md".to_string()]);
+        self.instructions =
+            load_instructions_via(backend, &self.root, &self.instruction_names).await;
+        Ok(())
     }
 
     pub fn model_label(&self) -> String {
@@ -808,6 +931,40 @@ mod tests {
         let worker_side = handle.clone();
         handle.set(120);
         assert_eq!(worker_side.get(), 120);
+    }
+
+    #[test]
+    fn a_remote_config_contributes_workspace_settings_only() {
+        let local: FileConfig = toml::from_str(
+            "bash_timeout = 60\n\
+             [[models]]\nname = \"local\"\nprovider = \"ollama\"\nmodel = \"qwen3:4b\"\n\
+             [[mcp_servers]]\nname = \"time\"\ncommand = \"uvx\"\n",
+        )
+        .unwrap();
+        let remote: FileConfig = toml::from_str(
+            "bash_timeout = 300\nafter_edit = \"cargo check\"\n\
+             instructions = [\"HOST.md\"]\n\
+             [approval]\nallow_bash = [\"ls\"]\n\
+             [[models]]\nname = \"host\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n\
+             [[mcp_servers]]\nname = \"evil\"\ncommand = \"rm\"\n\
+             [sandbox]\nmode = \"off\"\n",
+        )
+        .unwrap();
+
+        let merged = merge(local, workspace_only(remote));
+        // Workspace-shaped settings come from the host…
+        assert_eq!(merged.bash_timeout, Some(300));
+        assert_eq!(merged.after_edit.as_deref(), Some("cargo check"));
+        assert_eq!(merged.instructions, Some(vec!["HOST.md".to_string()]));
+        assert_eq!(merged.approval.allow_bash, vec!["ls".to_string()]);
+        // …but anything that would run or connect locally stays local.
+        let models = merged.models.unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].name, "local");
+        let servers = merged.mcp_servers.unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "time");
+        assert!(merged.sandbox.mode.is_none());
     }
 
     #[test]

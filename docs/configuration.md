@@ -140,9 +140,15 @@ changes and run the tests after every edit.
 # remote (read/edit/list/grep over the connection, bash on the host).
 # Authentication is entirely your ssh setup (~/.ssh/config, keys, agent);
 # picocode never handles credentials. The conversation log stays local.
-# You can also pass `--remote host:/path` directly without an entry here.
-# Settings (this file) are read locally; instruction files (AGENTS.md)
-# come from the remote root. Note: the [sandbox] guard is local-only —
+# You can also pass `--remote host:/path` directly without an entry here,
+# or switch workspaces at runtime with `/remote <name|host:/path>`
+# (`/remote local` comes back).
+# The remote root's own picocode.toml and instruction files (AGENTS.md)
+# are merged over this one, so a host project keeps its approval rules,
+# after_edit hook, system prompt/presets and limits. A host cannot change
+# what would run or connect locally: [[models]], [[mcp_servers]],
+# [sandbox] and [search] always come from the local config (such sections
+# in a remote file are ignored). Note: the [sandbox] guard is local-only —
 # remote bash runs with the host's permissions. Unix hosts only.
 [[remotes]]
 name = "prod"

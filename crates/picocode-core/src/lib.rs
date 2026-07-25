@@ -29,3 +29,4 @@ pub mod steer;
 pub mod tools;
 pub mod transcript;
 pub mod undo;
+pub mod workspace;

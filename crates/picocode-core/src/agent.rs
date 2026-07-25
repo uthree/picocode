@@ -780,11 +780,13 @@ mod tests {
             prompts: Vec::new(),
             mcp_servers: Vec::new(),
             remote: None,
+            remotes: Vec::new(),
             instruction_names: Vec::new(),
             sandbox: crate::sandbox::SandboxSettings::default(),
             instructions: Vec::new(),
             config_files: Vec::new(),
             context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
+            local_file: Default::default(),
         }
     }
 

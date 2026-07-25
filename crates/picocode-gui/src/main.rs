@@ -23,21 +23,6 @@ use gpui::{
 use gpui_component::Root;
 use picocode_core::{agent, config, models};
 
-/// Establish the workspace backend, connecting over SSH and loading the
-/// host's instruction files for a remote target (fatal on failure).
-async fn connect_backend(
-    cfg: &mut config::Config,
-) -> anyhow::Result<picocode_core::backend::Backend> {
-    let Some(spec) = cfg.remote.clone() else {
-        return Ok(picocode_core::backend::Backend::Local);
-    };
-    let ssh = picocode_core::backend::SshBackend::connect(&spec.destination).await?;
-    let backend = picocode_core::backend::Backend::Ssh(std::sync::Arc::new(ssh));
-    cfg.instructions =
-        config::load_instructions_via(&backend, &cfg.root, &cfg.instruction_names).await;
-    Ok(backend)
-}
-
 fn main() -> anyhow::Result<()> {
     // sys-locale reads the OS preference (works for Finder-launched apps
     // too, where $LANG is unset). Only ja is translated so far.
@@ -71,7 +56,9 @@ fn main() -> anyhow::Result<()> {
     let jobs = picocode_core::tools::BackgroundJobs::new();
     // Remote workspace: connect over SSH and load the host's instruction
     // files before spawning (fatal on failure — no workspace otherwise).
-    let backend = rt.block_on(connect_backend(&mut cfg))?;
+    // Remote workspace: connect over SSH and apply the host's picocode.toml
+    // and instruction files (fatal on failure — there is no workspace).
+    let backend = rt.block_on(picocode_core::workspace::connect(&mut cfg))?;
     // Opt-in MCP servers connect once here; failures are shown, not fatal.
     let (mcp, mcp_errors) = rt.block_on(picocode_core::mcp::connect_all(&cfg.mcp_servers));
     for error in mcp_errors {

@@ -9,8 +9,9 @@ cargo run -p picocode-gui        # accepts the same CLI flags as the TUI
 ```
 
 It accepts the same `--remote host:/path` flag as the TUI to open a
-project on another machine over SSH (all tools operate on the host; see
-the [TUI reference](tui.md#remote-workspaces) for the details).
+project on another machine over SSH, and the same `/remote` command to
+switch workspaces at runtime (all tools operate on the host; see the
+[TUI reference](tui.md#remote-workspaces) for the details).
 
 On macOS a prebuilt binary is also on the
 [releases page](https://github.com/uthree/picocode/releases) with its own
@@ -104,7 +105,9 @@ signing/notarization) may come later.
   the system prompt — applies to this session with the conversation
   carried over, and prints a picocode.toml snippet to persist it;
   `/prompt <name>` switches to a `[[prompts]]` preset, `/prompt reset`
-  restores the built-in), `/model`, `/resume`, the mode
+  restores the built-in), `/remote` (workspace listing; `/remote <name>`
+  or `/remote local` switches over SSH without restarting), `/model`,
+  `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),

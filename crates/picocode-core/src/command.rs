@@ -52,6 +52,9 @@ pub enum Command {
     Attach(Option<String>),
     /// `/prompt` and its argument forms (see [`PromptAction`]).
     SystemPrompt(PromptAction),
+    /// `/remote` (show the workspace and the configured remotes) or
+    /// `/remote <name|host:/path|local>` (switch workspace).
+    Remote(Option<String>),
     Mode(Mode),
     Permissions,
     Config,
@@ -114,6 +117,10 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "/prompt",
         description: "Edit the system prompt; /prompt <preset> switches, /prompt reset restores",
+    },
+    CommandSpec {
+        name: "/remote",
+        description: "Show the workspace; /remote <name|host:/path> switches, /remote local returns",
     },
     CommandSpec {
         name: "/resume",
@@ -185,6 +192,7 @@ pub fn parse(input: &str) -> ParseOutcome {
             Some("reset") => PromptAction::Reset,
             Some(name) => PromptAction::Preset(name.to_string()),
         })),
+        "/remote" => Ok(Command::Remote(arg_string())),
         "/resume" => Ok(Command::Resume(arg_string())),
         "/attach" => Ok(Command::Attach(arg_string())),
         "/read-only" => no_arg(Command::Mode(Mode::ReadOnly), name, arg),
@@ -282,6 +290,33 @@ pub fn prompt_completions(
     out
 }
 
+/// `/remote` argument candidates: the configured `[[remotes]]` entry names
+/// plus `local`, filtered by the partial argument.
+pub fn remote_completions(
+    remotes: &[crate::config::RemoteEntry],
+    cmd: &str,
+    arg: &str,
+) -> Vec<(String, String)> {
+    let needle = arg.to_lowercase();
+    let mut out: Vec<(String, String)> = remotes
+        .iter()
+        .filter(|r| needle.is_empty() || r.name.to_lowercase().contains(&needle))
+        .map(|r| {
+            (
+                format!("{cmd} {}", r.name),
+                format!("{}:{}", r.host, r.path),
+            )
+        })
+        .collect();
+    if "local".contains(&needle) {
+        out.push((
+            format!("{cmd} local"),
+            "back to the local workspace".to_string(),
+        ));
+    }
+    out
+}
+
 /// `/jobs kill <id>` candidates from the running-jobs registry, filtered
 /// by the partial argument (id or command substring).
 pub fn jobs_completions(
@@ -356,6 +391,22 @@ mod tests {
         assert_eq!(
             parse("/prompt strict"),
             ParseOutcome::Command(Command::SystemPrompt(PromptAction::Preset("strict".into())))
+        );
+    }
+
+    #[test]
+    fn remote_parses_with_and_without_an_argument() {
+        assert_eq!(
+            parse("/remote"),
+            ParseOutcome::Command(Command::Remote(None))
+        );
+        assert_eq!(
+            parse("/remote box"),
+            ParseOutcome::Command(Command::Remote(Some("box".into())))
+        );
+        assert_eq!(
+            parse("/remote user@host:/srv/app"),
+            ParseOutcome::Command(Command::Remote(Some("user@host:/srv/app".into())))
         );
     }
 

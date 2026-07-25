@@ -75,6 +75,31 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
     )
 }
 
+/// The `/remote` block: which workspace is open and which `[[remotes]]`
+/// entries can be switched to.
+pub fn remotes_text(cfg: &Config) -> String {
+    let current = match &cfg.remote {
+        Some(spec) => format!("remote — {} at {}", spec.destination, spec.path.display()),
+        None => format!("local — {}", cfg.root.display()),
+    };
+    let mut out = format!("Workspace\ncurrent      {current}\n");
+    if cfg.remotes.is_empty() {
+        out.push_str("remotes      (none configured — add [[remotes]] to picocode.toml)\n");
+    } else {
+        for entry in &cfg.remotes {
+            out.push_str(&format!(
+                "remote       {} — {}:{}\n",
+                entry.name, entry.host, entry.path
+            ));
+        }
+    }
+    out.push_str(
+        "Switch with /remote <name|host:/path>; /remote local returns. Switching \
+         starts a fresh conversation and the host's own picocode.toml applies.",
+    );
+    out
+}
+
 /// The `/permissions` block: what the current mode and config rules do.
 /// (The TUI appends its own note about `!` commands, which the GUI lacks.)
 pub fn permissions_text(cfg: &Config) -> String {

@@ -32,10 +32,10 @@ async fn main() -> anyhow::Result<()> {
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(256);
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(());
     let jobs = picocode_core::tools::BackgroundJobs::new();
-    // Remote workspace: connect over SSH and load the host's instruction
-    // files before spawning the worker (a failure here is fatal — there is
-    // no workspace to operate on).
-    let backend = connect_backend(&mut cfg).await?;
+    // Remote workspace: connect over SSH and apply the host's picocode.toml
+    // and instruction files before spawning the worker (a failure here is
+    // fatal — there is no workspace to operate on).
+    let backend = picocode_core::workspace::connect(&mut cfg).await?;
     // Opt-in MCP servers connect once here; failures are shown, not fatal.
     let (mcp, mcp_errors) = picocode_core::mcp::connect_all(&cfg.mcp_servers).await;
     for error in mcp_errors {
@@ -119,22 +119,6 @@ async fn main() -> anyhow::Result<()> {
 /// pipes get clean text; tool activity, notices and errors go to stderr.
 /// Tool calls needing confirmation are denied (no interactive approval) —
 /// `--bypass` allows everything, like an isolated-environment run.
-/// Establish the workspace backend. For a remote target, connect over
-/// SSH and load the host's instruction files into the config; local is
-/// immediate. A remote connection failure is fatal.
-async fn connect_backend(
-    cfg: &mut config::Config,
-) -> anyhow::Result<picocode_core::backend::Backend> {
-    let Some(spec) = cfg.remote.clone() else {
-        return Ok(picocode_core::backend::Backend::Local);
-    };
-    let ssh = picocode_core::backend::SshBackend::connect(&spec.destination).await?;
-    let backend = picocode_core::backend::Backend::Ssh(std::sync::Arc::new(ssh));
-    cfg.instructions =
-        config::load_instructions_via(&backend, &cfg.root, &cfg.instruction_names).await;
-    Ok(backend)
-}
-
 async fn run_print(
     prompt: String,
     attachments: Vec<picocode_core::attachment::Attachment>,

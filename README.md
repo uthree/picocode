@@ -38,8 +38,10 @@ OpenAI-compatible server (vLLM, etc.).
 - **Remote workspaces over SSH** — `--remote host:/path` opens a project
   on another machine: every tool (read, edit, list, grep, bash) operates
   on the host over your existing `ssh` config (keys, agent, ProxyJump —
-  picocode never handles credentials). The conversation log stays on your
-  local machine
+  picocode never handles credentials). The host project's own
+  `picocode.toml` and instruction files apply; `/remote` switches
+  workspaces without restarting. The conversation log stays on your local
+  machine
 
 ## Install
 
