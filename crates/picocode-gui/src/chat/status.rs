@@ -1,8 +1,6 @@
 //! The status bar (mode chip, activity, background jobs, context gauge,
 //! model chip) and the popup menus it opens.
 
-use std::path::{Path, PathBuf};
-
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div, px};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
@@ -281,30 +279,26 @@ impl ChatView {
                         .font_bold()
                         .child(t!("ws_title").to_string()),
                 );
-                // The local project first, then every configured remote —
-                // a host's filesystem has no native picker, so [[remotes]]
-                // entries are how a remote root is chosen.
-                panel = panel.child(
-                    menu_row(
-                        SharedString::from("ws-local"),
-                        t!("ws_local").to_string(),
-                        picocode_core::git::display_dir(&local_root()),
-                        self.cfg.remote.is_none(),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.switch_workspace("local", cx))),
-                );
-                for (ix, entry) in self.cfg.remotes.iter().enumerate() {
-                    let active = self.cfg.remote.as_ref().is_some_and(|spec| {
-                        spec.destination == entry.host && spec.path == Path::new(&entry.path)
-                    });
-                    let name = entry.name.clone();
+                // The local project, then every configured remote — a
+                // host's filesystem has no native picker, so [[remotes]]
+                // entries (and the add-remote dialog) are how a remote
+                // root is chosen.
+                for (ix, choice) in picocode_core::workspace::workspace_choices(&self.cfg)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let name = choice.name.clone();
+                    let label = if ix == 0 {
+                        t!("ws_local").to_string()
+                    } else {
+                        choice.name.clone()
+                    };
                     panel = panel.child(
                         menu_row(
-                            SharedString::from(format!("ws-remote-{ix}")),
-                            entry.name.clone(),
-                            format!("{}:{}", entry.host, entry.path),
-                            active,
+                            SharedString::from(format!("ws-{ix}")),
+                            label,
+                            choice.detail,
+                            choice.active,
                             theme,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -312,16 +306,16 @@ impl ChatView {
                         })),
                     );
                 }
-                if self.cfg.remotes.is_empty() {
-                    panel = panel.child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("ws_no_remotes").to_string()),
-                    );
-                }
+                panel = panel.child(
+                    menu_row(
+                        SharedString::from("ws-add-remote"),
+                        t!("ws_add_remote").to_string(),
+                        t!("ws_add_remote_desc").to_string(),
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.open_add_remote(window, cx))),
+                );
                 panel = panel.child(
                     menu_row(
                         SharedString::from("ws-folder"),
@@ -474,13 +468,6 @@ impl ChatView {
                 .into_any_element(),
         )
     }
-}
-
-/// The directory `/remote local` would open: the project root is
-/// rediscovered from the process working directory, which a remote
-/// workspace never changes.
-fn local_root() -> PathBuf {
-    std::env::current_dir().unwrap_or_default()
 }
 
 /// Localized display name for a permission mode (the technical /status

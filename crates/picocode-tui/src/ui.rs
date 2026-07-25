@@ -8,7 +8,8 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
-    AddModelForm, App, EntryKind, ModelPicker, PendingApproval, PendingQuestion, SessionPicker,
+    AddModelForm, AddRemoteForm, App, EntryKind, ModelPicker, PendingApproval, PendingQuestion,
+    RemotePicker, SessionPicker,
 };
 
 /// Column width of the setting names in the `/config` dialog.
@@ -34,6 +35,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         && app.session_picker.is_none()
         && app.model_picker.is_none()
         && app.add_model.is_none()
+        && app.remote_picker.is_none()
+        && app.add_remote.is_none()
         && app.settings.is_none()
         && app.question.is_none()
     {
@@ -50,6 +53,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(form) = &app.add_model {
         draw_add_model(f, form);
+    }
+    if let Some(picker) = &app.remote_picker {
+        draw_remote_picker(f, picker);
+    }
+    if let Some(form) = &app.add_remote {
+        draw_add_remote(f, form);
     }
     if app.settings.is_some() {
         draw_settings(f, app);
@@ -440,6 +449,8 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         || app.session_picker.is_some()
         || app.model_picker.is_some()
         || app.add_model.is_some()
+        || app.remote_picker.is_some()
+        || app.add_remote.is_some()
         || app.settings.is_some()
         || app.question.is_some();
 
@@ -781,6 +792,94 @@ fn draw_add_model(f: &mut Frame, form: &AddModelForm) {
         " ↑↓ field · ←→ provider · Tab fetch · Enter switch · Esc back",
     ));
     render_dialog(f, "Add provider / model", Color::Cyan, area, lines);
+}
+
+// ----- workspace picker ----------------------------------------------------
+
+/// The `/remote` dialog: the local project, the configured `[[remotes]]`,
+/// and a synthetic row opening the add-remote form.
+fn draw_remote_picker(f: &mut Frame, picker: &RemotePicker) {
+    let screen = f.area();
+    // rows + the "+ add" row + borders + hint line.
+    let area = dialog_area(screen, (30, 70), picker.items.len() as u16 + 4);
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, item) in picker.items.iter().enumerate() {
+        let marker = if item.active { "▸" } else { " " };
+        let style = if item.active {
+            Style::new().fg(Color::Cyan)
+        } else {
+            Style::new()
+        };
+        lines.push(list_line(
+            format!("{marker} {} — {}", item.name, item.detail),
+            i == picker.selected,
+            inner_width,
+            style,
+        ));
+    }
+    lines.push(list_line(
+        "  + add a remote…".to_string(),
+        picker.selected == picker.items.len(),
+        inner_width,
+        Style::new().fg(Color::DarkGray),
+    ));
+    lines.push(hint_line(" ↑↓ · Enter open · Esc close"));
+    render_dialog(f, "Workspace", Color::Cyan, area, lines);
+}
+
+/// The add-remote form: name (for the snippet), ssh destination, path on
+/// the host, with `~/.ssh/config` aliases listed below to pick from.
+fn draw_add_remote(f: &mut Frame, form: &AddRemoteForm) {
+    let screen = f.area();
+    let rows = 3 + form.hosts.len();
+    let area = dialog_area(screen, (30, 70), rows as u16 + 4);
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let visible = (area.height.saturating_sub(4) as usize).max(3);
+
+    let field = |text: &str| if text.is_empty() { "…" } else { text }.to_string();
+    let mut lines: Vec<Line> = vec![
+        list_line(
+            format!(" name      {} (for the config snippet)", field(&form.name)),
+            form.field == 0,
+            inner_width,
+            Style::new(),
+        ),
+        list_line(
+            format!(" host      {} (ssh alias or user@host)", field(&form.host)),
+            form.field == 1,
+            inner_width,
+            Style::new(),
+        ),
+        list_line(
+            format!(" path      {} (directory on the host)", field(&form.path)),
+            form.field == 2,
+            inner_width,
+            Style::new(),
+        ),
+    ];
+    // ~/.ssh/config aliases, windowed like the add-model form's list.
+    let offset = (form.field.saturating_sub(2)).saturating_sub(visible.saturating_sub(3));
+    for (i, host) in form
+        .hosts
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible.saturating_sub(3))
+    {
+        lines.push(list_line(
+            format!("   {host}"),
+            form.field == 3 + i,
+            inner_width,
+            Style::new(),
+        ));
+    }
+    lines.push(hint_line(&format!(" {}", form.note)));
+    lines.push(hint_line(
+        " ↑↓ field · Enter connect (or fill the host) · Esc back",
+    ));
+    render_dialog(f, "Add a remote workspace", Color::Cyan, area, lines);
 }
 
 // ----- settings dialog -----------------------------------------------------

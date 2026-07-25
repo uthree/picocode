@@ -80,6 +80,22 @@ struct AddModel {
     note: String,
 }
 
+/// State of the add-remote dialog (opened from the workspace menu): an
+/// SSH destination and a path on it, tried live. `~/.ssh/config` host
+/// aliases are listed to click.
+struct AddRemote {
+    /// Entry name — only used for the picocode.toml snippet.
+    name: Entity<InputState>,
+    /// ssh destination: an alias or `user@host`.
+    host: Entity<InputState>,
+    /// Working directory on the host.
+    path: Entity<InputState>,
+    /// Host aliases read from `~/.ssh/config`.
+    hosts: Vec<String>,
+    /// Status line: hint, progress, or error.
+    note: String,
+}
+
 impl AddModel {
     /// The base URL as the switch/probe wants it (None = provider default).
     fn base(&self, cx: &gpui::App) -> Option<String> {
@@ -126,6 +142,8 @@ pub struct ChatView {
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
     add_model: Option<AddModel>,
+    /// Open add-remote dialog (from the workspace menu), if any.
+    add_remote: Option<AddRemote>,
     /// The `/prompt` system-prompt editor dialog while it is open.
     prompt_edit: Option<Entity<InputState>>,
     /// MCP connections established at startup, reused across respawns.
@@ -287,6 +305,7 @@ impl ChatView {
             session_picker: None,
             settings_open: false,
             add_model: None,
+            add_remote: None,
             prompt_edit: None,
             mcp,
             backend,
@@ -1124,12 +1143,7 @@ impl ChatView {
                         PromptAction::Preset(name) => self.apply_prompt_preset(&name, cx),
                     }
                 }
-                Command::Remote(None) => {
-                    self.push(
-                        EntryKind::Notice,
-                        picocode_core::report::remotes_text(&self.cfg),
-                    );
-                }
+                Command::Remote(None) => self.toggle_menu(Menu::Workspace, window, cx),
                 Command::Remote(Some(target)) => self.switch_workspace(&target, cx),
                 Command::Config => self.settings_open = true,
                 Command::Status => self.show_status(),
@@ -1869,28 +1883,35 @@ impl ChatView {
         self.apply_workspace(new_cfg, picocode_core::backend::Backend::Local, cx);
     }
 
-    /// `/remote <target>`: open another workspace. Connecting can block for
-    /// a while (SSH auth, ProxyJump), so it runs on the tokio runtime and
-    /// the swap happens back on the UI thread once it succeeds — a failed
-    /// connection leaves the current workspace untouched.
+    /// `/remote <target>`: open another workspace by name (a `[[remotes]]`
+    /// entry, `host:/path`, or `local`).
     fn switch_workspace(&mut self, target: &str, cx: &mut Context<Self>) {
-        use picocode_core::workspace;
-
         self.menu = None;
         if self.running {
             self.push(EntryKind::Error, t!("remote_while_running").to_string());
             return;
         }
-        let spec = match workspace::parse_target(target, &self.cfg.remotes) {
-            Ok(spec) => spec,
-            Err(e) => {
-                self.push(
-                    EntryKind::Error,
-                    t!("remote_failed", error = format!("{e:#}")).to_string(),
-                );
-                return;
-            }
-        };
+        match picocode_core::workspace::parse_target(target, &self.cfg.remotes) {
+            Ok(spec) => self.open_target(spec, None, cx),
+            Err(e) => self.push(
+                EntryKind::Error,
+                t!("remote_failed", error = format!("{e:#}")).to_string(),
+            ),
+        }
+    }
+
+    /// Open the workspace `spec` describes (None = local). Connecting can
+    /// block for a while (SSH auth, ProxyJump), so it runs on the tokio
+    /// runtime and the swap happens back on the UI thread once it
+    /// succeeds — a failed connection leaves the current workspace
+    /// untouched. `snippet` is the picocode.toml block printed after a
+    /// successful connection from the add-remote dialog.
+    fn open_target(
+        &mut self,
+        spec: Option<picocode_core::config::RemoteSpec>,
+        snippet: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if spec.as_ref().map(|s| s.to_arg()) == self.cfg.remote.as_ref().map(|s| s.to_arg()) {
             self.push(EntryKind::Notice, t!("remote_same").to_string());
             return;
@@ -1901,12 +1922,12 @@ impl ChatView {
         };
         self.push(
             EntryKind::Notice,
-            t!("remote_opening", target = label.clone()).to_string(),
+            t!("remote_opening", target = label).to_string(),
         );
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.rt.spawn(async move {
-            let opened = workspace::open(spec.as_ref())
+            let opened = picocode_core::workspace::open(spec.as_ref())
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(opened);
@@ -1915,7 +1936,15 @@ impl ChatView {
             let Ok(opened) = rx.await else { return };
             let _ = this.update(cx, |view, cx| {
                 match opened {
-                    Ok((cfg, backend)) => view.apply_workspace(cfg, backend, cx),
+                    Ok((cfg, backend)) => {
+                        view.apply_workspace(cfg, backend, cx);
+                        if let Some(snippet) = snippet {
+                            view.push(
+                                EntryKind::Notice,
+                                format!("{}\n{snippet}", t!("remote_snippet_hint")),
+                            );
+                        }
+                    }
                     Err(error) => {
                         view.push(
                             EntryKind::Error,
@@ -1928,6 +1957,81 @@ impl ChatView {
             });
         })
         .detach();
+    }
+
+    /// The workspace menu's "+ add a remote…" row: open the dialog with
+    /// the `~/.ssh/config` aliases ready to click.
+    pub(super) fn open_add_remote(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        let field = |placeholder: String, window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+        };
+        let name = field(t!("add_remote_name_placeholder").to_string(), window, cx);
+        let host = field(t!("add_remote_host_placeholder").to_string(), window, cx);
+        let path = field(t!("add_remote_path_placeholder").to_string(), window, cx);
+        host.update(cx, |state, cx| state.focus(window, cx));
+        let hosts = picocode_core::workspace::ssh_hosts();
+        let note = if hosts.is_empty() {
+            t!("add_remote_hint").to_string()
+        } else {
+            t!("add_remote_hosts_found", count = hosts.len()).to_string()
+        };
+        self.add_remote = Some(AddRemote {
+            name,
+            host,
+            path,
+            hosts,
+            note,
+        });
+        cx.notify();
+    }
+
+    /// A host row in the add-remote dialog: fill the destination field.
+    pub(super) fn add_remote_pick_host(
+        &mut self,
+        host: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(dlg) = &self.add_remote {
+            let field = dlg.host.clone();
+            field.update(cx, |state, cx| state.set_value(host, window, cx));
+            cx.notify();
+        }
+    }
+
+    /// The add-remote dialog's connect action: try the destination and
+    /// path, and on success print a picocode.toml snippet to keep it.
+    pub(super) fn add_remote_connect(&mut self, cx: &mut Context<Self>) {
+        let Some(dlg) = &self.add_remote else {
+            return;
+        };
+        let host = dlg.host.read(cx).value().trim().to_string();
+        let path = dlg.path.read(cx).value().trim().to_string();
+        let name = dlg.name.read(cx).value().trim().to_string();
+        if host.is_empty() || path.is_empty() {
+            if let Some(dlg) = &mut self.add_remote {
+                dlg.note = t!("add_remote_need_fields").to_string();
+            }
+            cx.notify();
+            return;
+        }
+        let spec = picocode_core::config::RemoteSpec {
+            destination: host.clone(),
+            path: path.clone().into(),
+        };
+        let snippet = picocode_core::workspace::toml_snippet(
+            if name.is_empty() { &host } else { &name },
+            &host,
+            &path,
+        );
+        self.add_remote = None;
+        if self.running {
+            self.push(EntryKind::Error, t!("remote_while_running").to_string());
+            cx.notify();
+            return;
+        }
+        self.open_target(Some(spec), Some(snippet), cx);
     }
 
     /// Adopt a freshly opened workspace: respawn the worker on its backend
@@ -2217,6 +2321,7 @@ impl Render for ChatView {
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))
             .children(self.render_add_model(cx))
+            .children(self.render_add_remote(cx))
             .children(self.render_prompt_edit(cx))
             .children(self.render_session_picker(cx))
             .children(self.render_approval(cx))

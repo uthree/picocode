@@ -110,6 +110,34 @@ impl ModelPicker {
     }
 }
 
+/// State of the `/remote` workspace dialog: the local project and the
+/// configured `[[remotes]]`, followed by a synthetic "+ add a remote…"
+/// row opening [`AddRemoteForm`].
+pub struct RemotePicker {
+    pub items: Vec<picocode_core::workspace::WorkspaceChoice>,
+    /// Selected index; the add row sits at `items.len()`.
+    pub selected: usize,
+}
+
+/// State of the add-remote form (opened from the `/remote` dialog): an
+/// SSH destination and a path on it, tried live. `~/.ssh/config` host
+/// aliases are listed below the fields so a configured host is one
+/// keypress away.
+pub struct AddRemoteForm {
+    /// Entry name — only used for the picocode.toml snippet.
+    pub name: String,
+    /// ssh destination: an alias or `user@host`.
+    pub host: String,
+    /// Working directory on the host.
+    pub path: String,
+    /// Focused row: 0 name, 1 host, 2 path, 3.. the host suggestions.
+    pub field: usize,
+    /// Host aliases read from `~/.ssh/config`.
+    pub hosts: Vec<String>,
+    /// One-line status under the form: hint, progress, or error.
+    pub note: String,
+}
+
 /// State of the add-model form (opened from the `/model` dialog): pick a
 /// provider, optionally point it at a base URL, and type or pick a model.
 pub struct AddModelForm {
@@ -249,6 +277,10 @@ pub struct App {
     pub model_picker: Option<ModelPicker>,
     /// Open add-model form (reached from the `/model` dialog), if any.
     pub add_model: Option<AddModelForm>,
+    /// Open `/remote` dialog, if any (captures the arrow/Enter keys).
+    pub remote_picker: Option<RemotePicker>,
+    /// Open add-remote form (reached from the `/remote` dialog), if any.
+    pub add_remote: Option<AddRemoteForm>,
     /// Open `/config` dialog, if any (captures the arrow/Enter keys).
     pub settings: Option<SettingsMenu>,
     should_quit: bool,
@@ -313,6 +345,8 @@ impl App {
             session_picker: None,
             model_picker: None,
             add_model: None,
+            remote_picker: None,
+            add_remote: None,
             settings: None,
             should_quit: false,
             assistant_open: false,
@@ -510,6 +544,35 @@ impl App {
                 KeyCode::Right => self.adjust_setting(1),
                 KeyCode::Enter | KeyCode::Char(' ') => self.activate_setting(),
                 KeyCode::Esc | KeyCode::Char('q') => self.settings = None,
+                _ => {}
+            }
+            return;
+        }
+
+        // The add-remote form captures keys while open.
+        if self.add_remote.is_some() {
+            self.add_remote_key(key).await;
+            return;
+        }
+
+        // The /remote dialog captures navigation keys while open.
+        if let Some(picker) = &mut self.remote_picker {
+            let count = picker.items.len() + 1;
+            match key.code {
+                KeyCode::Up => picker.selected = (picker.selected + count - 1) % count,
+                KeyCode::Down => picker.selected = (picker.selected + 1) % count,
+                KeyCode::Enter => {
+                    let selected = picker.selected;
+                    let name = picker.items.get(selected).map(|c| c.name.clone());
+                    self.remote_picker = None;
+                    match name {
+                        Some(name) => {
+                            self.switch_workspace(&name).await;
+                        }
+                        None => self.open_add_remote(),
+                    }
+                }
+                KeyCode::Esc => self.remote_picker = None,
                 _ => {}
             }
             return;
@@ -774,13 +837,10 @@ impl App {
                         PromptAction::Preset(name) => self.apply_prompt_preset(&name).await,
                     }
                 }
-                Command::Remote(None) => {
-                    self.push(
-                        EntryKind::Notice,
-                        picocode_core::report::remotes_text(&self.cfg),
-                    );
+                Command::Remote(None) => self.open_remote_picker(),
+                Command::Remote(Some(target)) => {
+                    self.switch_workspace(&target).await;
                 }
-                Command::Remote(Some(target)) => self.switch_workspace(&target).await,
             },
         }
     }
@@ -1365,14 +1425,100 @@ impl App {
         Ok(())
     }
 
+    /// `/remote` with no argument: open the workspace dialog.
+    fn open_remote_picker(&mut self) {
+        self.remote_picker = Some(RemotePicker {
+            items: picocode_core::workspace::workspace_choices(&self.cfg),
+            selected: 0,
+        });
+    }
+
+    /// Open the add-remote form (the `/remote` dialog's "+ add" row) with
+    /// the host aliases from `~/.ssh/config` ready to pick.
+    fn open_add_remote(&mut self) {
+        let hosts = picocode_core::workspace::ssh_hosts();
+        let note = if hosts.is_empty() {
+            "host: an ssh alias or user@host — authentication is your ssh setup".to_string()
+        } else {
+            format!(
+                "{} host(s) from ~/.ssh/config below — ↓ to pick one",
+                hosts.len()
+            )
+        };
+        self.add_remote = Some(AddRemoteForm {
+            name: String::new(),
+            host: String::new(),
+            path: String::new(),
+            field: 1,
+            hosts,
+            note,
+        });
+    }
+
+    /// Key handling for the add-remote form. Enter on a suggestion fills
+    /// the host field; Enter on a form row connects.
+    async fn add_remote_key(&mut self, key: KeyEvent) {
+        let Some(form) = &mut self.add_remote else {
+            return;
+        };
+        let rows = 3 + form.hosts.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.add_remote = None;
+                self.open_remote_picker();
+            }
+            KeyCode::Up => form.field = (form.field + rows - 1) % rows,
+            KeyCode::Down | KeyCode::Tab => form.field = (form.field + 1) % rows,
+            KeyCode::Char(c) if form.field == 0 => form.name.push(c),
+            KeyCode::Char(c) if form.field == 1 => form.host.push(c),
+            KeyCode::Char(c) if form.field == 2 => form.path.push(c),
+            KeyCode::Backspace if form.field == 0 => {
+                form.name.pop();
+            }
+            KeyCode::Backspace if form.field == 1 => {
+                form.host.pop();
+            }
+            KeyCode::Backspace if form.field == 2 => {
+                form.path.pop();
+            }
+            // A suggestion row fills the host and moves on to the path.
+            KeyCode::Enter if form.field >= 3 => {
+                form.host = form.hosts[form.field - 3].clone();
+                form.field = 2;
+            }
+            KeyCode::Enter => {
+                let (host, path) = (form.host.trim().to_string(), form.path.trim().to_string());
+                if host.is_empty() || path.is_empty() {
+                    form.note = "host and path are both required".to_string();
+                    return;
+                }
+                let name = form.name.trim().to_string();
+                form.note = format!("connecting to {host}…");
+                let target = format!("{host}:{path}");
+                self.add_remote = None;
+                if self.switch_workspace(&target).await {
+                    let name = if name.is_empty() { &host } else { &name };
+                    self.push(
+                        EntryKind::Notice,
+                        format!(
+                            "To keep this remote, add it to picocode.toml:\n{}",
+                            picocode_core::workspace::toml_snippet(name, &host, &path)
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `/remote <target>`: open another workspace. The target's config is
     /// re-resolved from scratch (a remote one adds the host's own
     /// picocode.toml and instruction files) and the worker respawns on the
     /// new backend. The conversation does not travel along — a different
     /// workspace starts a fresh session log, like launching picocode there.
     /// Nothing changes until the connection is up, so a failed switch
-    /// leaves the current workspace running.
-    async fn switch_workspace(&mut self, target: &str) {
+    /// leaves the current workspace running. Returns whether it happened.
+    async fn switch_workspace(&mut self, target: &str) -> bool {
         use picocode_core::workspace;
 
         if self.running > 0 {
@@ -1380,18 +1526,18 @@ impl App {
                 EntryKind::Error,
                 "Cannot change the workspace while a turn is running".to_string(),
             );
-            return;
+            return false;
         }
         let spec = match workspace::parse_target(target, &self.cfg.remotes) {
             Ok(spec) => spec,
             Err(e) => {
                 self.push(EntryKind::Error, format!("{e:#}"));
-                return;
+                return false;
             }
         };
         if spec.as_ref().map(|s| s.to_arg()) == self.cfg.remote.as_ref().map(|s| s.to_arg()) {
             self.push(EntryKind::Notice, "Already on that workspace".to_string());
-            return;
+            return false;
         }
         let label = match &spec {
             Some(spec) => spec.to_arg(),
@@ -1403,7 +1549,7 @@ impl App {
             Ok(pair) => pair,
             Err(e) => {
                 self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
-                return;
+                return false;
             }
         };
         // The new workspace selects no model of its own: keep the current one.
@@ -1427,7 +1573,7 @@ impl App {
             Ok(pair) => pair,
             Err(e) => {
                 self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
-                return;
+                return false;
             }
         };
         // Dropping the old sender shuts the old worker down.
@@ -1472,6 +1618,7 @@ impl App {
             self.push(EntryKind::Notice, format!("Loaded {}", names.join(", ")));
         }
         self.refresh_models();
+        true
     }
 
     /// Switch to `new_cfg`'s model: respawn and report. Shared by the

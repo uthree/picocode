@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod ssh;
 
-pub use ssh::SshBackend;
+pub use ssh::{SshBackend, config_hosts as ssh_config_hosts};
 
 /// A file/shell backend: the local machine or a remote SSH host.
 #[derive(Clone)]

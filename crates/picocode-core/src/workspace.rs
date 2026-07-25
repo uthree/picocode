@@ -41,7 +41,69 @@ pub fn parse_target(arg: &str, remotes: &[RemoteEntry]) -> anyhow::Result<Option
 pub async fn open(target: Option<&RemoteSpec>) -> anyhow::Result<(Config, Backend)> {
     let mut cfg = Config::from_args(Args::for_workspace(target.map(RemoteSpec::to_arg)))?;
     let backend = connect(&mut cfg).await?;
+    // A mistyped remote path would otherwise only surface later, as every
+    // tool failing at once.
+    if backend.is_remote() && !backend.is_dir(&cfg.root).await {
+        anyhow::bail!(
+            "connected to {}, but `{}` is not a directory there",
+            backend.label(),
+            cfg.root.display()
+        );
+    }
     Ok((cfg, backend))
+}
+
+/// One row in a workspace listing: the local project, or a configured
+/// `[[remotes]]` entry.
+pub struct WorkspaceChoice {
+    /// Argument that switches to this workspace (`local`, or the entry
+    /// name) — what `/remote` takes.
+    pub name: String,
+    /// Display detail: the directory, or `host:path`.
+    pub detail: String,
+    pub active: bool,
+}
+
+/// Rows for the workspace pickers, shared by both front ends: the local
+/// project first, then every configured remote.
+pub fn workspace_choices(cfg: &Config) -> Vec<WorkspaceChoice> {
+    let local_root = std::env::current_dir().unwrap_or_default();
+    let mut out = vec![WorkspaceChoice {
+        name: "local".to_string(),
+        detail: crate::git::display_dir(if cfg.remote.is_none() {
+            &cfg.root
+        } else {
+            &local_root
+        }),
+        active: cfg.remote.is_none(),
+    }];
+    for entry in &cfg.remotes {
+        out.push(WorkspaceChoice {
+            name: entry.name.clone(),
+            detail: format!("{}:{}", entry.host, entry.path),
+            active: cfg.remote.as_ref().is_some_and(|spec| {
+                spec.destination == entry.host && spec.path == std::path::Path::new(&entry.path)
+            }),
+        });
+    }
+    out
+}
+
+/// A ready-to-paste `[[remotes]]` snippet for a remote entered in the
+/// add-remote dialog, so a working connection can be made permanent in
+/// picocode.toml.
+pub fn toml_snippet(name: &str, host: &str, path: &str) -> String {
+    let name: String = name
+        .chars()
+        .map(|c| if c.is_whitespace() { '-' } else { c })
+        .collect();
+    format!("[[remotes]]\nname = \"{name}\"\nhost = \"{host}\"\npath = \"{path}\"")
+}
+
+/// Host aliases from `~/.ssh/config`, offered as suggestions by the
+/// add-remote dialogs.
+pub fn ssh_hosts() -> Vec<String> {
+    crate::backend::ssh_config_hosts()
 }
 
 #[cfg(test)]

@@ -691,6 +691,112 @@ impl ChatView {
         )
     }
 
+    /// The add-remote dialog: an ssh destination and a path on it, with
+    /// the `~/.ssh/config` aliases listed to click.
+    pub(super) fn render_add_remote(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dlg = self.add_remote.as_ref()?;
+        let theme = cx.theme();
+
+        let mut list = div().v_flex().gap_1().max_h(px(140.)).overflow_hidden();
+        if !dlg.hosts.is_empty() {
+            let mut rows = div()
+                .id("add-remote-hosts")
+                .v_flex()
+                .gap_1()
+                .overflow_y_scroll();
+            for (ix, alias) in dlg.hosts.iter().enumerate() {
+                let host = alias.clone();
+                rows = rows.child(
+                    div()
+                        .id(SharedString::from(format!("add-remote-host-{ix}")))
+                        .cursor_pointer()
+                        .rounded_md()
+                        .px_2()
+                        .py_0p5()
+                        .hover(|s| s.bg(theme.muted))
+                        .child(alias.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.add_remote_pick_host(host.clone(), window, cx);
+                        })),
+                );
+            }
+            list = list.child(rows);
+        }
+
+        let row = |label: String, control: AnyElement| {
+            div()
+                .h_flex()
+                .gap_3()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(90.))
+                        .text_color(theme.muted_foreground)
+                        .child(label),
+                )
+                .child(div().flex_1().child(control))
+        };
+
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .v_flex()
+                        .w(px(460.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(div().font_bold().child(t!("add_remote_title").to_string()))
+                        .child(row(
+                            t!("row_remote_name").to_string(),
+                            Input::new(&dlg.name).into_any_element(),
+                        ))
+                        .child(row(
+                            t!("row_remote_host").to_string(),
+                            Input::new(&dlg.host).into_any_element(),
+                        ))
+                        .child(row(
+                            t!("row_remote_path").to_string(),
+                            Input::new(&dlg.path).into_any_element(),
+                        ))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(dlg.note.clone()),
+                        )
+                        .child(list)
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    Button::new("add-remote-cancel")
+                                        .ghost()
+                                        .label(t!("cancel").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.add_remote = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("add-remote-connect")
+                                        .primary()
+                                        .label(t!("connect_btn").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.add_remote_connect(cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn render_add_model(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let dlg = self.add_model.as_ref()?;
         let theme = cx.theme();

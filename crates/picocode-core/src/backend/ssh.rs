@@ -26,6 +26,44 @@ fn shq(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// The `Host` aliases defined in `~/.ssh/config`, offered as suggestions
+/// by the add-remote dialogs. Pattern entries (`Host *`, `Host web?`) are
+/// skipped — they configure other hosts rather than name one. `Include`
+/// directives are not followed, so a split config may list fewer hosts
+/// than ssh itself knows; typing a destination always works.
+pub fn config_hosts() -> Vec<String> {
+    let Some(home) = crate::config::home_dir() else {
+        return Vec::new();
+    };
+    match std::fs::read_to_string(home.join(".ssh/config")) {
+        Ok(text) => parse_hosts(&text),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn parse_hosts(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = line
+            .split_once(char::is_whitespace)
+            .filter(|(key, _)| key.eq_ignore_ascii_case("host"))
+            .map(|(_, rest)| rest)
+        else {
+            continue;
+        };
+        for alias in rest.split_whitespace() {
+            if !alias.contains(['*', '?', '!']) && !out.iter().any(|h| h == alias) {
+                out.push(alias.to_string());
+            }
+        }
+    }
+    out
+}
+
 impl SshBackend {
     /// Open a persistent connection to `destination` (an ssh alias or
     /// `user@host`). Authentication is entirely ssh's own (keys, agent,
@@ -206,7 +244,20 @@ impl Drop for SshBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::shq;
+    use super::{parse_hosts, shq};
+
+    #[test]
+    fn ssh_config_hosts_skip_patterns_and_comments() {
+        let hosts = parse_hosts(
+            "# comment\n\
+             Host prod staging\n  HostName example.com\n\
+             Host *\n  ForwardAgent yes\n\
+             host lower-case\n\
+             HostName not-a-host-line\n\
+             Host prod\n",
+        );
+        assert_eq!(hosts, ["prod", "staging", "lower-case"]);
+    }
 
     #[test]
     fn shell_quoting_escapes_single_quotes() {

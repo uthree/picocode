@@ -23,9 +23,13 @@ is anything that would run or connect from *your* machine: `[[models]]`,
 local config. The `[sandbox]` guard does not apply to a remote host
 either (its bash runs with the host's own permissions). Unix hosts only.
 
-`/remote` shows the open workspace and the configured `[[remotes]]`;
-`/remote <name|host:/path>` switches to another one without restarting,
-and `/remote local` comes back. Switching reconnects and starts a fresh
+`/remote` opens the workspace dialog — the local project, the configured
+`[[remotes]]`, and a "+ add a remote…" row for a host that isn't
+configured yet. The add-remote form takes an ssh destination and a path
+on it (the `Host` aliases from `~/.ssh/config` are listed to pick from),
+connects to check both, and prints a ready-to-paste `[[remotes]]` snippet
+for picocode.toml. `/remote <name|host:/path>` switches directly and
+`/remote local` comes back. Switching reconnects and starts a fresh
 conversation in the new workspace (the old session log stays on disk).
 
 ## Windows
@@ -83,7 +87,7 @@ on macOS ones).
 | `/jobs` | List running background jobs (id, elapsed, command); `/jobs kill <id>` stops one — the kill is reported as the job's result, so the model knows too. Tab completes the ids |
 | `/attach <path>` | Stage a file to send with the next prompt: images as multimodal content (audio/PDF on providers that take them — Ollama is images-only), anything that reads as text (markdown, source code, …) inlined as text. `/attach` lists what's staged, `/attach clear` unstages all. `Ctrl+V` stages copied files and clipboard images the same way |
 | `/prompt` | Edit the system prompt in the input box (loaded with the current one; Enter applies for this session — the worker restarts with the conversation carried over — and a ready-to-paste `system_prompt` snippet for picocode.toml is shown; Esc cancels). `/prompt <name>` switches to a `[[prompts]]` preset (Tab completes; unique substrings resolve), `/prompt reset` restores the built-in default |
-| `/remote` | Show the open workspace and the configured `[[remotes]]`. `/remote <name\|host:/path>` switches to another workspace without restarting (Tab completes the names), `/remote local` comes back. The new workspace reconnects, applies its own picocode.toml and instruction files, and starts a fresh conversation |
+| `/remote` | Workspace dialog: the local project, the configured `[[remotes]]`, and "+ add a remote…" — a form (name / ssh destination / path, with `~/.ssh/config` aliases listed to pick) that connects and prints a `[[remotes]]` snippet for picocode.toml. `/remote <name\|host:/path>` switches directly (Tab completes the names), `/remote local` comes back. The new workspace reconnects, applies its own picocode.toml and instruction files, and starts a fresh conversation |
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |

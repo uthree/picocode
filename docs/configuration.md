@@ -142,7 +142,9 @@ changes and run the tests after every edit.
 # picocode never handles credentials. The conversation log stays local.
 # You can also pass `--remote host:/path` directly without an entry here,
 # or switch workspaces at runtime with `/remote <name|host:/path>`
-# (`/remote local` comes back).
+# (`/remote local` comes back). `/remote` with no argument opens a picker
+# whose "+ add a remote…" form tries a destination live and prints the
+# entry to paste here.
 # The remote root's own picocode.toml and instruction files (AGENTS.md)
 # are merged over this one, so a host project keeps its approval rules,
 # after_edit hook, system prompt/presets and limits. A host cannot change

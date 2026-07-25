@@ -59,7 +59,10 @@ signing/notarization) may come later.
   sit above the input box, refreshed after each turn — a remote workspace
   shows `host:path`. Clicking it opens the workspace menu: the local
   project, every configured `[[remotes]]` entry (click to connect over
-  SSH), and "choose a folder…" for a native directory picker. Whichever
+  SSH), "add a remote…" — a dialog taking an ssh destination and a path,
+  with the `~/.ssh/config` aliases listed to click, that connects and
+  prints a `[[remotes]]` snippet for picocode.toml — and
+  "choose a folder…" for a native directory picker. Whichever
   you pick, the new workspace's config, instructions and saved state are
   loaded, a fresh worker and conversation start (the current model is
   kept unless the new workspace selects its own), and the permission mode
@@ -108,8 +111,9 @@ signing/notarization) may come later.
   the system prompt — applies to this session with the conversation
   carried over, and prints a picocode.toml snippet to persist it;
   `/prompt <name>` switches to a `[[prompts]]` preset, `/prompt reset`
-  restores the built-in), `/remote` (workspace listing; `/remote <name>`
-  or `/remote local` switches over SSH without restarting), `/model`,
+  restores the built-in), `/remote` (opens the workspace menu;
+  `/remote <name>` or `/remote local` switches over SSH without
+  restarting), `/model`,
   `/resume`, the mode
   commands, `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
