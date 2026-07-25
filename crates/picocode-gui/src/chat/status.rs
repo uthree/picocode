@@ -1,6 +1,8 @@
 //! The status bar (mode chip, activity, background jobs, context gauge,
 //! model chip) and the popup menus it opens.
 
+use std::path::{Path, PathBuf};
+
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, SharedString, div, px};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
@@ -271,6 +273,66 @@ impl ChatView {
                 );
                 panel = panel.child(list);
             }
+            Menu::Workspace => {
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .font_bold()
+                        .child(t!("ws_title").to_string()),
+                );
+                // The local project first, then every configured remote —
+                // a host's filesystem has no native picker, so [[remotes]]
+                // entries are how a remote root is chosen.
+                panel = panel.child(
+                    menu_row(
+                        SharedString::from("ws-local"),
+                        t!("ws_local").to_string(),
+                        picocode_core::git::display_dir(&local_root()),
+                        self.cfg.remote.is_none(),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.switch_workspace("local", cx))),
+                );
+                for (ix, entry) in self.cfg.remotes.iter().enumerate() {
+                    let active = self.cfg.remote.as_ref().is_some_and(|spec| {
+                        spec.destination == entry.host && spec.path == Path::new(&entry.path)
+                    });
+                    let name = entry.name.clone();
+                    panel = panel.child(
+                        menu_row(
+                            SharedString::from(format!("ws-remote-{ix}")),
+                            entry.name.clone(),
+                            format!("{}:{}", entry.host, entry.path),
+                            active,
+                            theme,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.switch_workspace(&name.clone(), cx)
+                        })),
+                    );
+                }
+                if self.cfg.remotes.is_empty() {
+                    panel = panel.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(t!("ws_no_remotes").to_string()),
+                    );
+                }
+                panel = panel.child(
+                    menu_row(
+                        SharedString::from("ws-folder"),
+                        t!("ws_choose_folder").to_string(),
+                        t!("ws_choose_folder_desc").to_string(),
+                        false,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_workdir(cx))),
+                );
+            }
             Menu::Background => {
                 panel = panel.child(
                     div()
@@ -404,7 +466,7 @@ impl ChatView {
                 .child({
                     let anchored = div().absolute().bottom(px(36.)).occlude();
                     match menu {
-                        Menu::Mode | Menu::Background => anchored.left(px(12.)),
+                        Menu::Mode | Menu::Background | Menu::Workspace => anchored.left(px(12.)),
                         Menu::Model | Menu::Context => anchored.right(px(12.)),
                     }
                     .child(panel)
@@ -412,6 +474,13 @@ impl ChatView {
                 .into_any_element(),
         )
     }
+}
+
+/// The directory `/remote local` would open: the project root is
+/// rediscovered from the process working directory, which a remote
+/// workspace never changes.
+fn local_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_default()
 }
 
 /// Localized display name for a permission mode (the technical /status

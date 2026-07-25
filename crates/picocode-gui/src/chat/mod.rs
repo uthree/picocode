@@ -45,6 +45,9 @@ enum Menu {
     Model,
     /// Details of running bash background jobs.
     Background,
+    /// Workspace picker: the local project, the configured `[[remotes]]`,
+    /// and a native folder picker.
+    Workspace,
     /// Context / token usage details.
     Context,
 }
@@ -1790,9 +1793,21 @@ impl ChatView {
         }
     }
 
-    /// Click on the workdir label: open a native directory picker and move
-    /// the project root there.
+    /// The workdir line's label: a remote workspace shows `host:path` so
+    /// the target is unmistakable, local shows the shortened directory.
+    fn workdir_label(&self) -> String {
+        match &self.cfg.remote {
+            Some(spec) => format!("{}:{}", self.backend.label(), spec.path.display()),
+            None => picocode_core::git::display_dir(&self.cfg.root),
+        }
+    }
+
+    /// The workspace menu's "choose a folder" row: open a native directory
+    /// picker and move the project root there (always a local project — a
+    /// remote root is picked from the `[[remotes]]` rows instead, since
+    /// there is no native picker for a host's filesystem).
     fn pick_workdir(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
         if self.running {
             self.push(EntryKind::Error, t!("cd_while_running").to_string());
             cx.notify();
@@ -1838,7 +1853,7 @@ impl ChatView {
         }
         // Changing the working directory always opens a local project;
         // remote workspaces are entered with `/remote` (or --remote).
-        let mut new_cfg = match config::Config::from_args(config::Args::for_workspace(None)) {
+        let new_cfg = match config::Config::from_args(config::Args::for_workspace(None)) {
             Ok(cfg) => cfg,
             Err(e) => {
                 self.push(
@@ -1849,68 +1864,9 @@ impl ChatView {
                 return;
             }
         };
-        // The new project selects no model of its own: keep the current one.
-        if new_cfg.model.is_empty() {
-            new_cfg.provider = self.cfg.provider;
-            new_cfg.model = self.cfg.model.clone();
-            new_cfg.base_url = self.cfg.base_url.clone();
-            new_cfg.active_model = None;
-            new_cfg.context_window = self.cfg.context_window;
-        }
-        // Keep the current permission mode and the persisted /config values.
-        new_cfg.mode.set(self.cfg.mode.get());
-        Self::apply_saved(&self.saved, &new_cfg);
-
-        let (new_tx, new_steer) = {
-            let _guard = self.rt.enter();
-            match agent::spawn(
-                &new_cfg,
-                self.event_tx.clone(),
-                self.cancel_tx.subscribe(),
-                self.jobs.clone(),
-                self.mcp.clone(),
-                self.backend.clone(),
-            ) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    self.push(
-                        EntryKind::Error,
-                        t!("cd_failed", error = format!("{e:#}")).to_string(),
-                    );
-                    cx.notify();
-                    return;
-                }
-            }
-        };
-        self.steer = new_steer;
-        // Dropping the old sender shuts the old worker down; the new
-        // directory starts a fresh conversation and session log.
-        self.cmd_tx = new_tx;
-        self.cfg = new_cfg;
-        self.sessions_dir = session::sessions_dir_for(&self.cfg);
-        self.git_branch = picocode_core::git::branch(&self.cfg.root);
-        self.session_id = session::new_id();
-        self.entries.clear();
-        self.queued.clear();
-        self.pending_attachments.clear();
-        self.expanded_reasoning.clear();
-        self.tokens_in = 0;
-        self.tokens_out = 0;
-        self.est_out = 0;
-        self.available_models.clear();
-        self.refresh_models();
-        self.push(
-            EntryKind::Notice,
-            t!(
-                "workdir_changed",
-                dir = picocode_core::git::display_dir(&self.cfg.root),
-                model = self.cfg.model_label()
-            )
-            .to_string(),
-        );
-        self.reset_list();
-        self.save_last_model();
-        cx.notify();
+        // A picked directory is always a local project, so the workspace
+        // drops back to the local backend even if a remote one was open.
+        self.apply_workspace(new_cfg, picocode_core::backend::Backend::Local, cx);
     }
 
     /// `/remote <target>`: open another workspace. Connecting can block for
@@ -1920,6 +1876,7 @@ impl ChatView {
     fn switch_workspace(&mut self, target: &str, cx: &mut Context<Self>) {
         use picocode_core::workspace;
 
+        self.menu = None;
         if self.running {
             self.push(EntryKind::Error, t!("remote_while_running").to_string());
             return;
@@ -2031,16 +1988,23 @@ impl ChatView {
         self.est_out = 0;
         self.available_models.clear();
         self.refresh_models();
-        self.push(
-            EntryKind::Notice,
+        // A remote workspace names the host; a local one reads as the
+        // familiar directory change.
+        let notice = if self.backend.is_remote() {
             t!(
                 "remote_switched",
                 host = self.backend.label(),
                 dir = self.cfg.root.display().to_string(),
                 model = self.cfg.model_label()
             )
-            .to_string(),
-        );
+        } else {
+            t!(
+                "workdir_changed",
+                dir = picocode_core::git::display_dir(&self.cfg.root),
+                model = self.cfg.model_label()
+            )
+        };
+        self.push(EntryKind::Notice, notice.to_string());
         self.reset_list();
         self.save_last_model();
         cx.notify();
@@ -2196,8 +2160,10 @@ impl Render for ChatView {
                                     .rounded_md()
                                     .px_1()
                                     .hover(move |s| s.bg(muted))
-                                    .child(picocode_core::git::display_dir(&self.cfg.root))
-                                    .on_click(cx.listener(|this, _, _, cx| this.pick_workdir(cx))),
+                                    .child(self.workdir_label())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_menu(Menu::Workspace, window, cx)
+                                    })),
                             )
                             .children(self.git_branch.as_ref().map(|branch| {
                                 div()

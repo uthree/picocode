@@ -55,13 +55,16 @@ signing/notarization) may come later.
   generation speed in `tok/s` over a rolling window) that snaps to the
   provider-reported count at each completion boundary; idle shows both
   totals.
-- **Workdir line**: the project directory and git branch (with an icon)
-  sit above the input box, refreshed after each turn. Clicking the
-  directory opens a native folder picker and moves the project root
-  there — the new directory's config, instructions and saved state are
+- **Workdir line**: the open workspace and the git branch (with an icon)
+  sit above the input box, refreshed after each turn — a remote workspace
+  shows `host:path`. Clicking it opens the workspace menu: the local
+  project, every configured `[[remotes]]` entry (click to connect over
+  SSH), and "choose a folder…" for a native directory picker. Whichever
+  you pick, the new workspace's config, instructions and saved state are
   loaded, a fresh worker and conversation start (the current model is
-  kept unless the new project selects its own), and the permission mode
-  and persisted settings carry over.
+  kept unless the new workspace selects its own), and the permission mode
+  and persisted settings carry over. `/remote` does the same from the
+  input box.
 - **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
   Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills —
