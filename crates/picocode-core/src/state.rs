@@ -44,6 +44,24 @@ pub fn save(path: &Path, state: &LastModel) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Remember `cfg`'s active model (best-effort) so the next start in this
+/// project resumes with it. Shared by both front ends: called at startup
+/// and after every successful model switch.
+pub fn save_last_model(cfg: &crate::config::Config) {
+    let Some(path) = state_path(&cfg.root) else {
+        return;
+    };
+    let _ = save(
+        &path,
+        &LastModel {
+            entry: cfg.active_model.clone(),
+            provider: crate::config::provider_name(cfg.provider).to_string(),
+            model: cfg.model.clone(),
+            base_url: cfg.base_url.clone(),
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -317,6 +317,74 @@ pub fn remote_completions(
     out
 }
 
+/// `/model` argument candidates: the switch choices (configured entries +
+/// served models), filtered by the partial argument.
+pub fn model_completions(
+    choices: Vec<crate::models::ModelChoice>,
+    cmd: &str,
+    arg: &str,
+) -> Vec<(String, String)> {
+    let needle = arg.to_lowercase();
+    choices
+        .into_iter()
+        .filter(|c| needle.is_empty() || c.name.to_lowercase().contains(&needle))
+        .map(|c| (format!("{cmd} {}", c.name), c.detail))
+        .collect()
+}
+
+/// `/resume` argument candidates: the saved sessions except the current
+/// one, filtered by the partial argument.
+pub fn session_completions(
+    dir: &std::path::Path,
+    current_id: &str,
+    cmd: &str,
+    arg: &str,
+) -> Vec<(String, String)> {
+    let needle = arg.to_lowercase();
+    crate::session::list(dir)
+        .into_iter()
+        .filter(|s| s.id != current_id)
+        .filter(|s| needle.is_empty() || s.id.to_lowercase().contains(&needle))
+        .map(|s| {
+            (
+                format!("{cmd} {}", s.id),
+                format!("{} messages · {}", s.messages, s.model),
+            )
+        })
+        .collect()
+}
+
+/// Outcome of resolving `/prompt <name>` against the configured presets
+/// (see [`find_prompt_preset`]).
+pub enum PresetMatch<'a> {
+    None,
+    Unique(&'a crate::config::PromptPreset),
+    /// Several presets matched (names listed for the error message).
+    Ambiguous(Vec<&'a str>),
+}
+
+/// Resolve a possibly-partial preset name, shared by both front ends: an
+/// exact name wins outright; otherwise a case-insensitive substring match
+/// must be unique.
+pub fn find_prompt_preset<'a>(
+    prompts: &'a [crate::config::PromptPreset],
+    name: &str,
+) -> PresetMatch<'a> {
+    if let Some(preset) = prompts.iter().find(|p| p.name == name) {
+        return PresetMatch::Unique(preset);
+    }
+    let needle = name.to_lowercase();
+    let matches: Vec<&crate::config::PromptPreset> = prompts
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&needle))
+        .collect();
+    match matches.as_slice() {
+        [] => PresetMatch::None,
+        [preset] => PresetMatch::Unique(preset),
+        many => PresetMatch::Ambiguous(many.iter().map(|p| p.name.as_str()).collect()),
+    }
+}
+
 /// `/jobs kill <id>` candidates from the running-jobs registry, filtered
 /// by the partial argument (id or command substring).
 pub fn jobs_completions(
@@ -344,6 +412,42 @@ pub fn jobs_completions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_names_resolve_like_model_names() {
+        let prompts = vec![
+            crate::config::PromptPreset {
+                name: "review".into(),
+                prompt: "review prompt".into(),
+            },
+            crate::config::PromptPreset {
+                name: "reviewer-ja".into(),
+                prompt: "japanese".into(),
+            },
+            crate::config::PromptPreset {
+                name: "docs".into(),
+                prompt: "docs prompt".into(),
+            },
+        ];
+        // An exact name wins even as a substring of another preset.
+        assert!(matches!(
+            find_prompt_preset(&prompts, "review"),
+            PresetMatch::Unique(p) if p.name == "review"
+        ));
+        // A unique case-insensitive substring resolves.
+        assert!(matches!(
+            find_prompt_preset(&prompts, "DOC"),
+            PresetMatch::Unique(p) if p.name == "docs"
+        ));
+        assert!(matches!(
+            find_prompt_preset(&prompts, "rev"),
+            PresetMatch::Ambiguous(names) if names == ["review", "reviewer-ja"]
+        ));
+        assert!(matches!(
+            find_prompt_preset(&prompts, "nope"),
+            PresetMatch::None
+        ));
+    }
 
     #[test]
     fn prompts_are_not_commands() {

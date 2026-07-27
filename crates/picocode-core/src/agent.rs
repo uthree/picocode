@@ -748,46 +748,9 @@ fn reasoning_text(reasoning: &rig::message::Reasoning) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ApprovalRules, Mode, ModeHandle, Provider, RulesHandle, SearchConfig, SearchProvider,
-    };
-    use std::path::PathBuf;
 
     fn test_cfg() -> Config {
-        Config {
-            provider: Provider::Ollama,
-            model: "qwen3:4b".into(),
-            base_url: None,
-            models: Vec::new(),
-            active_model: None,
-            model_note: None,
-            bash_timeout: crate::config::NumHandle::new(120),
-            read_max_lines: crate::config::NumHandle::new(2000),
-            read_max_line_bytes: crate::config::NumHandle::new(500),
-            auto_compact: crate::config::NumHandle::new(85),
-            root: PathBuf::from("/tmp/proj"),
-            approval: RulesHandle::new(ApprovalRules::default()),
-            mode: ModeHandle::new(Mode::ReadOnly),
-            search: crate::config::SearchHandle::new(SearchConfig {
-                provider: SearchProvider::Duckduckgo,
-                base_url: None,
-                max_results: 5,
-                api_key: None,
-            }),
-            disable_tools: Vec::new(),
-            after_edit: None,
-            system_prompt: None,
-            prompts: Vec::new(),
-            mcp_servers: Vec::new(),
-            remote: None,
-            remotes: Vec::new(),
-            instruction_names: Vec::new(),
-            sandbox: crate::sandbox::SandboxSettings::default(),
-            instructions: Vec::new(),
-            config_files: Vec::new(),
-            context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-            local_file: Default::default(),
-        }
+        Config::for_tests()
     }
 
     #[test]

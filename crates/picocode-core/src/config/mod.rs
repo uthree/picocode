@@ -912,6 +912,48 @@ impl Config {
     }
 }
 
+#[cfg(test)]
+impl Config {
+    /// A minimal valid config (Ollama on defaults) for unit tests across
+    /// the crate; tweak fields as needed.
+    pub(crate) fn for_tests() -> Self {
+        Config {
+            provider: Provider::Ollama,
+            model: "qwen3:4b".into(),
+            base_url: None,
+            models: Vec::new(),
+            active_model: None,
+            model_note: None,
+            bash_timeout: NumHandle::new(120),
+            read_max_lines: NumHandle::new(2000),
+            read_max_line_bytes: NumHandle::new(500),
+            auto_compact: NumHandle::new(85),
+            root: std::path::PathBuf::from("/tmp/proj"),
+            approval: RulesHandle::new(ApprovalRules::default()),
+            mode: ModeHandle::new(Mode::ReadOnly),
+            search: SearchHandle::new(SearchConfig {
+                provider: SearchProvider::Duckduckgo,
+                base_url: None,
+                max_results: 5,
+                api_key: None,
+            }),
+            disable_tools: Vec::new(),
+            after_edit: None,
+            system_prompt: None,
+            prompts: Vec::new(),
+            mcp_servers: Vec::new(),
+            remote: None,
+            remotes: Vec::new(),
+            instruction_names: Vec::new(),
+            sandbox: crate::sandbox::SandboxSettings::default(),
+            instructions: Vec::new(),
+            config_files: Vec::new(),
+            context_window: DEFAULT_CONTEXT_WINDOW,
+            local_file: Default::default(),
+        }
+    }
+}
+
 mod rules;
 mod search;
 

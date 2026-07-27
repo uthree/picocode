@@ -29,7 +29,8 @@ crates/
                    keep-recent-turns boundary used by compaction
     mcp.rs       — opt-in MCP client: [[mcp_servers]] connect once at
                    startup, their tools join every spawned agent
-    models.rs    — provider model-list queries backing /model
+    models.rs    — provider model-list queries and the /model switch
+                   resolution shared by both front ends
     report.rs    — /status and /permissions text shared by both front ends
     sandbox.rs   — opt-in OS sandbox for model-initiated bash (macOS
                    sandbox-exec / Linux Landlock)
@@ -45,7 +46,12 @@ crates/
                    startup connect and the /remote switch share it
   picocode-tui/src/      — the ratatui front end (binary `picocode`)
     main.rs      — entry point (+ --smoke headless debug mode)
-    app.rs       — application state and event loop
+    app/         — application state and event loop (mod), split by concern:
+                   agent events (events), input editing / completion /
+                   attachments (editor), dialog state + /config + /status
+                   (dialogs), model switching (models), system prompt
+                   (prompt), /resume + autosave (sessions), /remote
+                   (workspace)
     ui.rs        — ratatui rendering (transcript / input / status bar / dialogs)
     input.rs     — input thread, paste detection, input-box cursor math
     history.rs   — shell-style ↑/↓ input history
@@ -53,9 +59,13 @@ crates/
     markdown.rs  — markdown renderer for assistant replies (pulldown-cmark)
   picocode-gui/src/      — experimental gpui front end (binary `picocode-gui`)
     main.rs      — window bootstrap, tokio ⇄ gpui bridge (+ --smoke auto-prompt)
-    chat/        — the chat view: state, events and commands (mod), entry
-                   rendering (transcript), dialogs and popups (dialogs),
-                   status bar and its menus (status)
+    chat/        — the chat view: state and command dispatch (mod), split
+                   like the TUI's app/ — agent events (events), completion
+                   and attachments (input), model switching (models),
+                   system prompt (prompt), /resume + autosave (sessions),
+                   /remote (workspace) — plus the rendering: entries
+                   (transcript), dialogs and popups (dialogs), status bar
+                   and its menus (status)
     highlight.rs — tree-sitter syntax highlighting for diffs (cached)
     math.rs      — TeX span extraction and Unicode fallback (unicodeit)
     tex.rs       — display-math typesetting via RaTeX (cached PNGs)

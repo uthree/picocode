@@ -97,6 +97,43 @@ pub fn new_id() -> String {
     )
 }
 
+/// Snapshot the conversation to disk: take the worker's history and write
+/// it together with the rendered transcript. Both front ends spawn this
+/// after each completed turn; empty conversations are not written, and a
+/// write failure surfaces as an `Error` event.
+pub async fn autosave(
+    dir: PathBuf,
+    id: String,
+    cwd: String,
+    model: String,
+    entries: Vec<Entry>,
+    cmd_tx: tokio::sync::mpsc::Sender<crate::event::WorkerCmd>,
+    event_tx: tokio::sync::mpsc::Sender<crate::event::AgentEvent>,
+) {
+    let (htx, hrx) = tokio::sync::oneshot::channel();
+    if cmd_tx
+        .send(crate::event::WorkerCmd::TakeHistory(htx))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let Ok(history) = hrx.await else {
+        return;
+    };
+    if history.is_empty() {
+        return;
+    }
+    let file = SessionFile::new(cwd, model, history, entries);
+    if let Err(e) = save(&dir, &id, &file) {
+        let _ = event_tx
+            .send(crate::event::AgentEvent::Error(format!(
+                "Failed to save session: {e:#}"
+            )))
+            .await;
+    }
+}
+
 /// Write the session atomically (tmp file + rename).
 pub fn save(dir: &Path, id: &str, session: &SessionFile) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;

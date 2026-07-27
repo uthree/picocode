@@ -50,6 +50,54 @@ pub const WRITE_TOOLS: &[&str] = &[EditFile::NAME];
 /// Restricted to the web tools: everything else is part of the core loop.
 pub const OPTIONAL_TOOLS: &[&str] = &[WebSearch::NAME, WebFetch::NAME];
 
+/// Run a user-typed `!` command: no model, no approval, no sandbox — the
+/// user typed it. Both front ends spawn this future. The output is shown
+/// via `ShellOutput`, recorded in the model's history via `ShellRecord`,
+/// and the turn ends with a `TurnComplete` like any other. Cancelling
+/// drops the call future, which kills the process (`kill_on_drop`) unless
+/// it already went to the background; `stop_note` is what the transcript
+/// shows in that case.
+#[allow(clippy::too_many_arguments)]
+pub async fn user_shell(
+    ws: crate::backend::Workspace,
+    timeout: crate::config::NumHandle,
+    event_tx: tokio::sync::mpsc::Sender<crate::event::AgentEvent>,
+    cmd_tx: tokio::sync::mpsc::Sender<crate::event::WorkerCmd>,
+    jobs: BackgroundJobs,
+    mut cancel: tokio::sync::watch::Receiver<()>,
+    command: String,
+    stop_note: &'static str,
+) {
+    let tool = Bash::new(
+        ws,
+        timeout,
+        event_tx.clone(),
+        jobs,
+        crate::sandbox::SandboxCtx::off(),
+    );
+    let call = tool.call(BashArgs {
+        command: command.clone(),
+    });
+    let output = tokio::select! {
+        biased;
+        _ = cancel.changed() => stop_note.to_string(),
+        out = call => match out {
+            Ok(out) => out,
+            Err(e) => format!("error: {e}"),
+        },
+    };
+    let _ = cmd_tx
+        .send(crate::event::WorkerCmd::ShellRecord {
+            command,
+            output: output.clone(),
+        })
+        .await;
+    let _ = event_tx
+        .send(crate::event::AgentEvent::ShellOutput { output })
+        .await;
+    let _ = event_tx.send(crate::event::AgentEvent::TurnComplete).await;
+}
+
 /// Last-seen modification times of files read via `read_file`, checked by
 /// `edit_file` before writing: an mtime that moved since the last read means
 /// the file was changed externally (by the user, another process, or

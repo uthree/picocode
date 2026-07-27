@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-use crate::config::Provider;
+use crate::config::{Config, Provider};
 
 /// One row in a model-switch listing: a configured `[[models]]` entry, or a
 /// model id the provider reported serving.
@@ -208,6 +208,99 @@ pub fn resolve_partial(
     }
 }
 
+/// How a `/model <name>` request resolves against the current config (see
+/// [`plan_switch`]). Carries no user-facing text — each front end renders
+/// its own messages from the variants.
+pub enum SwitchPlan {
+    /// Several candidates matched the partial name (listed for the error).
+    Ambiguous(Vec<String>),
+    /// The named model is already the active one; `display` labels it.
+    AlreadyActive { display: String },
+    /// Nothing configured or served has this name.
+    Unknown { name: String },
+    /// Switch to `cfg` — a clone of the current config pointed at the new
+    /// model; `name` is the resolved candidate name (for the notices).
+    /// Boxed to keep the enum small next to its message-only variants.
+    Switch { name: String, cfg: Box<Config> },
+}
+
+/// Resolve `/model <requested>` into a switch plan, shared by both front
+/// ends: partial-name completion first, then the configured `[[models]]`
+/// entries, then models the provider reported serving (an ad-hoc switch
+/// keeping the current provider and base URL). The first element is the
+/// full name a partial `requested` completed to, worth a notice.
+pub fn plan_switch(
+    cfg: &Config,
+    requested: &str,
+    available: &[String],
+) -> (Option<String>, SwitchPlan) {
+    let name = match resolve_partial(requested, &cfg.models, available) {
+        PartialMatch::Unique(full) => full,
+        PartialMatch::Ambiguous(matches) => return (None, SwitchPlan::Ambiguous(matches)),
+        PartialMatch::None => requested.to_string(),
+    };
+    let matched = (name != requested).then(|| name.clone());
+    let mut new_cfg = cfg.clone();
+    let plan = match cfg.models.iter().find(|m| m.name == name) {
+        Some(entry) => {
+            if cfg.active_model.as_deref() == Some(name.as_str()) {
+                SwitchPlan::AlreadyActive {
+                    display: format!("{name} ({})", entry.label()),
+                }
+            } else {
+                new_cfg.provider = entry.provider;
+                new_cfg.model = entry.model.clone();
+                new_cfg.base_url = entry.base_url.clone();
+                new_cfg.active_model = Some(entry.name.clone());
+                new_cfg.context_window = entry
+                    .context_window
+                    .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
+                SwitchPlan::Switch {
+                    name,
+                    cfg: Box::new(new_cfg),
+                }
+            }
+        }
+        // A model id the provider reported serving: switch ad hoc, keeping
+        // the current provider and base URL.
+        None if available.contains(&name) => {
+            if cfg.active_model.is_none() && cfg.model == name {
+                SwitchPlan::AlreadyActive {
+                    display: cfg.model_label(),
+                }
+            } else {
+                new_cfg.model = name.clone();
+                new_cfg.active_model = None;
+                new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+                SwitchPlan::Switch {
+                    name,
+                    cfg: Box::new(new_cfg),
+                }
+            }
+        }
+        None => SwitchPlan::Unknown { name },
+    };
+    (matched, plan)
+}
+
+/// The config for an explicit provider/model/base-URL selection (the
+/// add-model form): an ad-hoc switch like `--provider`/`--model` on the
+/// command line.
+pub fn custom_config(
+    cfg: &Config,
+    provider: Provider,
+    model: String,
+    base_url: Option<String>,
+) -> Config {
+    let mut new_cfg = cfg.clone();
+    new_cfg.provider = provider;
+    new_cfg.model = model;
+    new_cfg.base_url = base_url;
+    new_cfg.active_model = None;
+    new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+    new_cfg
+}
+
 /// A ready-to-paste `[[models]]` snippet for an ad-hoc selection, shown
 /// after switching via the add-model form so the choice can be made
 /// permanent in picocode.toml.
@@ -268,6 +361,90 @@ mod tests {
             resolve_partial("nope", &entries, &available),
             PartialMatch::None
         );
+    }
+
+    #[test]
+    fn plan_switch_covers_entries_served_models_and_misses() {
+        let mut base = Config::for_tests();
+        base.models = vec![crate::config::ModelEntry {
+            name: "local".into(),
+            provider: Provider::Ollama,
+            model: "qwen3:8b".into(),
+            base_url: None,
+            context_window: Some(64_000),
+        }];
+        let available = vec![
+            "qwen3:4b".to_string(),
+            "qwen3:30b".to_string(),
+            "gemma4:e2b".to_string(),
+        ];
+
+        // A configured entry switches to its provider/model and records the
+        // entry as active; a partial name reports what it completed to.
+        let (matched, plan) = plan_switch(&base, "loc", &available);
+        assert_eq!(matched.as_deref(), Some("local"));
+        match plan {
+            SwitchPlan::Switch { name, cfg } => {
+                assert_eq!(name, "local");
+                assert_eq!(cfg.model, "qwen3:8b");
+                assert_eq!(cfg.active_model.as_deref(), Some("local"));
+                assert_eq!(cfg.context_window, 64_000);
+            }
+            _ => panic!("expected a switch"),
+        }
+
+        // A served model id switches ad hoc (no entry, default window).
+        let (matched, plan) = plan_switch(&base, "gemma4:e2b", &available);
+        assert_eq!(matched, None);
+        match plan {
+            SwitchPlan::Switch { name, cfg } => {
+                assert_eq!(name, "gemma4:e2b");
+                assert_eq!(cfg.active_model, None);
+                assert_eq!(cfg.context_window, crate::config::DEFAULT_CONTEXT_WINDOW);
+            }
+            _ => panic!("expected a switch"),
+        }
+
+        // The current selection is reported as already active, both for the
+        // active entry and for an ad-hoc model id.
+        base.active_model = Some("local".into());
+        assert!(matches!(
+            plan_switch(&base, "local", &available).1,
+            SwitchPlan::AlreadyActive { display } if display == "local (ollama/qwen3:8b)"
+        ));
+        base.active_model = None;
+        assert!(matches!(
+            plan_switch(&base, "qwen3:4b", &available).1,
+            SwitchPlan::AlreadyActive { display } if display == "ollama/qwen3:4b"
+        ));
+
+        // Unknown and ambiguous names resolve to their message variants.
+        assert!(matches!(
+            plan_switch(&base, "nope", &available).1,
+            SwitchPlan::Unknown { name } if name == "nope"
+        ));
+        assert!(matches!(
+            plan_switch(&base, "qwen", &available).1,
+            SwitchPlan::Ambiguous(_)
+        ));
+    }
+
+    #[test]
+    fn custom_config_is_an_adhoc_selection() {
+        let mut base = Config::for_tests();
+        base.active_model = Some("local".into());
+        base.context_window = 64_000;
+        let cfg = custom_config(
+            &base,
+            Provider::Openai,
+            "gpt-x".into(),
+            Some("http://host:8000/v1".into()),
+        );
+        assert_eq!(cfg.model, "gpt-x");
+        assert_eq!(cfg.provider, Provider::Openai);
+        assert_eq!(cfg.base_url.as_deref(), Some("http://host:8000/v1"));
+        assert_eq!(cfg.active_model, None);
+        assert_eq!(cfg.context_window, crate::config::DEFAULT_CONTEXT_WINDOW);
     }
 
     #[test]
