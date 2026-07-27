@@ -64,10 +64,10 @@ impl ChatView {
             .child({
                 // While running: nothing extra during the API wait (the
                 // spinner already says "waiting"), then ↓ + tok/s while
-                // tokens stream in. Idle shows both totals. The streaming
-                // numbers tick many times per second, so they render in the
-                // mono font with fixed-width fields — the text keeps one
-                // width while it counts.
+                // tokens stream in. Idle shows both totals. Mono font and a
+                // padded rate keep the ticking numbers from wobbling; the
+                // count itself only grows, so it sits right next to its
+                // arrow without padding.
                 let counters = if self.running && self.waiting {
                     String::new()
                 } else if self.running {
@@ -75,7 +75,7 @@ impl ChatView {
                         Some(rate) => format!(" · {:>3} tok/s", rate.round().max(1.0) as u64),
                         None => String::new(),
                     };
-                    format!("↓ {:>6}{rate}", self.tokens_out_live())
+                    format!("↓ {}{rate}", self.tokens_out_live())
                 } else {
                     format!("↑ {} ↓ {}", self.tokens_in, self.tokens_out_live())
                 };

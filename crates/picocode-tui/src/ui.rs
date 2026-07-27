@@ -581,7 +581,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             None => String::new(),
         };
         right.push(Span::styled(
-            format!("↓ {:>5}{rate}  ", app.turn_out + app.delta_est),
+            format!("↓ {}{rate}  ", app.turn_out + app.delta_est),
             dim,
         ));
     }
