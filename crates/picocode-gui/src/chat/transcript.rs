@@ -14,8 +14,6 @@ use picocode_core::transcript::{Entry, EntryKind};
 use super::ChatView;
 use super::one_line;
 
-/// Diff row backgrounds (translucent, so they read on both themes).
-
 impl ChatView {
     /// Render one row of the virtualized transcript list: the entry body
     /// plus its right-click (copy menu) hook and inter-entry spacing.
