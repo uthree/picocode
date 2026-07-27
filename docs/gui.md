@@ -130,7 +130,10 @@ signing/notarization) may come later.
   so the appearance setting keeps deciding which of the two is showing.
   The bundled themes (Zed format, via gpui-component's theme registry) are
   written to `$XDG_DATA_HOME/picocode/themes/` at startup; both choices
-  persist across restarts.
+  persist across restarts. All accent colors — the mode chip, per-tool log
+  colors, the context gauge and breakdown legend, diff backgrounds, code
+  blocks and their syntax highlighting — come from the selected theme's
+  palette.
 - **Persistence**: `/config` changes are saved to
   `$XDG_DATA_HOME/picocode/gui-settings.json` and re-applied on the next
   start, as a sparse overlay — untouched values keep following

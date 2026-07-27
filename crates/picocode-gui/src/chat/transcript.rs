@@ -15,8 +15,6 @@ use super::ChatView;
 use super::one_line;
 
 /// Diff row backgrounds (translucent, so they read on both themes).
-const DIFF_ADD_BG: u32 = 0x3fb95033;
-const DIFF_DEL_BG: u32 = 0xf8514933;
 
 impl ChatView {
     /// Render one row of the virtualized transcript list: the entry body
@@ -258,7 +256,7 @@ impl ChatView {
                     .text
                     .split_once(' ')
                     .unwrap_or((entry.text.as_str(), ""));
-                let (icon, color) = tool_style(name);
+                let (icon, color) = tool_style(name, theme);
                 div()
                     .h_flex()
                     .gap_2()
@@ -416,13 +414,13 @@ pub(super) fn diff_element(
     let mut out = div().v_flex().font_family(mono).text_sm();
     for row in rows {
         let el = match row {
-            DiffRow::Old(i) => div().px_1().bg(gpui::rgba(DIFF_DEL_BG)).child(styled_row(
+            DiffRow::Old(i) => div().px_1().bg(theme.red.opacity(0.2)).child(styled_row(
                 "- ",
                 theme.danger,
                 &code(&old_lines, i),
                 old_hl.get(i),
             )),
-            DiffRow::New(i) => div().px_1().bg(gpui::rgba(DIFF_ADD_BG)).child(styled_row(
+            DiffRow::New(i) => div().px_1().bg(theme.green.opacity(0.2)).child(styled_row(
                 "+ ",
                 theme.success,
                 &code(&new_lines, i),
@@ -450,19 +448,22 @@ pub(super) fn diff_element(
     out.into_any_element()
 }
 
-/// Color for one context-breakdown segment (fixed palette that reads on
-/// both themes; hues match the TUI's terminal colors).
-fn context_color(kind: picocode_core::context::ContextKind) -> gpui::Rgba {
+/// Color for one context-breakdown segment, from the theme's base
+/// palette; hues match the TUI's terminal colors.
+fn context_color(
+    kind: picocode_core::context::ContextKind,
+    theme: &gpui_component::theme::Theme,
+) -> gpui::Hsla {
     use picocode_core::context::ContextKind::*;
-    gpui::rgb(match kind {
-        System => 0x4c8df6,
-        Instructions => 0x27b0be,
-        User => 0x3fb950,
-        Assistant => 0xb185f2,
-        Tools => 0xd4a72c,
-        Media => 0xf47067,
-        Overhead => 0x8b949e,
-    })
+    match kind {
+        System => theme.blue,
+        Instructions => theme.cyan,
+        User => theme.green,
+        Assistant => theme.magenta,
+        Tools => theme.yellow,
+        Media => theme.red,
+        Overhead => theme.muted_foreground,
+    }
 }
 
 /// The /status context block: a segmented colored bar over the window,
@@ -498,7 +499,7 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
                 .h_full()
                 .min_w(px(3.))
                 .w(gpui::relative((*tokens as f64 / window as f64) as f32))
-                .bg(context_color(*kind)),
+                .bg(context_color(*kind, theme)),
         );
     }
 
@@ -518,7 +519,7 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
                         .size_2()
                         .rounded_full()
                         .flex_none()
-                        .bg(context_color(*kind)),
+                        .bg(context_color(*kind, theme)),
                 )
                 .child({
                     let key = format!("breakdown_{}", kind.key());
@@ -585,22 +586,25 @@ fn escape_markdown(text: &str) -> String {
     out
 }
 
-/// Icon asset path and accent color for a tool-call row: blue-ish for
-/// local reads, yellow for file edits, green for the shell, purple for
+/// Icon asset path and accent color for a tool-call row, from the theme's
+/// base palette (every bundled color theme defines `base.*`): cyan for
+/// local reads, yellow for file edits, green for the shell, magenta for
 /// the web tools, blue for plans.
-pub(super) fn tool_style(name: &str) -> (&'static str, gpui::Hsla) {
-    let (icon, rgb) = match name {
-        "read_file" => ("icons/file-text.svg", 0x0ea5e9),
-        "list_files" => ("icons/folder.svg", 0x0ea5e9),
-        "grep" => ("icons/search.svg", 0x0ea5e9),
-        "edit_file" => ("icons/pencil.svg", 0xeab308),
-        "bash" => ("icons/terminal.svg", 0x3fb950),
-        "web_search" => ("icons/globe.svg", 0xa855f7),
-        "web_fetch" => ("icons/download.svg", 0xa855f7),
-        "submit_plan" => ("icons/clipboard-list.svg", 0x3b82f6),
-        _ => ("icons/wrench.svg", 0x8b949e),
-    };
-    (icon, gpui::rgb(rgb).into())
+pub(super) fn tool_style(
+    name: &str,
+    theme: &gpui_component::theme::Theme,
+) -> (&'static str, gpui::Hsla) {
+    match name {
+        "read_file" => ("icons/file-text.svg", theme.cyan),
+        "list_files" => ("icons/folder.svg", theme.cyan),
+        "grep" => ("icons/search.svg", theme.cyan),
+        "edit_file" => ("icons/pencil.svg", theme.yellow),
+        "bash" => ("icons/terminal.svg", theme.green),
+        "web_search" => ("icons/globe.svg", theme.magenta),
+        "web_fetch" => ("icons/download.svg", theme.magenta),
+        "submit_plan" => ("icons/clipboard-list.svg", theme.blue),
+        _ => ("icons/wrench.svg", theme.muted_foreground),
+    }
 }
 
 #[cfg(test)]

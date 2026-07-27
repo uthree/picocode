@@ -42,7 +42,7 @@ impl ChatView {
         } else if ratio >= 0.6 {
             theme.warning
         } else {
-            gpui::rgb(0x3fb950).into()
+            theme.green
         };
         const GAUGE_W: f32 = 96.;
         let gauge = div()
@@ -119,7 +119,7 @@ impl ChatView {
             .rounded(theme.radius)
             .px_2()
             .py_0p5()
-            .bg(mode_color(mode))
+            .bg(mode_color(mode, theme))
             .text_color(gpui::white())
             .hover(|s| s.opacity(0.85))
             .child(mode_name(mode))
@@ -481,15 +481,16 @@ pub(super) fn mode_name(mode: Mode) -> String {
     }
 }
 
-/// Status-bar color per permission mode (mirrors the TUI's palette).
-pub(super) fn mode_color(mode: Mode) -> gpui::Hsla {
-    let rgb = match mode {
-        Mode::ReadOnly => 0x0ea5e9, // cyan
-        Mode::Edit => 0xeab308,     // yellow
-        Mode::Plan => 0x3b82f6,     // blue
-        Mode::Bypass => 0xef4444,   // red
-    };
-    gpui::rgb(rgb).into()
+/// Status-bar color per permission mode: the theme's base palette (every
+/// bundled color theme defines `base.*`), hues mirroring the TUI's
+/// terminal colors.
+pub(super) fn mode_color(mode: Mode, theme: &gpui_component::theme::Theme) -> gpui::Hsla {
+    match mode {
+        Mode::ReadOnly => theme.cyan,
+        Mode::Edit => theme.yellow,
+        Mode::Plan => theme.blue,
+        Mode::Bypass => theme.red,
+    }
 }
 
 /// One clickable row of a status-bar menu: name, dimmed detail, and a check

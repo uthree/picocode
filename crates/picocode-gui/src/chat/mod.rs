@@ -2316,9 +2316,9 @@ impl Render for ChatView {
                                 let input = Input::new(&self.input);
                                 let value = self.input.read(cx).value();
                                 if value.starts_with('!') {
-                                    input.border_color(gpui::rgb(0xeab308)) // yellow
+                                    input.border_color(cx.theme().yellow)
                                 } else if value.starts_with('/') {
-                                    input.border_color(gpui::rgb(0x0ea5e9)) // cyan
+                                    input.border_color(cx.theme().cyan)
                                 } else {
                                     input
                                 }

@@ -67,7 +67,7 @@ impl ChatView {
                         .border_1()
                         .border_color(theme.border)
                         .child({
-                            let (icon, color) = tool_style(&a.name);
+                            let (icon, color) = tool_style(&a.name, theme);
                             div()
                                 .h_flex()
                                 .gap_2()
