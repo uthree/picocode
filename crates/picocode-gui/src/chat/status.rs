@@ -74,19 +74,29 @@ impl ChatView {
             .child({
                 // While running: nothing extra during the API wait (the
                 // spinner already says "waiting"), then ↓ + tok/s while
-                // tokens stream in. Idle shows both totals.
+                // tokens stream in. Idle shows both totals. The streaming
+                // numbers tick many times per second, so they render in the
+                // mono font with fixed-width fields — the text keeps one
+                // width while it counts, instead of jittering the bar.
+                let pct = (ratio * 100.0).round() as u64;
                 let counters = if self.running && self.waiting {
-                    String::new()
+                    format!("{pct:>3}%")
                 } else if self.running {
                     let rate = match self.speed.rate() {
-                        Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
+                        Some(rate) => format!(" · {:>3} tok/s", rate.round().max(1.0) as u64),
                         None => String::new(),
                     };
-                    format!("  ↓ {}{rate}", self.tokens_out_live())
+                    format!("{pct:>3}% ↓ {:>6}{rate}", self.tokens_out_live())
                 } else {
-                    format!("  ↑ {} ↓ {}", self.tokens_in, self.tokens_out_live())
+                    format!(
+                        "{pct:>3}% ↑ {} ↓ {}",
+                        self.tokens_in,
+                        self.tokens_out_live()
+                    )
                 };
-                format!("{}%{counters}", (ratio * 100.0).round() as u64)
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .child(counters)
             });
 
         // Animated spinner while a turn runs; "waiting" until the first

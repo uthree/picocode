@@ -574,12 +574,14 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     // Output counter + tok/s while tokens stream; nothing extra while
     // waiting on the API (the spinner already says "waiting").
     if app.running > 0 && !app.waiting {
+        // The rate fluctuates while the count only grows; pad it so the
+        // right block keeps one width between digit rollovers of the count.
         let rate = match app.speed.rate() {
-            Some(rate) => format!(" · {} tok/s", rate.round().max(1.0) as u64),
+            Some(rate) => format!(" · {:>3} tok/s", rate.round().max(1.0) as u64),
             None => String::new(),
         };
         right.push(Span::styled(
-            format!("↓ {}{rate}  ", app.turn_out + app.delta_est),
+            format!("↓ {:>5}{rate}  ", app.turn_out + app.delta_est),
             dim,
         ));
     }
