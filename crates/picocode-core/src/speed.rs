@@ -2,8 +2,10 @@
 //! to the output-token counters in both front ends.
 //!
 //! The UIs feed it their per-delta token estimates; the rate is tokens
-//! over the recent window, measured against "now" — so it decays toward
-//! zero while the stream stalls instead of freezing at the last value.
+//! over the recent window, measured between the first and last sample —
+//! so while the stream stalls (a tool call between steps, a slow
+//! provider) the readout freezes at its last value instead of blinking
+//! out and back. It disappears only on [`SpeedMeter::reset`] (turn end).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -27,9 +29,20 @@ impl SpeedMeter {
     }
 
     /// Tokens per second over the recent window; `None` without enough
-    /// history (idle, or the stream just started).
+    /// history (idle, or the stream just started). Stable between calls:
+    /// the value only moves when new samples arrive.
     pub fn rate(&self) -> Option<f64> {
-        self.rate_at(Instant::now())
+        let (first, _) = self.samples.front()?;
+        let (last, _) = self.samples.back()?;
+        let span = last.duration_since(*first);
+        if span < MIN_SPAN {
+            return None;
+        }
+        // The first sample's tokens arrived *before* the measured span
+        // starts (its instant marks the end of that delta), so they are
+        // excluded — otherwise short spans overestimate.
+        let total: u64 = self.samples.iter().skip(1).map(|(_, n)| n).sum();
+        Some(total as f64 / span.as_secs_f64())
     }
 
     /// Forget everything (turn ended or was cancelled).
@@ -47,16 +60,6 @@ impl SpeedMeter {
             }
         }
     }
-
-    fn rate_at(&self, now: Instant) -> Option<f64> {
-        let (first, _) = self.samples.front()?;
-        let span = now.duration_since(*first);
-        if span < MIN_SPAN || span > WINDOW {
-            return None;
-        }
-        let total: u64 = self.samples.iter().map(|(_, n)| n).sum();
-        Some(total as f64 / span.as_secs_f64())
-    }
 }
 
 #[cfg(test)]
@@ -67,24 +70,30 @@ mod tests {
     fn rate_over_the_window() {
         let mut m = SpeedMeter::default();
         let t0 = Instant::now();
-        assert_eq!(m.rate_at(t0), None);
-        // 20 tokens over 2 seconds → 10 tok/s.
+        assert_eq!(m.rate(), None);
+        // 20 tokens over 2 seconds → 10 tok/s (the first sample only
+        // anchors the span).
         for i in 0..=20u64 {
             m.record_at(t0 + Duration::from_millis(i * 100), 1);
         }
-        let rate = m.rate_at(t0 + Duration::from_secs(2)).unwrap();
-        assert!((rate - 10.5).abs() < 0.01, "rate = {rate}");
-        // Right after the first sample there is not enough history.
-        let mut early = SpeedMeter::default();
-        early.record_at(t0, 5);
-        assert_eq!(early.rate_at(t0 + Duration::from_millis(100)), None);
-        // A stalled stream decays instead of freezing …
-        let decayed = m.rate_at(t0 + Duration::from_secs(4)).unwrap();
-        assert!(decayed < rate);
-        // … and stops reporting once the whole window is stale.
-        assert_eq!(m.rate_at(t0 + Duration::from_secs(60)), None);
+        let rate = m.rate().unwrap();
+        assert!((rate - 10.0).abs() < 0.01, "rate = {rate}");
+        // A stalled stream holds the last reading instead of decaying —
+        // the readout must not blink out between tool calls.
+        assert_eq!(m.rate(), Some(rate));
         m.reset();
-        assert_eq!(m.rate_at(t0 + Duration::from_secs(2)), None);
+        assert_eq!(m.rate(), None);
+    }
+
+    #[test]
+    fn a_single_early_delta_reports_nothing() {
+        let mut m = SpeedMeter::default();
+        let t0 = Instant::now();
+        m.record_at(t0, 5);
+        assert_eq!(m.rate(), None);
+        m.record_at(t0 + Duration::from_millis(100), 5);
+        // Still under the minimum span.
+        assert_eq!(m.rate(), None);
     }
 
     #[test]
@@ -95,8 +104,9 @@ mod tests {
         // A burst long after the first sample prunes it away.
         m.record_at(t0 + Duration::from_secs(30), 10);
         m.record_at(t0 + Duration::from_secs(31), 10);
-        let rate = m.rate_at(t0 + Duration::from_secs(32)).unwrap();
-        // Only the recent 20 tokens over 2s count, not the old 1000.
+        m.record_at(t0 + Duration::from_secs(32), 10);
+        let rate = m.rate().unwrap();
+        // Only the recent tokens over the 2s span count, not the old 1000.
         assert!((rate - 10.0).abs() < 0.01, "rate = {rate}");
     }
 }
