@@ -75,6 +75,7 @@ ctx_used: "context tokens"
 ctx_output: "output tokens (last)"
 
 row_theme: "theme"
+row_color_theme: "Color theme"
 row_mode: "mode"
 row_bash_timeout: "bash timeout"
 row_read_lines: "read lines"

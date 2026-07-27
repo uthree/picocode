@@ -75,6 +75,7 @@ ctx_used: "使用トークン"
 ctx_output: "出力トークン (直近)"
 
 row_theme: "テーマ"
+row_color_theme: "カラーテーマ"
 row_mode: "モード"
 row_bash_timeout: "bash タイムアウト"
 row_read_lines: "read 行数上限"

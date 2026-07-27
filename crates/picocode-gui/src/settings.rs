@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 pub struct GuiSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeSetting>,
+    /// Color-theme family (see `theme::FAMILIES`), orthogonal to `theme`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_family: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bash_timeout: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

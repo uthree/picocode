@@ -124,7 +124,13 @@ signing/notarization) may come later.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
 - **Theme**: follows the system light/dark appearance live by default; the
-  `/config` theme row forces light or dark.
+  `/config` theme row forces light or dark. A separate "color theme" row
+  picks the palette family — Default, Ayu, Catppuccin, Everforest,
+  Flexoki, Gruvbox or Solarized — each pairing a light and a dark variant,
+  so the appearance setting keeps deciding which of the two is showing.
+  The bundled themes (Zed format, via gpui-component's theme registry) are
+  written to `$XDG_DATA_HOME/picocode/themes/` at startup; both choices
+  persist across restarts.
 - **Persistence**: `/config` changes are saved to
   `$XDG_DATA_HOME/picocode/gui-settings.json` and re-applied on the next
   start, as a sparse overlay — untouched values keep following

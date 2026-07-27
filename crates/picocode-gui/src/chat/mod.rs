@@ -16,7 +16,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme, StyledExt, Theme, ThemeMode};
+use gpui_component::{ActiveTheme, StyledExt, Theme};
 use rust_i18n::t;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -157,6 +157,8 @@ pub struct ChatView {
     expanded_reasoning: std::collections::HashSet<usize>,
     /// Color theme: follow the system (default), or forced light/dark.
     theme_pref: ThemeSetting,
+    /// Color-theme family (`theme::FAMILIES` label).
+    theme_family: String,
     /// Sparse overlay of `/config` values the user changed, persisted to
     /// disk and re-applied on the next start.
     saved: GuiSettings,
@@ -279,7 +281,13 @@ impl ChatView {
         let saved = settings::load();
         Self::apply_saved(&saved, &cfg);
         let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
-        Self::apply_theme(theme_pref, cx);
+        let theme_family = saved
+            .theme_family
+            .clone()
+            .unwrap_or_else(|| crate::theme::FAMILIES[0].0.to_string());
+        // The family itself is applied by theme::init once the registry
+        // has loaded the bundled files; only the mode applies here.
+        crate::theme::apply_mode(theme_pref, cx);
 
         let sessions_dir = session::sessions_dir_for(&cfg);
         let git_branch = picocode_core::git::branch(&cfg.root);
@@ -312,6 +320,7 @@ impl ChatView {
             model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
             theme_pref,
+            theme_family,
             saved,
             comp_prefix: None,
             completing: false,
@@ -356,14 +365,6 @@ impl ChatView {
         }
         if let Some(n) = saved.search_max_results {
             cfg.search.set_max_results(n);
-        }
-    }
-
-    fn apply_theme(pref: ThemeSetting, cx: &mut Context<Self>) {
-        match pref {
-            ThemeSetting::System => Theme::sync_system_appearance(None, cx),
-            ThemeSetting::Light => Theme::change(ThemeMode::Light, None, cx),
-            ThemeSetting::Dark => Theme::change(ThemeMode::Dark, None, cx),
         }
     }
 
@@ -793,7 +794,15 @@ impl ChatView {
             CYCLE[(i + 1) % CYCLE.len()]
         };
         self.saved.theme = Some(self.theme_pref);
-        Self::apply_theme(self.theme_pref, cx);
+        crate::theme::apply_mode(self.theme_pref, cx);
+    }
+
+    /// Cycle the color-theme family and apply it (the appearance mode is
+    /// untouched: the family only swaps the light/dark palette pair).
+    fn cycle_theme_family(&mut self, delta: i64, cx: &mut Context<Self>) {
+        self.theme_family = crate::theme::cycled(&self.theme_family, delta).to_string();
+        self.saved.theme_family = Some(self.theme_family.clone());
+        crate::theme::apply_family(&self.theme_family, cx);
     }
 
     /// A `/config` row change. Every change applies immediately. Mirrors
@@ -807,35 +816,36 @@ impl ChatView {
     ) {
         match row {
             0 => self.cycle_theme(delta, cx),
+            1 => self.cycle_theme_family(delta, cx),
             // Same cycle as the TUI: bypass stays menu/command-only, and
             // adjusting away from it lands on read-only.
-            1 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
-            2 => {
+            2 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
+            3 => {
                 self.cfg.step_bash_timeout(delta);
                 self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
             }
-            3 => {
+            4 => {
                 self.cfg.step_read_lines(delta);
                 self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
             }
-            4 => {
+            5 => {
                 self.cfg.step_line_bytes(delta);
                 self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
             }
-            5 => {
+            6 => {
                 self.cfg.search.cycle_provider(delta);
                 self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
             }
-            6 => {
+            7 => {
                 self.cfg.search.step_max_results(delta);
                 self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
-            7 => {
+            8 => {
                 self.cfg.step_auto_compact(delta);
                 self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
-            8 => {
+            9 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, window, cx);
             }

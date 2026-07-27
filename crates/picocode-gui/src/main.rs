@@ -11,6 +11,7 @@ mod highlight;
 mod math;
 mod settings;
 mod tex;
+mod theme;
 
 // UI strings live in locales/{en,ja}.yml; the locale is picked from the
 // system at startup (rust-i18n's locale is process-global).
@@ -86,6 +87,9 @@ fn main() -> anyhow::Result<()> {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
+            // Bundled color themes: written out and watched; the saved
+            // family applies once loaded.
+            theme::init(cx);
             // Registered after gpui_component::init, so these win over the
             // input's own bindings. Plain Enter goes straight to the chat
             // view's submit action — bypassing the input's Enter handling,
