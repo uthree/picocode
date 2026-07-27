@@ -57,6 +57,32 @@ impl ChatView {
             .h_flex()
             .gap_2()
             .items_center()
+            // The token counters sit LEFT of the bar (mirroring the TUI):
+            // their width varies with the numbers, and on the left edge of
+            // the right-aligned cluster that variation extends leftward —
+            // the bar, the percent and the model chip never move.
+            .child({
+                // While running: nothing extra during the API wait (the
+                // spinner already says "waiting"), then ↓ + tok/s while
+                // tokens stream in. Idle shows both totals. The streaming
+                // numbers tick many times per second, so they render in the
+                // mono font with fixed-width fields — the text keeps one
+                // width while it counts.
+                let counters = if self.running && self.waiting {
+                    String::new()
+                } else if self.running {
+                    let rate = match self.speed.rate() {
+                        Some(rate) => format!(" · {:>3} tok/s", rate.round().max(1.0) as u64),
+                        None => String::new(),
+                    };
+                    format!("↓ {:>6}{rate}", self.tokens_out_live())
+                } else {
+                    format!("↑ {} ↓ {}", self.tokens_in, self.tokens_out_live())
+                };
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .child(counters)
+            })
             .child(
                 div()
                     .w(px(GAUGE_W))
@@ -71,33 +97,11 @@ impl ChatView {
                             .bg(gauge_color),
                     ),
             )
-            .child({
-                // While running: nothing extra during the API wait (the
-                // spinner already says "waiting"), then ↓ + tok/s while
-                // tokens stream in. Idle shows both totals. The streaming
-                // numbers tick many times per second, so they render in the
-                // mono font with fixed-width fields — the text keeps one
-                // width while it counts, instead of jittering the bar.
-                let pct = (ratio * 100.0).round() as u64;
-                let counters = if self.running && self.waiting {
-                    format!("{pct:>3}%")
-                } else if self.running {
-                    let rate = match self.speed.rate() {
-                        Some(rate) => format!(" · {:>3} tok/s", rate.round().max(1.0) as u64),
-                        None => String::new(),
-                    };
-                    format!("{pct:>3}% ↓ {:>6}{rate}", self.tokens_out_live())
-                } else {
-                    format!(
-                        "{pct:>3}% ↑ {} ↓ {}",
-                        self.tokens_in,
-                        self.tokens_out_live()
-                    )
-                };
+            .child(
                 div()
                     .font_family(theme.mono_font_family.clone())
-                    .child(counters)
-            });
+                    .child(format!("{:>3}%", (ratio * 100.0).round() as u64)),
+            );
 
         // Animated spinner while a turn runs; "waiting" until the first
         // token arrives (like the TUI), "generating" after.
