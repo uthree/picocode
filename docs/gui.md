@@ -126,7 +126,7 @@ signing/notarization) may come later.
 - **Theme**: follows the system light/dark appearance live by default; the
   `/config` theme row forces light or dark. A separate "color theme" row
   picks the palette family — Default, Ayu, Catppuccin, Everforest,
-  Flexoki, Gruvbox or Solarized — each pairing a light and a dark variant,
+  Flexoki, GitHub, Gruvbox, One (Atom) or Solarized — each pairing a light and a dark variant,
   so the appearance setting keeps deciding which of the two is showing.
   The bundled themes (Zed format, via gpui-component's theme registry) are
   written to `$XDG_DATA_HOME/picocode/themes/` at startup; both choices

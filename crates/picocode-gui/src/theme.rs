@@ -20,7 +20,9 @@ const BUNDLED: &[(&str, &str)] = &[
     ("catppuccin.json", include_str!("../themes/catppuccin.json")),
     ("everforest.json", include_str!("../themes/everforest.json")),
     ("flexoki.json", include_str!("../themes/flexoki.json")),
+    ("github.json", include_str!("../themes/github.json")),
     ("gruvbox.json", include_str!("../themes/gruvbox.json")),
+    ("one.json", include_str!("../themes/one.json")),
     ("solarized.json", include_str!("../themes/solarized.json")),
 ];
 
@@ -32,7 +34,9 @@ pub const FAMILIES: &[(&str, &str, &str)] = &[
     ("Catppuccin", "Catppuccin Latte", "Catppuccin Mocha"),
     ("Everforest", "Everforest Light", "Everforest Dark"),
     ("Flexoki", "Flexoki Light", "Flexoki Dark"),
+    ("GitHub", "GitHub Light", "GitHub Dark"),
     ("Gruvbox", "Gruvbox Light", "Gruvbox Dark"),
+    ("One", "One Light", "One Dark"),
     ("Solarized", "Solarized Light", "Solarized Dark"),
 ];
 
@@ -122,14 +126,18 @@ mod tests {
     fn bundled_files_parse_and_cover_every_family() {
         let mut names = Vec::new();
         for (file, content) in BUNDLED {
-            let set: serde_json::Value =
+            // Through the real schema, so a key drift fails here instead of
+            // being silently ignored by the registry at startup.
+            let set: gpui_component::ThemeSet =
                 serde_json::from_str(content).unwrap_or_else(|e| panic!("{file}: {e}"));
-            for theme in set["themes"].as_array().expect("themes array") {
-                names.push(theme["name"].as_str().unwrap().to_string());
+            for theme in set.themes {
                 assert!(
-                    theme["mode"].is_string(),
-                    "{file}: every theme declares a mode"
+                    theme.highlight.is_some(),
+                    "{}: {} lacks highlight styles",
+                    file,
+                    theme.name
                 );
+                names.push(theme.name.to_string());
             }
         }
         // Every non-default family variant exists in some bundled file.
