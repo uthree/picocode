@@ -74,6 +74,13 @@ impl ChatView {
         let muted = theme.muted_foreground;
         let foreground = theme.foreground;
         let mono = theme.mono_font_family.clone();
+        // TextView bakes the syntax-highlight palette into its per-id state
+        // at first parse and never refreshes it (only the code-block
+        // *background* is read live at render time). Keying the element id
+        // by the palette's identity makes a theme switch mint fresh state,
+        // so code tokens re-highlight in the new colors. Old states linger
+        // in the window's keyed-state map, but only one per theme switch.
+        let hl = std::sync::Arc::as_ptr(&theme.highlight_theme) as usize;
         match entry.kind {
             EntryKind::User => {
                 let mut bubble = div()
@@ -88,7 +95,7 @@ impl ChatView {
                     // literally.
                     .child(
                         TextView::markdown(
-                            SharedString::from(format!("user-{ix}")),
+                            SharedString::from(format!("user-{ix}-{hl:x}")),
                             SharedString::from(escape_markdown(&entry.text)),
                             window,
                             cx,
@@ -165,7 +172,7 @@ impl ChatView {
                         crate::math::Segment::Markdown(md) => {
                             col = col.child(
                                 TextView::markdown(
-                                    SharedString::from(format!("md-{ix}-{six}")),
+                                    SharedString::from(format!("md-{ix}-{six}-{hl:x}")),
                                     SharedString::from(crate::math::render_math(&md)),
                                     window,
                                     cx,
@@ -210,7 +217,7 @@ impl ChatView {
                                 None => {
                                     col = col.child(
                                         TextView::markdown(
-                                            SharedString::from(format!("md-{ix}-{six}")),
+                                            SharedString::from(format!("md-{ix}-{six}-{hl:x}")),
                                             SharedString::from(crate::math::display_fallback(
                                                 &tex_src,
                                             )),
