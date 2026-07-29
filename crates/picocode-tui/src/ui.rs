@@ -426,15 +426,18 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     // typing.
     let (title, border) = if app.prompt_edit.is_some() {
         (
-            " system prompt — Enter apply · Esc cancel ",
+            format!(
+                " system prompt — {} apply · Esc cancel ",
+                app.send_key().label()
+            ),
             Style::new().fg(Color::Magenta),
         )
     } else if app.input.starts_with('!') {
-        (" shell ", Style::new().fg(Color::Yellow))
+        (" shell ".to_string(), Style::new().fg(Color::Yellow))
     } else if app.input.starts_with('/') {
-        (" command ", Style::new().fg(Color::Cyan))
+        (" command ".to_string(), Style::new().fg(Color::Cyan))
     } else {
-        (" picocode ", Style::new().fg(Color::DarkGray))
+        (" picocode ".to_string(), Style::new().fg(Color::DarkGray))
     };
     let block = Block::bordered()
         .title(title)

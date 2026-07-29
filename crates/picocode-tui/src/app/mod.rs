@@ -33,6 +33,7 @@ use tokio::sync::{mpsc, watch};
 
 use picocode_core::config::Config;
 use picocode_core::event::{AgentEvent, WorkerCmd};
+use picocode_core::keys::SubmitKey;
 use picocode_core::session;
 pub use picocode_core::transcript::{Entry, EntryKind};
 
@@ -156,6 +157,9 @@ pub struct App {
     pub add_remote: Option<AddRemoteForm>,
     /// Open `/config` dialog, if any (captures the arrow/Enter keys).
     pub settings: Option<SettingsMenu>,
+    /// True when the terminal implements the keyboard-enhancement protocol,
+    /// so Shift/Ctrl/Super+Enter arrive as distinct key events.
+    pub enhanced_keys: bool,
     should_quit: bool,
     assistant_open: bool,
     reasoning_open: bool,
@@ -172,6 +176,7 @@ impl App {
         cancel_tx: watch::Sender<()>,
         mcp: picocode_core::mcp::McpConnections,
         backend: picocode_core::backend::Backend,
+        enhanced_keys: bool,
     ) -> Self {
         let mut app = Self {
             entries: Vec::new(),
@@ -221,6 +226,7 @@ impl App {
             remote_picker: None,
             add_remote: None,
             settings: None,
+            enhanced_keys,
             should_quit: false,
             assistant_open: false,
             reasoning_open: false,
@@ -247,6 +253,35 @@ impl App {
             EntryKind::Notice,
             format!("Mode: {} — Shift+Tab to switch", cfg.mode.get().label()),
         );
+        // A non-default send key is worth confirming — and worth a warning
+        // when the terminal cannot report it (see `submits`).
+        if cfg.submit_key != SubmitKey::Enter {
+            let key = cfg.submit_key;
+            if !enhanced_keys && needs_enhanced_keys(key) {
+                app.push(
+                    EntryKind::Warning,
+                    format!(
+                        "Send key: this terminal cannot report {} — Enter sends instead \
+                         (Alt+Enter inserts a newline). Terminals implementing the kitty \
+                         keyboard protocol (kitty, Ghostty, WezTerm, foot) report it.",
+                        key.label()
+                    ),
+                );
+            } else {
+                let legacy = if key == SubmitKey::CtrlEnter && !enhanced_keys {
+                    " (or Ctrl+J, which this terminal reports instead)"
+                } else {
+                    ""
+                };
+                app.push(
+                    EntryKind::Notice,
+                    format!(
+                        "Send key: {}{legacy} — Enter inserts a newline",
+                        key.label()
+                    ),
+                );
+            }
+        }
         if cfg.system_prompt.is_some() {
             app.push(
                 EntryKind::Notice,
@@ -497,33 +532,17 @@ impl App {
         }
 
         match key.code {
-            // Alt+Enter (and Shift+Enter on terminals that report it) inserts
-            // a newline; Ctrl+J below covers legacy raw-mode terminals.
-            KeyCode::Enter
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
-            {
+            // Enter and its modified forms: one of them submits (the
+            // configured send key), the rest insert a newline. Alt+Enter is
+            // always a newline — an escape hatch that needs no protocol
+            // support — and Ctrl+J stands in for Ctrl+Enter on terminals
+            // that can't report it.
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.insert_char('\n');
                 self.reset_completion();
             }
-            KeyCode::Enter => {
-                // Backslash continuation: `\` + Enter becomes a newline —
-                // works on terminals that can't report modified Enter.
-                if self.cursor > 0 && self.input.chars().nth(self.cursor - 1) == Some('\\') {
-                    self.cursor -= 1;
-                    let i = self.byte_index();
-                    self.input.remove(i);
-                    self.insert_char('\n');
-                    self.reset_completion();
-                } else {
-                    self.submit().await;
-                }
-            }
-            KeyCode::Char('j') if ctrl => {
-                self.insert_char('\n');
-                self.reset_completion();
-            }
+            KeyCode::Enter => self.enter_key(pressed_enter(key.modifiers)).await,
+            KeyCode::Char('j') if ctrl => self.enter_key(SubmitKey::CtrlEnter).await,
             KeyCode::Tab => self.complete(false),
             // Shift+Tab cycles the completion popup while it's open, and the
             // permission mode otherwise.
@@ -583,6 +602,45 @@ impl App {
             KeyCode::PageDown => self.scroll_by(10),
             _ => {}
         }
+    }
+
+    /// One of the Enter combinations was pressed: send the message when it
+    /// is the configured send key, otherwise insert a newline.
+    async fn enter_key(&mut self, pressed: SubmitKey) {
+        if !self.submits(pressed) {
+            self.insert_char('\n');
+            self.reset_completion();
+            return;
+        }
+        // Backslash continuation: `\` + Enter becomes a newline — the way to
+        // write a multi-line message on terminals that report nothing but
+        // plain Enter.
+        if pressed == SubmitKey::Enter
+            && self.cursor > 0
+            && self.input.chars().nth(self.cursor - 1) == Some('\\')
+        {
+            self.cursor -= 1;
+            let i = self.byte_index();
+            self.input.remove(i);
+            self.insert_char('\n');
+            self.reset_completion();
+            return;
+        }
+        self.submit().await;
+    }
+
+    /// The key that actually sends on this terminal. Terminals without the
+    /// keyboard-enhancement protocol report Shift+Enter and Cmd+Enter as a
+    /// plain Enter, so there the setting falls back to Enter and the input
+    /// box can never become impossible to submit (the startup notice says
+    /// so).
+    pub fn send_key(&self) -> SubmitKey {
+        effective_send_key(self.cfg.submit_key, self.enhanced_keys)
+    }
+
+    /// Whether `pressed` sends the message rather than inserting a newline.
+    fn submits(&self, pressed: SubmitKey) -> bool {
+        pressed == self.send_key()
     }
 
     async fn submit(&mut self) {
@@ -956,6 +1014,38 @@ impl App {
     }
 }
 
+/// Which Enter combination a key event carries. Ctrl wins over Shift so a
+/// stray Shift can't turn a Ctrl+Enter into something else; Alt is handled
+/// before this (always a newline).
+fn pressed_enter(mods: KeyModifiers) -> SubmitKey {
+    if mods.contains(KeyModifiers::SUPER) {
+        SubmitKey::CmdEnter
+    } else if mods.contains(KeyModifiers::CONTROL) {
+        SubmitKey::CtrlEnter
+    } else if mods.contains(KeyModifiers::SHIFT) {
+        SubmitKey::ShiftEnter
+    } else {
+        SubmitKey::Enter
+    }
+}
+
+/// Whether a send key needs the terminal's keyboard-enhancement protocol to
+/// be reported at all. Ctrl+Enter doesn't: legacy terminals send it (or let
+/// the user type it) as Ctrl+J, which the key handler treats the same.
+fn needs_enhanced_keys(key: SubmitKey) -> bool {
+    matches!(key, SubmitKey::ShiftEnter | SubmitKey::CmdEnter)
+}
+
+/// The key that sends on this terminal: the configured one, or plain Enter
+/// when the terminal cannot report it at all.
+fn effective_send_key(configured: SubmitKey, enhanced: bool) -> SubmitKey {
+    if !enhanced && needs_enhanced_keys(configured) {
+        SubmitKey::Enter
+    } else {
+        configured
+    }
+}
+
 /// Collapse a JSON args string into a single display line.
 fn compact_one_line(s: &str, max_chars: usize) -> String {
     let s: String = s.chars().map(|c| if c == '\n' { '␤' } else { c }).collect();
@@ -975,5 +1065,53 @@ fn clamp_lines(s: &str, max: usize) -> String {
         let mut out = lines[..max].join("\n");
         out.push_str(&format!("\n… (+{} lines)", lines.len() - max));
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_combinations_map_to_send_keys() {
+        assert_eq!(pressed_enter(KeyModifiers::NONE), SubmitKey::Enter);
+        assert_eq!(pressed_enter(KeyModifiers::SHIFT), SubmitKey::ShiftEnter);
+        assert_eq!(pressed_enter(KeyModifiers::CONTROL), SubmitKey::CtrlEnter);
+        assert_eq!(pressed_enter(KeyModifiers::SUPER), SubmitKey::CmdEnter);
+        // Ctrl wins over a stray Shift, and Super over both.
+        assert_eq!(
+            pressed_enter(KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            SubmitKey::CtrlEnter
+        );
+        assert_eq!(
+            pressed_enter(KeyModifiers::SUPER | KeyModifiers::CONTROL),
+            SubmitKey::CmdEnter
+        );
+    }
+
+    #[test]
+    fn unreportable_send_keys_fall_back_to_enter() {
+        // With the keyboard-enhancement protocol every choice stands.
+        for key in picocode_core::keys::SUBMIT_KEYS {
+            assert_eq!(effective_send_key(*key, true), *key);
+        }
+        // Without it, only the combinations a legacy terminal can deliver.
+        assert_eq!(
+            effective_send_key(SubmitKey::ShiftEnter, false),
+            SubmitKey::Enter
+        );
+        assert_eq!(
+            effective_send_key(SubmitKey::CmdEnter, false),
+            SubmitKey::Enter
+        );
+        // Ctrl+Enter survives: it arrives as Ctrl+J there.
+        assert_eq!(
+            effective_send_key(SubmitKey::CtrlEnter, false),
+            SubmitKey::CtrlEnter
+        );
+        assert_eq!(
+            effective_send_key(SubmitKey::Enter, false),
+            SubmitKey::Enter
+        );
     }
 }

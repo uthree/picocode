@@ -200,10 +200,19 @@ impl ChatView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // Settings saved by earlier runs' /config changes are a sparse
+        // overlay on the config file (untouched values keep following it);
+        // the send key is needed before the input box is built.
+        let saved = settings::load();
+        let mut cfg = cfg;
+        Self::apply_saved(&saved, &mut cfg);
+        // Wins over the bindings main.rs registered before the window opened.
+        input::bind_send_key(cfg.submit_key, cx);
+
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .auto_grow(1, 8)
-                .placeholder(t!("placeholder").to_string())
+                .placeholder(input::placeholder(cfg.submit_key))
         });
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.subscribe_in(&input, window, Self::on_input_event)
@@ -249,12 +258,6 @@ impl ChatView {
         })
         .detach();
 
-        // Re-apply the settings saved by earlier runs' /config changes
-        // (a sparse overlay — untouched values keep following the config
-        // file). The runtime handles are shared with the worker, so setting
-        // them here is enough.
-        let saved = settings::load();
-        Self::apply_saved(&saved, &cfg);
         let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
         let theme_family = saved
             .theme_family
@@ -322,7 +325,10 @@ impl ChatView {
 
     /// Apply the persisted /config overlay onto a config's shared handles
     /// (used at startup and when switching working directories).
-    fn apply_saved(saved: &GuiSettings, cfg: &Config) {
+    fn apply_saved(saved: &GuiSettings, cfg: &mut Config) {
+        if let Some(k) = saved.submit_key {
+            cfg.submit_key = k;
+        }
         if let Some(v) = saved.bash_timeout {
             cfg.bash_timeout.set(v);
         }
@@ -450,31 +456,41 @@ impl ChatView {
             // adjusting away from it lands on read-only.
             2 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
             3 => {
+                self.cfg.submit_key = self.cfg.submit_key.cycled(delta);
+                self.saved.submit_key = Some(self.cfg.submit_key);
+                // Swap the key bindings and the placeholder over right away.
+                input::bind_send_key(self.cfg.submit_key, cx);
+                let placeholder = input::placeholder(self.cfg.submit_key);
+                self.input.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx)
+                });
+            }
+            4 => {
                 self.cfg.step_bash_timeout(delta);
                 self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
             }
-            4 => {
+            5 => {
                 self.cfg.step_read_lines(delta);
                 self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
             }
-            5 => {
+            6 => {
                 self.cfg.step_line_bytes(delta);
                 self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
             }
-            6 => {
+            7 => {
                 self.cfg.search.cycle_provider(delta);
                 self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
             }
-            7 => {
+            8 => {
                 self.cfg.search.step_max_results(delta);
                 self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
-            8 => {
+            9 => {
                 self.cfg.step_auto_compact(delta);
                 self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
-            9 => {
+            10 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, window, cx);
             }

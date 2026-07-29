@@ -27,6 +27,8 @@ crates/
     event.rs     — AgentEvent / WorkerCmd: the core ⇄ front-end protocol
     history.rs   — context savings: old-tool-output pruning and the
                    keep-recent-turns boundary used by compaction
+    keys.rs      — the configurable send key (submit_key): which Enter
+                   combination sends and which ones insert a newline
     mcp.rs       — opt-in MCP client: [[mcp_servers]] connect once at
                    startup, their tools join every spawned agent
     models.rs    — provider model-list queries and the /model switch

@@ -98,6 +98,18 @@ bash_timeout = 120
 read_max_lines = 2000        # max lines per call
 read_max_line_bytes = 500    # bytes per line before truncation
 
+# Which key sends the message in the input box: "enter" (default),
+# "shift-enter", "ctrl-enter" or "cmd-enter" (Super+Enter off macOS).
+# Whichever is chosen, the other Enter combinations insert a newline. Also
+# switchable at runtime in /config — the GUI remembers that choice, the TUI
+# applies it for the session. A remote workspace's config never overrides
+# it: it belongs to the machine you type on.
+# In the TUI, Shift+Enter and Cmd+Enter need a terminal implementing the
+# kitty keyboard protocol (kitty, Ghostty, WezTerm, foot); elsewhere Enter
+# keeps sending and picocode says so at startup. Ctrl+Enter works
+# everywhere — terminals without the protocol report it as Ctrl+J.
+submit_key = "enter"
+
 # Auto-compact the conversation when the context usage crosses this percent
 # of the window, checked after each turn (default: 85; 0 disables; also
 # adjustable in /config)

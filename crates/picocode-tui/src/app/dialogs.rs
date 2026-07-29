@@ -143,9 +143,9 @@ pub struct SettingsMenu {
     pub selected: usize,
 }
 
-/// Number of rows in the `/config` dialog (mode, reasoning, bash timeout,
-/// read limits, web search provider/results, auto-compact, model).
-pub const SETTINGS_ROWS: usize = 9;
+/// Number of rows in the `/config` dialog (mode, send key, reasoning, bash
+/// timeout, read limits, web search provider/results, auto-compact, model).
+pub const SETTINGS_ROWS: usize = 10;
 
 /// State of the `submit_plan` approval (question) dialog.
 pub struct PendingQuestion {
@@ -200,6 +200,7 @@ impl App {
     pub fn settings_rows(&self) -> [(&'static str, String, &'static str); SETTINGS_ROWS] {
         [
             ("mode", self.cfg.mode.get().label().to_string(), "← →"),
+            ("send key", self.send_key_label(), "← →"),
             (
                 "reasoning",
                 if self.show_reasoning {
@@ -246,6 +247,17 @@ impl App {
         ]
     }
 
+    /// The `/config` send-key value: the key itself, plus what the terminal
+    /// actually does when it cannot report that combination.
+    fn send_key_label(&self) -> String {
+        let key = self.cfg.submit_key;
+        if !self.enhanced_keys && super::needs_enhanced_keys(key) {
+            format!("{} (terminal sends on Enter)", key.label())
+        } else {
+            key.label().to_string()
+        }
+    }
+
     /// ←/→ on a `/config` row: change the value in place. Every change
     /// applies immediately.
     pub(super) fn adjust_setting(&mut self, delta: i64) {
@@ -254,13 +266,16 @@ impl App {
             // Same cycle as Shift+Tab; bypass stays /bypass-only, and
             // adjusting away from it lands on read-only.
             0 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
-            1 => self.show_reasoning = !self.show_reasoning,
-            2 => self.cfg.step_bash_timeout(delta),
-            3 => self.cfg.step_read_lines(delta),
-            4 => self.cfg.step_line_bytes(delta),
-            5 => self.cfg.search.cycle_provider(delta),
-            6 => self.cfg.search.step_max_results(delta),
-            7 => self.cfg.step_auto_compact(delta),
+            // Session-only, like every other row here; `submit_key` in
+            // picocode.toml makes it stick.
+            1 => self.cfg.submit_key = self.cfg.submit_key.cycled(delta),
+            2 => self.show_reasoning = !self.show_reasoning,
+            3 => self.cfg.step_bash_timeout(delta),
+            4 => self.cfg.step_read_lines(delta),
+            5 => self.cfg.step_line_bytes(delta),
+            6 => self.cfg.search.cycle_provider(delta),
+            7 => self.cfg.search.step_max_results(delta),
+            8 => self.cfg.step_auto_compact(delta),
             _ => {}
         }
     }

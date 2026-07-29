@@ -68,8 +68,11 @@ signing/notarization) may come later.
   kept unless the new workspace selects its own), and the permission mode
   and persisted settings carry over. `/remote` does the same from the
   input box.
-- **Input**: auto-growing multi-line field (1–8 rows); Enter sends,
-  Shift+Enter inserts a newline; IME composition works. Typing `/` opens a
+- **Input**: auto-growing multi-line field (1–8 rows); Enter sends and
+  Shift+Enter inserts a newline — swap that around in `/config` ("send
+  key": Enter, Shift+Enter, Ctrl+Enter or Cmd+Enter; whichever sends, the
+  others insert a newline, and the placeholder names both). IME
+  composition works. Typing `/` opens a
   slash-command completion popup — Tab fills and cycles, click fills —
   which also completes arguments: `/model` offers model names and
   `/resume` session ids.

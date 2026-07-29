@@ -6,10 +6,49 @@ use gpui_component::input::{InputEvent, InputState};
 use rust_i18n::t;
 
 use picocode_core::attachment::Attachment;
+use picocode_core::keys::{SUBMIT_KEYS, SubmitKey};
 use picocode_core::models;
 use picocode_core::transcript::EntryKind;
 
 use super::{AcceptCompletion, ChatView, PasteClipboard, SubmitPrompt};
+
+/// Bind the Enter family for the configured send key: that combination
+/// dispatches the view's submit action — bypassing the input's own Enter
+/// handling, which would first insert a newline at the cursor — while the
+/// other combinations become the input's secondary Enter, which inserts the
+/// newline and is then ignored by `on_input_event`.
+///
+/// Called at startup and again whenever `/config` changes the setting;
+/// gpui matches the most recently added binding first, so rebinding is
+/// enough to swap the keys over.
+pub(crate) fn bind_send_key(submit: SubmitKey, cx: &mut gpui::App) {
+    for key in SUBMIT_KEYS {
+        if *key == submit {
+            cx.bind_keys([gpui::KeyBinding::new(
+                key.keystroke(),
+                SubmitPrompt,
+                Some("Input"),
+            )]);
+        } else {
+            cx.bind_keys([gpui::KeyBinding::new(
+                key.keystroke(),
+                gpui_component::input::Enter { secondary: true },
+                Some("Input"),
+            )]);
+        }
+    }
+}
+
+/// The input-box placeholder, which names both keys so the current
+/// assignment is visible without opening `/config`.
+pub(crate) fn placeholder(submit: SubmitKey) -> String {
+    t!(
+        "placeholder",
+        submit = submit.label(),
+        newline = submit.newline_label()
+    )
+    .to_string()
+}
 
 impl ChatView {
     // ---------- user actions ----------
@@ -22,10 +61,10 @@ impl ChatView {
         cx: &mut Context<Self>,
     ) {
         match ev {
-            // Plain Enter is rebound to SubmitPrompt and never reaches the
-            // input (see main.rs), so this only fires for stray paths; a
-            // secondary Enter (Shift+Enter, Cmd+Enter) keeps the newline the
-            // multi-line input inserted.
+            // The send key is rebound to SubmitPrompt and never reaches the
+            // input (see `bind_send_key`), so this only fires for stray
+            // paths; a secondary Enter keeps the newline the multi-line
+            // input inserted.
             InputEvent::PressEnter { secondary: false } => self.submit(window, cx),
             // Typing anything resets the Tab-cycling anchor (unless the
             // change came from Tab itself filling the input).
@@ -232,5 +271,22 @@ impl ChatView {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_placeholder_names_the_current_send_key() {
+        // Whichever key sends, the hint names it and the newline key.
+        let text = placeholder(SubmitKey::Enter);
+        assert!(text.contains("Enter to send"), "{text}");
+        assert!(text.contains("Shift+Enter for"), "{text}");
+
+        let text = placeholder(SubmitKey::CtrlEnter);
+        assert!(text.contains("Ctrl+Enter to send"), "{text}");
+        assert!(text.contains("Enter for"), "{text}");
     }
 }

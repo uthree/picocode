@@ -91,18 +91,11 @@ fn main() -> anyhow::Result<()> {
             // family applies once loaded.
             theme::init(cx);
             // Registered after gpui_component::init, so these win over the
-            // input's own bindings. Plain Enter goes straight to the chat
-            // view's submit action — bypassing the input's Enter handling,
-            // which would first insert a newline at the cursor. Shift+Enter
-            // keeps the input's secondary Enter (inserts the newline), and
-            // Tab cycles the slash-command completion instead of indenting.
+            // input's own bindings: Tab cycles the slash-command completion
+            // instead of indenting. The Enter family is bound by the chat
+            // view itself (`chat::bind_send_key`), which knows the
+            // configured send key and rebinds when `/config` changes it.
             cx.bind_keys([
-                gpui::KeyBinding::new("enter", chat::SubmitPrompt, Some("Input")),
-                gpui::KeyBinding::new(
-                    "shift-enter",
-                    gpui_component::input::Enter { secondary: true },
-                    Some("Input"),
-                ),
                 gpui::KeyBinding::new("tab", chat::AcceptCompletion, Some("Input")),
                 // The paste shortcut goes through the chat view first, which
                 // stages copied files/images as attachments and propagates

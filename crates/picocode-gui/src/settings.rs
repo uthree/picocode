@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use picocode_core::config::SearchProvider;
+use picocode_core::keys::SubmitKey;
 use picocode_core::session;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,10 @@ pub struct GuiSettings {
     pub search_max_results: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<u64>,
+    /// Which key sends the message (the rest of the Enter combinations
+    /// insert a newline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_key: Option<SubmitKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

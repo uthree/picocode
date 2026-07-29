@@ -55,7 +55,10 @@ fn textual(ev: &Event) -> Option<String> {
             let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
             match k.code {
                 KeyCode::Char(c) if plain => Some(c.to_string()),
-                KeyCode::Enter if plain => Some("\n".to_string()),
+                // Only a bare Enter types a newline: a modified one may be
+                // the send key, and folding it into a paste run would
+                // swallow the submission.
+                KeyCode::Enter if k.modifiers.is_empty() => Some("\n".to_string()),
                 KeyCode::Tab if plain => Some("\t".to_string()),
                 _ => None,
             }

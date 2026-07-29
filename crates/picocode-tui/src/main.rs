@@ -100,9 +100,42 @@ async fn main() -> anyhow::Result<()> {
         std::io::stdout(),
         ratatui::crossterm::event::EnableBracketedPaste
     );
-    let result = app::App::new(&cfg, event_tx, cmd_tx, steer, jobs, cancel_tx, mcp, backend)
-        .run(terminal, event_rx)
-        .await;
+    // Terminals implementing the kitty keyboard protocol can tell
+    // Shift/Ctrl/Super+Enter apart from a plain one; ask them to, so the
+    // configured send key (`submit_key`) actually works. Only the
+    // disambiguation flag is requested — key releases and other extras would
+    // change how the rest of the input arrives.
+    let enhanced_keys = matches!(
+        ratatui::crossterm::terminal::supports_keyboard_enhancement(),
+        Ok(true)
+    );
+    if enhanced_keys {
+        let _ = ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::event::PushKeyboardEnhancementFlags(
+                ratatui::crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        );
+    }
+    let result = app::App::new(
+        &cfg,
+        event_tx,
+        cmd_tx,
+        steer,
+        jobs,
+        cancel_tx,
+        mcp,
+        backend,
+        enhanced_keys,
+    )
+    .run(terminal, event_rx)
+    .await;
+    if enhanced_keys {
+        let _ = ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::event::PopKeyboardEnhancementFlags
+        );
+    }
     let _ = ratatui::crossterm::execute!(
         std::io::stdout(),
         ratatui::crossterm::event::DisableBracketedPaste

@@ -182,6 +182,10 @@ pub(crate) struct FileConfig {
     /// `cargo check`); its verdict is appended to the tool result so the
     /// model sees breakage immediately without being told to verify.
     after_edit: Option<String>,
+    /// Which key sends the message in the input box: `enter` (default),
+    /// `shift-enter`, `ctrl-enter` or `cmd-enter`. The others insert a
+    /// newline.
+    submit_key: Option<crate::keys::SubmitKey>,
     #[serde(default)]
     approval: ApprovalRules,
     #[serde(default)]
@@ -498,6 +502,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         auto_compact: project.auto_compact.or(global.auto_compact),
         after_edit: project.after_edit.or(global.after_edit),
+        submit_key: project.submit_key.or(global.submit_key),
         // Like the approval lists: a project can add disables, not re-enable.
         disable_tools: match (global.disable_tools, project.disable_tools) {
             (Some(mut g), Some(p)) => {
@@ -575,16 +580,18 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
 /// Strip the sections of a remote workspace's `picocode.toml` that describe
 /// the *local* machine rather than the workspace: the model roster (whose
 /// endpoints and API keys are local), MCP servers (stdio ones would be
-/// launched as local child processes), the OS sandbox (a local-only guard)
-/// and the web-search settings (local network + local API key). What
-/// remains — approval rules, instruction files, the system prompt and its
-/// presets, `after_edit`, the timeouts and output limits — genuinely
-/// belongs to the project being worked on.
+/// launched as local child processes), the OS sandbox (a local-only guard),
+/// the web-search settings (local network + local API key) and the send
+/// key (a preference of the person at the local keyboard). What remains —
+/// approval rules, instruction files, the system prompt and its presets,
+/// `after_edit`, the timeouts and output limits — genuinely belongs to the
+/// project being worked on.
 fn workspace_only(mut file: FileConfig) -> FileConfig {
     file.models = None;
     file.default_model = None;
     file.mcp_servers = None;
     file.remotes = None;
+    file.submit_key = None;
     file.sandbox = SandboxFileConfig::default();
     file.search = SearchFileConfig::default();
     file
@@ -673,6 +680,10 @@ pub struct Config {
     /// Shell command run after each successful edit_file write; its verdict
     /// is appended to the tool result (from `after_edit` in the config file).
     pub after_edit: Option<String>,
+    /// Which key sends the message in the input box (the rest of the Enter
+    /// combinations insert a newline); a local preference, so a remote
+    /// workspace's config never changes it.
+    pub submit_key: crate::keys::SubmitKey,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Named system-prompt presets (`[[prompts]]`), switchable with
@@ -841,6 +852,7 @@ impl Config {
             search: SearchHandle::new(search),
             disable_tools: settings.disable_tools,
             after_edit: file.after_edit.clone().filter(|c| !c.trim().is_empty()),
+            submit_key: file.submit_key.unwrap_or_default(),
             system_prompt: file.system_prompt.clone(),
             prompts: file.prompts.clone().unwrap_or_default(),
             mcp_servers: file.mcp_servers.clone().unwrap_or_default(),
@@ -929,6 +941,7 @@ impl Config {
             read_max_line_bytes: NumHandle::new(500),
             auto_compact: NumHandle::new(85),
             root: std::path::PathBuf::from("/tmp/proj"),
+            submit_key: crate::keys::SubmitKey::default(),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),
             search: SearchHandle::new(SearchConfig {

@@ -55,7 +55,7 @@ picocode -p "Summarize what this project does" > summary.txt
 
 | Key | Action |
 |---|---|
-| `Enter` | Send |
+| `Enter` | Send (configurable — see below) |
 | `\` + `Enter` (or `Alt+Enter` / `Ctrl+J`) | Insert a newline (pasting multi-line text works too) |
 | `Tab` | Completion (popup appears on `/`; repeat to cycle). Works for arguments too: `/model` completes model names, `/resume` session ids, `/attach` file paths |
 | `Shift+Tab` | Cycle the permission mode (cycles the completion popup backwards while it is open) |
@@ -72,6 +72,21 @@ Mouse capture is enabled for wheel scrolling, so terminal-native text selection
 needs the usual bypass modifier held (`Shift` on most terminals, `Option`/`Fn`
 on macOS ones).
 
+### The send key
+
+Which key sends is a setting: `submit_key` in picocode.toml (`"enter"`,
+`"shift-enter"`, `"ctrl-enter"` or `"cmd-enter"`), or the "send key" row of
+`/config` for the current session. Whichever key sends, the other Enter
+combinations insert a newline, and `Alt+Enter` and `\` + `Enter` always do.
+
+Reporting `Shift+Enter` and `Cmd+Enter` at all requires a terminal that
+implements the kitty keyboard protocol (kitty, Ghostty, WezTerm, foot, and
+iTerm2 with the option enabled); picocode asks for it at startup when the
+terminal advertises support. Elsewhere those two combinations never arrive,
+so `Enter` keeps sending and a startup warning says so. `Ctrl+Enter` works
+everywhere: terminals without the protocol send it as `Ctrl+J`, which counts
+as the same key.
+
 ## Commands
 
 | Command | Action |
@@ -80,7 +95,7 @@ on macOS ones).
 | `/model` | Model-selection dialog (configured + provider-served models); `/model <name>` switches directly (history carries over). The last row, "+ add a provider / model…", opens a form: pick a provider (←→), optionally a base URL, then type a model or fetch the endpoint's list with Tab and pick one — switching this way is an ad-hoc selection (remembered per project) and prints a ready-to-paste `[[models]]` snippet for picocode.toml |
 | `/read-only` / `/edit` / `/plan` / `/bypass` | Switch to that permission mode directly |
 | `/permissions` | Show the current mode and the effective allow/deny rules |
-| `/config` (or `/settings`) | Settings dialog: permission mode, reasoning display, bash timeout, read_file limits (lines / bytes per line), web search provider / result count and the auto-compact threshold (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter`. Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |
+| `/config` (or `/settings`) | Settings dialog: permission mode, send key, reasoning display, bash timeout, read_file limits (lines / bytes per line), web search provider / result count and the auto-compact threshold (`←`/`→` change, apply immediately, session-only), plus the model picker on `Enter`. Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |
 | `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config — plus a color-coded context breakdown (segmented bar + legend: system prompt, instructions, user/assistant messages, tool activity, attachments, overhead, free) estimated from the real conversation history |
 | `/compact` | Compact the conversation into a summary — the last 2 user turns survive verbatim (the current task's context), only older messages are summarized. Also runs automatically after a turn once context usage reaches the `auto_compact` threshold (default 85% of the window; 0 or the `/config` "off" setting disables). As a softer stage, at 2/3 of that threshold old tool outputs are replaced with placeholders first (a notice reports how many) |
 | `/undo` | Revert the file edits of the most recent turn that made any — modified files are restored, created files deleted — and tell the model so. Repeat to walk further back (up to 20 turns). Only `edit_file` changes are covered: side effects of `bash` (or `!`) commands are not tracked |

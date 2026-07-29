@@ -18,6 +18,7 @@ pub mod context;
 pub mod event;
 pub mod git;
 pub mod history;
+pub mod keys;
 pub mod mcp;
 pub mod models;
 pub mod report;
