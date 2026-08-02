@@ -212,6 +212,19 @@ mode = "bypass"          # "off" (default) | "bypass" | "always"
 allow_network = false    # block network from sandboxed commands
 allow_write = ["~/.cargo"]  # extra write-allowed paths (~ expands)
 
+# Cap on the tokens one reply may generate. 0 means picocode sets no cap
+# and leaves the limit to the provider. Adjustable at runtime in the
+# `/config` "max tokens" row (the worker rebuilds its agents; the
+# conversation is kept).
+#
+# For Ollama this also decides what actually reaches the server: picocode
+# sends it as `num_predict`, together with `num_ctx` taken from the
+# active model's `context_window` below. That matters — Ollama's default
+# window is 4096 tokens, and a long reply is cut off mid-sentence when
+# prompt + reply reach it, no matter what max_tokens says. Declare the
+# window your model really has (a larger window costs memory).
+max_tokens = 8192
+
 # How many follow-up turns a `/goal` may run before it stops and hands
 # back to you (1-100). The goal loop asks a reviewer model after each
 # turn whether the goal is reached and keeps working until it is — this
@@ -241,8 +254,10 @@ args = ["mcp-server-time"]
 name = "local"
 provider = "ollama"
 model = "qwen3:4b"
-context_window = 32768       # tokens; drives the status-bar usage gauge
-                             # (default 32768 when omitted)
+context_window = 32768       # tokens; drives the status-bar usage gauge,
+                             # the auto-compact threshold, and — on Ollama —
+                             # the `num_ctx` picocode sends, i.e. the window
+                             # the server actually allocates (default 32768)
 
 [[models]]
 name = "vllm"

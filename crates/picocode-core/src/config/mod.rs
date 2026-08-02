@@ -191,6 +191,9 @@ pub(crate) struct FileConfig {
     /// How many follow-up turns a `/goal` may run before it stops and hands
     /// back to the user (default 10).
     goal_max_rounds: Option<u64>,
+    /// Cap on the tokens one reply may generate (default 8192). 0 means
+    /// picocode sets no cap and leaves the limit to the provider.
+    max_tokens: Option<u64>,
     /// Tools to leave unregistered entirely (schemas never sent to the
     /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
     disable_tools: Option<Vec<String>>,
@@ -228,6 +231,8 @@ pub const DEFAULT_READ_MAX_LINE_BYTES: u64 = 500;
 pub const DEFAULT_AUTO_COMPACT: u64 = 85;
 /// Default `/goal` round limit: follow-up turns before the loop hands back.
 pub const DEFAULT_GOAL_MAX_ROUNDS: u64 = 10;
+/// Default cap on the tokens one reply may generate (0 = no cap).
+pub const DEFAULT_MAX_TOKENS: u64 = 8192;
 
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
@@ -520,6 +525,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         auto_compact: project.auto_compact.or(global.auto_compact),
         goal_max_rounds: project.goal_max_rounds.or(global.goal_max_rounds),
+        max_tokens: project.max_tokens.or(global.max_tokens),
         after_edit: project.after_edit.or(global.after_edit),
         submit_key: project.submit_key.or(global.submit_key),
         // Like the approval lists: a project can add disables, not re-enable.
@@ -554,6 +560,7 @@ struct Settings {
     read_max_line_bytes: u64,
     auto_compact: u64,
     goal_max_rounds: u64,
+    max_tokens: u64,
     disable_tools: Vec<String>,
 }
 
@@ -581,6 +588,10 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
     if goal_max_rounds == 0 || goal_max_rounds > 100 {
         anyhow::bail!("goal_max_rounds must be 1 to 100 follow-up turns");
     }
+    let max_tokens = file.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    if max_tokens != 0 && !(256..=1_000_000).contains(&max_tokens) {
+        anyhow::bail!("max_tokens must be 0 (no cap from picocode) or 256 to 1000000");
+    }
     let mut disable_tools = file.disable_tools.clone().unwrap_or_default();
     disable_tools.sort();
     disable_tools.dedup();
@@ -598,6 +609,7 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
         read_max_line_bytes,
         auto_compact,
         goal_max_rounds,
+        max_tokens,
         disable_tools,
     })
 }
@@ -694,6 +706,11 @@ pub struct Config {
     /// user. Read by the worker, which is respawned whenever the workspace
     /// or the model changes, so a plain number is enough.
     pub goal_max_rounds: u64,
+    /// Cap on the tokens one reply may generate, adjustable at runtime
+    /// (`/config`); 0 leaves the limit to the provider. The worker rebuilds
+    /// its agents when it changes — for Ollama it also travels as
+    /// `num_predict`, next to the `num_ctx` taken from `context_window`.
+    pub max_tokens: NumHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -754,6 +771,36 @@ impl Config {
 
     pub fn step_line_bytes(&self, delta: i64) {
         self.read_max_line_bytes.step(delta, 100, 100, 5000);
+    }
+
+    /// Reply-length cap: powers of two between 1024 and 131072; stepping
+    /// below 1024 turns the cap off (0 — the provider's own limit applies),
+    /// and stepping up from off restarts at 1024.
+    pub fn step_max_tokens(&self, delta: i64) {
+        const MIN: u64 = 1024;
+        const MAX: u64 = 131_072;
+        let cur = self.max_tokens.get();
+        let next = if delta < 0 {
+            match cur {
+                0 => 0,
+                c if c <= MIN => 0,
+                c => (c / 2).max(MIN),
+            }
+        } else {
+            match cur {
+                0 => MIN,
+                c => (c.saturating_mul(2)).min(MAX),
+            }
+        };
+        self.max_tokens.set(next);
+    }
+
+    /// The reply-length cap as a `/config` row value.
+    pub fn max_tokens_label(&self) -> String {
+        match self.max_tokens.get() {
+            0 => "no limit (provider default)".to_string(),
+            n => format!("{n} tokens"),
+        }
     }
 
     /// Auto-compact threshold: ±5% between 50 and 95; stepping below 50
@@ -872,6 +919,7 @@ impl Config {
             read_max_line_bytes: NumHandle::new(settings.read_max_line_bytes),
             auto_compact: NumHandle::new(settings.auto_compact),
             goal_max_rounds: settings.goal_max_rounds,
+            max_tokens: NumHandle::new(settings.max_tokens),
             root,
             approval: RulesHandle::new(file.approval.clone()),
             mode: ModeHandle::new(match (args.bypass, args.auto) {
@@ -937,6 +985,7 @@ impl Config {
         self.read_max_line_bytes.set(settings.read_max_line_bytes);
         self.auto_compact.set(settings.auto_compact);
         self.goal_max_rounds = settings.goal_max_rounds;
+        self.max_tokens.set(settings.max_tokens);
         self.disable_tools = settings.disable_tools;
         self.approval = RulesHandle::new(file.approval);
         self.after_edit = file.after_edit.filter(|c| !c.trim().is_empty());
@@ -972,6 +1021,7 @@ impl Config {
             read_max_line_bytes: NumHandle::new(500),
             auto_compact: NumHandle::new(85),
             goal_max_rounds: DEFAULT_GOAL_MAX_ROUNDS,
+            max_tokens: NumHandle::new(DEFAULT_MAX_TOKENS),
             root: std::path::PathBuf::from("/tmp/proj"),
             submit_key: crate::keys::SubmitKey::default(),
             approval: RulesHandle::new(ApprovalRules::default()),
@@ -1011,6 +1061,33 @@ use search::{SearchFileConfig, resolve_search};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reply_cap_steps_by_doubling_and_can_be_turned_off() {
+        let cfg = Config::for_tests();
+        assert_eq!(cfg.max_tokens.get(), DEFAULT_MAX_TOKENS);
+        cfg.step_max_tokens(1);
+        assert_eq!(cfg.max_tokens.get(), 16_384);
+        cfg.step_max_tokens(-1);
+        cfg.step_max_tokens(-1);
+        assert_eq!(cfg.max_tokens.get(), 4096);
+        // Stepping below the minimum turns the cap off; stepping up from
+        // off restarts at the minimum.
+        for _ in 0..3 {
+            cfg.step_max_tokens(-1);
+        }
+        assert_eq!(cfg.max_tokens.get(), 0);
+        assert!(cfg.max_tokens_label().contains("no limit"));
+        cfg.step_max_tokens(-1);
+        assert_eq!(cfg.max_tokens.get(), 0, "off is the floor");
+        cfg.step_max_tokens(1);
+        assert_eq!(cfg.max_tokens.get(), 1024);
+        // And it never runs past the ceiling.
+        for _ in 0..20 {
+            cfg.step_max_tokens(1);
+        }
+        assert_eq!(cfg.max_tokens.get(), 131_072);
+    }
 
     #[test]
     fn num_handle_shares_runtime_changes() {

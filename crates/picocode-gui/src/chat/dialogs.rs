@@ -500,7 +500,7 @@ impl ChatView {
         }
         let theme = cx.theme();
         let search = self.cfg.search.snapshot();
-        let rows: [(String, String); 11] = [
+        let rows: [(String, String); 12] = [
             (t!("row_theme").to_string(), self.theme_pref.label()),
             (t!("row_color_theme").to_string(), self.theme_family.clone()),
             (t!("row_mode").to_string(), mode_name(self.cfg.mode.get())),
@@ -527,6 +527,13 @@ impl ChatView {
             (
                 t!("row_results").to_string(),
                 search.max_results.to_string(),
+            ),
+            (
+                t!("row_max_tokens").to_string(),
+                match self.cfg.max_tokens.get() {
+                    0 => t!("max_tokens_off").to_string(),
+                    n => t!("max_tokens_value", n = n).to_string(),
+                },
             ),
             (
                 t!("row_auto_compact").to_string(),

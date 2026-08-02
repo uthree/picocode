@@ -355,6 +355,9 @@ impl ChatView {
         if let Some(v) = saved.auto_compact {
             cfg.auto_compact.set(v);
         }
+        if let Some(v) = saved.max_tokens {
+            cfg.max_tokens.set(v);
+        }
         if let Some(p) = saved.search_provider {
             cfg.search.set_provider(p);
         }
@@ -500,11 +503,15 @@ impl ChatView {
                 self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
             }
             9 => {
+                self.cfg.step_max_tokens(delta);
+                self.saved.max_tokens = Some(self.cfg.max_tokens.get());
+            }
+            10 => {
                 self.cfg.step_auto_compact(delta);
                 self.saved.auto_compact = Some(self.cfg.auto_compact.get());
             }
             // Model: close the dialog and open the model menu.
-            10 => {
+            11 => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, window, cx);
             }

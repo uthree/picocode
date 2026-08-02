@@ -49,74 +49,25 @@ pub fn spawn(
     };
     macro_rules! spawn_for {
         ($model:expr) => {{
-            let enabled = |name: &str| !cfg.disable_tools.iter().any(|t| t == name);
-            let mut builder = rig::agent::AgentBuilder::new($model)
-                .preamble(&system_prompt(&cfg))
-                .tool(tools::ReadFile::new(
-                    ws.clone(),
-                    cfg.read_max_lines.clone(),
-                    cfg.read_max_line_bytes.clone(),
-                    stamps.clone(),
-                ))
-                .tool(tools::ListFiles::new(ws.clone()))
-                .tool(tools::Grep::new(ws.clone()))
-                .tool(tools::EditFile::new(
-                    ws.clone(),
-                    cfg.after_edit.clone(),
-                    journal.clone(),
-                    stamps.clone(),
-                ))
-                .tool(tools::Bash::new(
-                    ws.clone(),
-                    cfg.bash_timeout.clone(),
-                    event_tx.clone(),
-                    jobs.clone(),
-                    crate::sandbox::SandboxCtx {
-                        settings: cfg.sandbox.clone(),
-                        mode: cfg.mode.clone(),
-                    },
-                ))
-                .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()));
-            if enabled(tools::WebSearch::NAME) {
-                builder = builder.tool(tools::WebSearch::new(cfg.search.clone()));
-            }
-            if enabled(tools::WebFetch::NAME) {
-                builder = builder.tool(tools::WebFetch::new());
-            }
-            // Opt-in MCP tools: the connections were established at app
-            // startup and are shared across respawns. The approval hook
-            // treats their (unknown) names as destructive, so they ask
-            // by default.
-            let mut builder = builder;
-            for server in mcp.servers.iter() {
-                builder = builder.rmcp_tools(server.tools.clone(), server.sink.clone());
-            }
-            let agent = builder.max_tokens(8192).build();
-            // A second, tool-less agent used by /compact: it only ever needs
-            // to read the history and write a summary.
-            let compactor = rig::agent::AgentBuilder::new($model)
-                .preamble(COMPACT_PREAMBLE)
-                .max_tokens(8192)
-                .build();
-            // Two more tool-less agents, both answering one question at a
-            // time in their own context so the main system prompt keeps its
-            // minimal shape: the approval reviewer (auto mode) and the goal
-            // judge (`/goal`). They cost nothing until those are used.
-            let reviewer = std::sync::Arc::new(
-                rig::agent::AgentBuilder::new($model)
-                    .preamble(crate::approval::REVIEW_PREAMBLE)
-                    .max_tokens(512)
-                    .build(),
-            );
-            let goal_judge = rig::agent::AgentBuilder::new($model)
-                .preamble(GOAL_PREAMBLE)
-                .max_tokens(1024)
-                .build();
+            let model = $model;
+            // The agents are rebuilt whenever `max_tokens` changes, so the
+            // whole builder chain lives behind this factory: the worker calls
+            // it again instead of being respawned (which would cost the
+            // conversation). Rebuilding is local work — no network.
+            let deps = Deps {
+                cfg: cfg.clone(),
+                ws: ws.clone(),
+                stamps: stamps.clone(),
+                journal: journal.clone(),
+                jobs: jobs.clone(),
+                mcp: mcp.clone(),
+                event_tx: event_tx.clone(),
+            };
+            let make = move |max_tokens: u64| build_agents(model.clone(), max_tokens, &deps);
+            let agents = make(cfg.max_tokens.get());
             tokio::spawn(worker(
-                agent,
-                compactor,
-                reviewer,
-                goal_judge,
+                agents,
+                make,
                 cmd_rx,
                 event_tx,
                 cfg,
@@ -176,6 +127,147 @@ pub fn spawn(
         }
     }
     Ok((cmd_tx, steer))
+}
+
+/// Everything the agent builders need besides the completion model, kept in
+/// one struct so the factory closure can capture it once.
+struct Deps {
+    cfg: Config,
+    ws: crate::backend::Workspace,
+    stamps: tools::ReadStamps,
+    journal: crate::undo::UndoJournal,
+    jobs: tools::BackgroundJobs,
+    mcp: crate::mcp::McpConnections,
+    event_tx: mpsc::Sender<AgentEvent>,
+}
+
+/// The four agents a worker drives: the one with the tools, and three
+/// tool-less specialists that each answer one question in their own context
+/// (so the main system prompt stays minimal).
+struct Agents<M: CompletionModel> {
+    main: Agent<M>,
+    compactor: Agent<M>,
+    reviewer: std::sync::Arc<Agent<M>>,
+    goal_judge: Agent<M>,
+}
+
+/// Reply-length caps of the specialists. They answer in one line (reviewer,
+/// goal judge) or one summary (compactor), so they don't follow the
+/// configured `max_tokens` — except that "no limit" lifts the compactor's.
+const REVIEW_MAX_TOKENS: u64 = 512;
+const GOAL_MAX_TOKENS: u64 = 1024;
+
+/// Provider-specific request parameters for a reply-length cap. Ollama reads
+/// neither `max_tokens` (rig sends it top level, which `/api/chat` ignores)
+/// nor the context window from anywhere else, so both travel here as model
+/// options: `num_predict` (-1 for "no cap") and `num_ctx`, which is what
+/// actually cuts a long reply short — Ollama's default window is 4096
+/// tokens, and generation stops when prompt + reply reach it.
+fn provider_params(cfg: &Config, max_tokens: u64) -> Option<serde_json::Value> {
+    match cfg.provider {
+        Provider::Ollama => Some(serde_json::json!({
+            "num_predict": if max_tokens == 0 { -1 } else { max_tokens as i64 },
+            "num_ctx": cfg.context_window,
+        })),
+        // Anthropic and OpenAI take the cap as the request's `max_tokens`
+        // (rig fills in a per-model default for Anthropic when it is unset).
+        Provider::Anthropic | Provider::Openai => None,
+    }
+}
+
+/// Build the agents for one completion model at the given reply-length cap
+/// (0 = leave the limit to the provider).
+fn build_agents<M: CompletionModel>(model: M, max_tokens: u64, deps: &Deps) -> Agents<M> {
+    let Deps {
+        cfg,
+        ws,
+        stamps,
+        journal,
+        jobs,
+        mcp,
+        event_tx,
+    } = deps;
+    let enabled = |name: &str| !cfg.disable_tools.iter().any(|t| t == name);
+    let mut builder = rig::agent::AgentBuilder::new(model.clone())
+        .preamble(&system_prompt(cfg))
+        .tool(tools::ReadFile::new(
+            ws.clone(),
+            cfg.read_max_lines.clone(),
+            cfg.read_max_line_bytes.clone(),
+            stamps.clone(),
+        ))
+        .tool(tools::ListFiles::new(ws.clone()))
+        .tool(tools::Grep::new(ws.clone()))
+        .tool(tools::EditFile::new(
+            ws.clone(),
+            cfg.after_edit.clone(),
+            journal.clone(),
+            stamps.clone(),
+        ))
+        .tool(tools::Bash::new(
+            ws.clone(),
+            cfg.bash_timeout.clone(),
+            event_tx.clone(),
+            jobs.clone(),
+            crate::sandbox::SandboxCtx {
+                settings: cfg.sandbox.clone(),
+                mode: cfg.mode.clone(),
+            },
+        ))
+        .tool(tools::SubmitPlan::new(event_tx.clone(), cfg.mode.clone()));
+    if enabled(tools::WebSearch::NAME) {
+        builder = builder.tool(tools::WebSearch::new(cfg.search.clone()));
+    }
+    if enabled(tools::WebFetch::NAME) {
+        builder = builder.tool(tools::WebFetch::new());
+    }
+    // Opt-in MCP tools: the connections were established at app startup and
+    // are shared across respawns. The approval hook treats their (unknown)
+    // names as destructive, so they ask by default.
+    for server in mcp.servers.iter() {
+        builder = builder.rmcp_tools(server.tools.clone(), server.sink.clone());
+    }
+    Agents {
+        main: capped(builder, cfg, max_tokens).build(),
+        compactor: capped(
+            rig::agent::AgentBuilder::new(model.clone()).preamble(COMPACT_PREAMBLE),
+            cfg,
+            max_tokens,
+        )
+        .build(),
+        reviewer: std::sync::Arc::new(
+            capped(
+                rig::agent::AgentBuilder::new(model.clone())
+                    .preamble(crate::approval::REVIEW_PREAMBLE),
+                cfg,
+                REVIEW_MAX_TOKENS,
+            )
+            .build(),
+        ),
+        goal_judge: capped(
+            rig::agent::AgentBuilder::new(model).preamble(GOAL_PREAMBLE),
+            cfg,
+            GOAL_MAX_TOKENS,
+        )
+        .build(),
+    }
+}
+
+/// Apply a reply-length cap to a builder: the provider's own parameter, plus
+/// the model options a provider needs instead (see [`provider_params`]).
+fn capped<M: CompletionModel, S>(
+    builder: rig::agent::AgentBuilder<M, S>,
+    cfg: &Config,
+    max_tokens: u64,
+) -> rig::agent::AgentBuilder<M, S> {
+    let mut builder = builder;
+    if max_tokens > 0 {
+        builder = builder.max_tokens(max_tokens);
+    }
+    if let Some(params) = provider_params(cfg, max_tokens) {
+        builder = builder.additional_params(params);
+    }
+    builder
 }
 
 fn system_prompt(cfg: &Config) -> String {
@@ -270,11 +362,9 @@ const GOAL_PREAMBLE: &str = "You judge whether a coding agent has finished the j
      missing>`.";
 
 #[allow(clippy::too_many_arguments)]
-async fn worker<M>(
-    agent: Agent<M>,
-    compactor: Agent<M>,
-    reviewer: std::sync::Arc<Agent<M>>,
-    goal_judge: Agent<M>,
+async fn worker<M, F>(
+    mut agents: Agents<M>,
+    make_agents: F,
     mut cmd_rx: mpsc::Receiver<WorkerCmd>,
     event_tx: mpsc::Sender<AgentEvent>,
     cfg: Config,
@@ -284,14 +374,22 @@ async fn worker<M>(
 ) where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
+    F: Fn(u64) -> Agents<M>,
 {
     let mut history: Vec<Message> = Vec::new();
     // Context tokens of the last completion request, for the pruning stage.
     let mut last_ctx: u64 = 0;
     // The `/goal` condition, when one is set.
     let mut goal: Option<String> = None;
+    // The reply-length cap the current agents were built with; a `/config`
+    // change rebuilds them before the next turn.
+    let mut built_max_tokens = cfg.max_tokens.get();
 
     while let Some(cmd) = cmd_rx.recv().await {
+        if cfg.max_tokens.get() != built_max_tokens {
+            built_max_tokens = cfg.max_tokens.get();
+            agents = make_agents(built_max_tokens);
+        }
         match cmd {
             WorkerCmd::Clear => {
                 history.clear();
@@ -340,8 +438,8 @@ async fn worker<M>(
                     }
                 };
                 let mut cancelled = run_turn(
-                    &agent,
-                    &reviewer,
+                    &agents.main,
+                    &agents.reviewer,
                     &mut history,
                     text,
                     attachments,
@@ -358,7 +456,7 @@ async fn worker<M>(
                 let mut round = 0u64;
                 while !cancelled && let Some(goal_text) = goal.clone() {
                     let Some((done, reason)) =
-                        check_goal(&goal_judge, &history, &goal_text, &mut cancel_rx).await
+                        check_goal(&agents.goal_judge, &history, &goal_text, &mut cancel_rx).await
                     else {
                         let _ = event_tx
                             .send(AgentEvent::Error(
@@ -390,8 +488,8 @@ async fn worker<M>(
                     maybe_prune(&mut history, &cfg, last_ctx, &event_tx).await;
                     journal.begin_turn();
                     cancelled = run_turn(
-                        &agent,
-                        &reviewer,
+                        &agents.main,
+                        &agents.reviewer,
                         &mut history,
                         goal_continuation(&goal_text, &reason),
                         Vec::new(),
@@ -422,7 +520,7 @@ async fn worker<M>(
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
             }
             WorkerCmd::Compact => {
-                compact(&compactor, &mut history, &event_tx, &mut cancel_rx).await;
+                compact(&agents.compactor, &mut history, &event_tx, &mut cancel_rx).await;
                 // The provider hasn't measured the compacted history yet, so
                 // report estimates only (reported = 0).
                 let _ = event_tx
@@ -962,6 +1060,30 @@ mod tests {
 
     fn test_cfg() -> Config {
         Config::for_tests()
+    }
+
+    #[test]
+    fn ollama_takes_the_cap_and_the_window_as_model_options() {
+        // Ollama ignores the request's `max_tokens`, so the cap has to
+        // travel as num_predict — and num_ctx with it, since its default
+        // window (4096) is what actually cuts a long reply short.
+        let mut cfg = test_cfg();
+        cfg.context_window = 32_768;
+        let params = provider_params(&cfg, 8192).expect("ollama needs options");
+        assert_eq!(params["num_predict"], 8192);
+        assert_eq!(params["num_ctx"], 32_768);
+        // No cap: Ollama's own "unlimited".
+        assert_eq!(provider_params(&cfg, 0).unwrap()["num_predict"], -1);
+
+        // The other providers take the cap as the request parameter.
+        for provider in [
+            crate::config::Provider::Anthropic,
+            crate::config::Provider::Openai,
+        ] {
+            let mut cfg = test_cfg();
+            cfg.provider = provider;
+            assert!(provider_params(&cfg, 8192).is_none());
+        }
     }
 
     #[test]

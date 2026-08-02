@@ -145,7 +145,7 @@ pub struct SettingsMenu {
 
 /// Number of rows in the `/config` dialog (mode, send key, reasoning, bash
 /// timeout, read limits, web search provider/results, auto-compact, model).
-pub const SETTINGS_ROWS: usize = 10;
+pub const SETTINGS_ROWS: usize = 11;
 
 /// State of the `submit_plan` approval (question) dialog.
 pub struct PendingQuestion {
@@ -235,6 +235,7 @@ impl App {
                 self.cfg.search.snapshot().max_results.to_string(),
                 "← →",
             ),
+            ("max tokens", self.cfg.max_tokens_label(), "← →"),
             (
                 "auto-compact",
                 match self.cfg.auto_compact.get() {
@@ -275,7 +276,8 @@ impl App {
             5 => self.cfg.step_line_bytes(delta),
             6 => self.cfg.search.cycle_provider(delta),
             7 => self.cfg.search.step_max_results(delta),
-            8 => self.cfg.step_auto_compact(delta),
+            8 => self.cfg.step_max_tokens(delta),
+            9 => self.cfg.step_auto_compact(delta),
             _ => {}
         }
     }

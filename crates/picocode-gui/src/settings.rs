@@ -35,6 +35,9 @@ pub struct GuiSettings {
     pub search_max_results: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_compact: Option<u64>,
+    /// Cap on the tokens one reply may generate (0 = no cap from picocode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
     /// Which key sends the message (the rest of the Enter combinations
     /// insert a newline).
     #[serde(default, skip_serializing_if = "Option::is_none")]
