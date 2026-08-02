@@ -172,6 +172,21 @@ impl ChatView {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_menu(Menu::Background, window, cx)
                             }))
+                    }))
+                    // A goal keeps the agent starting turns on its own, so
+                    // it stays visible (with the follow-up turns it used)
+                    // for as long as one is set.
+                    .children(self.goal.as_ref().map(|goal| {
+                        div()
+                            .id("goal")
+                            .px_1()
+                            .text_color(theme.magenta)
+                            .child(format!(
+                                "goal {}/{} — {}",
+                                self.goal_round,
+                                self.cfg.goal_max_rounds,
+                                clip_goal(goal)
+                            ))
                     })),
             )
             .child(
@@ -210,6 +225,7 @@ impl ChatView {
                     (Mode::ReadOnly, "mode_read_only_desc"),
                     (Mode::Edit, "mode_edit_desc"),
                     (Mode::Plan, "mode_plan_desc"),
+                    (Mode::Auto, "mode_auto_desc"),
                     (Mode::Bypass, "mode_bypass_desc"),
                 ] {
                     let active = mode == current_mode;
@@ -484,6 +500,17 @@ impl ChatView {
     }
 }
 
+/// The `/goal` text shortened to fit the status bar; the full text is in
+/// the transcript where the goal was set.
+fn clip_goal(goal: &str) -> String {
+    const MAX: usize = 40;
+    let line = goal.lines().next().unwrap_or("").trim();
+    if line.chars().count() <= MAX {
+        return line.to_string();
+    }
+    format!("{}…", line.chars().take(MAX).collect::<String>())
+}
+
 /// Localized display name for a permission mode (the technical /status
 /// and /permissions blocks keep the English names).
 pub(super) fn mode_name(mode: Mode) -> String {
@@ -491,6 +518,7 @@ pub(super) fn mode_name(mode: Mode) -> String {
         Mode::ReadOnly => t!("mode_name_read_only").to_string(),
         Mode::Edit => t!("mode_name_edit").to_string(),
         Mode::Plan => t!("mode_name_plan").to_string(),
+        Mode::Auto => t!("mode_name_auto").to_string(),
         Mode::Bypass => t!("mode_name_bypass").to_string(),
     }
 }
@@ -503,6 +531,7 @@ pub(super) fn mode_color(mode: Mode, theme: &gpui_component::theme::Theme) -> gp
         Mode::ReadOnly => theme.cyan,
         Mode::Edit => theme.yellow,
         Mode::Plan => theme.blue,
+        Mode::Auto => theme.magenta,
         Mode::Bypass => theme.red,
     }
 }

@@ -40,7 +40,9 @@ signing/notarization) may come later.
   shown bare, edits as diffs) — answer by button or key: `y` approve,
   `n`/`Esc` deny, `a` always. The plan-approval dialog for `submit_plan`
   dismisses with `Esc`; focus returns to the input afterwards.
-- **Status bar**: clickable mode chip (left) opening the mode menu;
+- **Status bar**: clickable mode chip (left) opening the mode menu (the
+  `auto` entry hands approvals to a reviewer model); a `goal n/m` marker
+  while a `/goal` is set;
   context-usage gauge colored by pressure and a clickable model chip
   (right) opening the model menu — configured `[[models]]` entries plus
   whatever the provider reports serving, with the conversation carried
@@ -118,7 +120,12 @@ signing/notarization) may come later.
   `/remote <name>` or `/remote local` switches over SSH without
   restarting), `/model`,
   `/resume`, the mode
-  commands, `/config` (settings dialog with the same rows as the TUI,
+  commands (including `/auto`, which hands the approval prompts to a
+  reviewer model after a warning — see
+  [configuration.md](configuration.md#auto-mode-letting-a-model-answer-the-prompts)),
+  `/goal <condition>` (keep working until a reviewer model judges the
+  condition met — `goal n/m` appears in the status bar, `/goal off`
+  clears it, Stop ends the run in progress), `/config` (settings dialog with the same rows as the TUI,
   minus its reasoning-display row — reasoning folds per entry in the
   transcript — plus the GUI-only theme row),
   `/status` (with a color-coded context breakdown — a segmented bar plus

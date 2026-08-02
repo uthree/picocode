@@ -527,6 +527,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         picocode_core::config::Mode::ReadOnly => Style::new().fg(Color::Cyan),
         picocode_core::config::Mode::Edit => Style::new().fg(Color::Yellow),
         picocode_core::config::Mode::Plan => Style::new().fg(Color::Blue),
+        picocode_core::config::Mode::Auto => Style::new().fg(Color::Magenta).bold(),
         picocode_core::config::Mode::Bypass => Style::new().fg(Color::Red).bold(),
     };
     let mut left = vec![
@@ -542,6 +543,14 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         left.push(Span::styled(
             format!(" {} bg", app.background_jobs),
             Style::new().fg(Color::Yellow),
+        ));
+    }
+    // A goal keeps the agent running turns on its own: show it (and how many
+    // follow-up turns it has used) for as long as it is set.
+    if app.goal.is_some() {
+        left.push(Span::styled(
+            format!("  goal {}/{}", app.goal_round, app.goal_max_rounds()),
+            Style::new().fg(Color::Magenta),
         ));
     }
     if !app.follow {

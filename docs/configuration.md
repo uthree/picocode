@@ -52,17 +52,46 @@ Allow rules come from the config file or from the approval dialog's `a`
 `picocode.toml`'s `[approval]` section to make them permanent.
 
 `Shift+Tab` cycles the permission mode, shown in the status bar; `/read-only`,
-`/edit`, `/plan` and `/bypass` switch to a specific mode directly:
+`/edit`, `/plan`, `/auto` and `/bypass` switch to a specific mode directly:
 
 | Mode | Behavior |
 |---|---|
 | `read-only` (default) | Destructive calls ask, unless allow-listed |
 | `edit` | Like read-only, plus `edit_file` runs without asking |
 | `plan` | `bash` and file writes are **denied** (even if allow-listed): the model investigates, then submits its plan via `submit_plan`, which opens an approval dialog. Approving switches to `edit` mode and the model executes the plan in the same turn. Web tools stay available under the usual ask/allow rules |
+| `auto` | Like `edit`, except the confirmations are answered by a **reviewer model** instead of you — see below. Not in the `Shift+Tab` cycle: only `/auto` or `--auto` enter it, with a warning |
 | `bypass` | **Everything runs without confirmation** (deny rules still apply). Meant for isolated environments such as containers — the `--bypass` flag starts in it. Not in the `Shift+Tab` cycle — only `/bypass` or `--bypass` enter it, with a warning; `Shift+Tab` leaves it for `read-only` |
 
 A mode switch takes effect immediately, including for later tool calls of a
 turn already running.
+
+### Auto mode: letting a model answer the prompts
+
+In `auto` mode every call that would have asked you is put to a separate,
+tool-less *reviewer* agent running on the same model: it sees the tool name,
+the arguments, the working directory and what you asked for this turn, and
+answers `ALLOW` or `DENY` with a reason. Both are printed in the transcript
+as they happen, so nothing runs unattended without a record.
+
+The delegation is bounded on every side:
+
+- deny rules and plan-mode blocks are decided before the reviewer is asked;
+- destructive or outward-facing commands always ask **you**, whatever the
+  reviewer would say: `sudo`/`su`/`doas`, `rm` reaching outside the project
+  (an absolute path or `~`), `git push`, `git reset --hard`, `mkfs`, `dd`,
+  `shutdown`/`reboot`, `chown`, `chmod 777`, `npm publish`, `cargo publish`,
+  `kubectl`, `terraform apply`, `docker system prune`, and anything piping a
+  download into a shell;
+- an error, a timeout (90s) or a reply naming neither verdict falls back to
+  your confirmation — never to "allow";
+- a refusal is reported to the model as the tool result, so it adapts
+  instead of failing.
+
+A small local model is a mediocre security reviewer, and everything it reads
+from the project (file contents, command output) is untrusted input that may
+try to talk it into approving something. Use auto mode where a wrong
+approval would be recoverable, and keep `deny_bash`/`deny_tools` as the
+hard boundary. `--auto` starts in it.
 
 ## Sessions
 
@@ -182,6 +211,12 @@ path = "/srv/app"
 mode = "bypass"          # "off" (default) | "bypass" | "always"
 allow_network = false    # block network from sandboxed commands
 allow_write = ["~/.cargo"]  # extra write-allowed paths (~ expands)
+
+# How many follow-up turns a `/goal` may run before it stops and hands
+# back to you (1-100). The goal loop asks a reviewer model after each
+# turn whether the goal is reached and keeps working until it is — this
+# caps how much it may spend unattended.
+goal_max_rounds = 10
 
 # Optional, opt-in: MCP (Model Context Protocol) servers. With none
 # configured no MCP code runs and nothing changes for the model — extra

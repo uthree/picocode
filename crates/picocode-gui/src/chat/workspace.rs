@@ -278,6 +278,10 @@ impl ChatView {
         }
         // Keep the current permission mode and the persisted /config values.
         new_cfg.mode.set(self.cfg.mode.get());
+        // The goal belonged to the conversation being left behind, and the
+        // fresh worker starts without one.
+        self.goal = None;
+        self.goal_round = 0;
         // The send key belongs to the person at the keyboard, not to the
         // project — keep it across the switch (no rebinding needed).
         new_cfg.submit_key = self.cfg.submit_key;

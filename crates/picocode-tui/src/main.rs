@@ -16,6 +16,7 @@ async fn main() -> anyhow::Result<()> {
     let smoke = args.smoke.clone();
     let smoke_attach = args.smoke_attach.clone();
     let smoke_steer = args.smoke_steer.clone();
+    let smoke_goal = args.smoke_goal.clone();
     let print = args.print.clone();
     let print_attach = args.attach.clone();
     let mut cfg = config::Config::from_args(args)?;
@@ -65,6 +66,12 @@ async fn main() -> anyhow::Result<()> {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 steer.push(text);
             });
+        }
+        // E2E for `/goal`: set the goal the worker judges after each turn.
+        if let Some(goal) = smoke_goal {
+            cmd_tx
+                .send(picocode_core::event::WorkerCmd::SetGoal(Some(goal)))
+                .await?;
         }
         return run_smoke(prompt, attachments, event_rx, cmd_tx).await;
     }
@@ -181,6 +188,14 @@ async fn run_print(
                 eprintln!("[denied] {name} needs confirmation — run with --bypass to allow");
                 let _ = respond.send(false);
             }
+            AgentEvent::AutoDecision {
+                name,
+                allowed,
+                reason,
+            } => {
+                let verb = if allowed { "approved" } else { "refused" };
+                eprintln!("[auto {verb}] {name}: {reason}");
+            }
             AgentEvent::UserQuestion { title, respond, .. } => {
                 eprintln!("[dismissed] {title}: no interactive input in print mode");
                 let _ = respond.send(None);
@@ -250,6 +265,20 @@ async fn run_smoke(
             AgentEvent::BackgroundDone { id, output, .. } => {
                 println!("[background job #{id} done]\n{output}");
             }
+            AgentEvent::AutoDecision {
+                name,
+                allowed,
+                reason,
+            } => {
+                let verb = if allowed { "approved" } else { "refused" };
+                println!("[auto {verb}] {name}: {reason}");
+            }
+            AgentEvent::GoalCheck {
+                round,
+                max,
+                done,
+                reason,
+            } => println!("[goal {round}/{max} done={done}] {reason}"),
             AgentEvent::Cancelled => println!("\n[cancelled]"),
             AgentEvent::Error(e) => println!("\n[error] {e}"),
             AgentEvent::TurnComplete => break,

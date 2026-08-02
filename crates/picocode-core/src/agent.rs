@@ -98,9 +98,25 @@ pub fn spawn(
                 .preamble(COMPACT_PREAMBLE)
                 .max_tokens(8192)
                 .build();
+            // Two more tool-less agents, both answering one question at a
+            // time in their own context so the main system prompt keeps its
+            // minimal shape: the approval reviewer (auto mode) and the goal
+            // judge (`/goal`). They cost nothing until those are used.
+            let reviewer = std::sync::Arc::new(
+                rig::agent::AgentBuilder::new($model)
+                    .preamble(crate::approval::REVIEW_PREAMBLE)
+                    .max_tokens(512)
+                    .build(),
+            );
+            let goal_judge = rig::agent::AgentBuilder::new($model)
+                .preamble(GOAL_PREAMBLE)
+                .max_tokens(1024)
+                .build();
             tokio::spawn(worker(
                 agent,
                 compactor,
+                reviewer,
+                goal_judge,
                 cmd_rx,
                 event_tx,
                 cfg,
@@ -244,10 +260,21 @@ const COMPACT_REQUEST: &str = "Summarize our entire conversation above so that y
      could seamlessly continue the work from the summary alone. Reply with the \
      summary only.";
 
+/// Preamble of the `/goal` judge: a tool-less agent that reads the
+/// conversation and decides whether the user's goal has been reached.
+const GOAL_PREAMBLE: &str = "You judge whether a coding agent has finished the job. \
+     You are given the conversation and the goal the human set. Decide strictly from \
+     what the conversation shows was actually done and verified — claims of intent, \
+     plans, or work that was announced but not carried out do not count. Answer with a \
+     single line: `DONE: <what shows it is finished>` or `CONTINUE: <what is still \
+     missing>`.";
+
 #[allow(clippy::too_many_arguments)]
 async fn worker<M>(
     agent: Agent<M>,
     compactor: Agent<M>,
+    reviewer: std::sync::Arc<Agent<M>>,
+    goal_judge: Agent<M>,
     mut cmd_rx: mpsc::Receiver<WorkerCmd>,
     event_tx: mpsc::Sender<AgentEvent>,
     cfg: Config,
@@ -261,13 +288,19 @@ async fn worker<M>(
     let mut history: Vec<Message> = Vec::new();
     // Context tokens of the last completion request, for the pruning stage.
     let mut last_ctx: u64 = 0;
+    // The `/goal` condition, when one is set.
+    let mut goal: Option<String> = None;
 
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             WorkerCmd::Clear => {
                 history.clear();
                 last_ctx = 0;
+                // The goal was about the conversation being cleared; keeping
+                // it would judge the next, unrelated one.
+                goal = None;
             }
+            WorkerCmd::SetGoal(text) => goal = text,
             WorkerCmd::Undo => {
                 let restored = journal.undo();
                 let summary = undo_summary(&restored);
@@ -292,19 +325,7 @@ async fn worker<M>(
             }
             WorkerCmd::SeedHistory(h) => history = h,
             WorkerCmd::Prompt { text, attachments } => {
-                // Soft context stage, before full compaction is needed: at
-                // 2/3 of the auto-compact threshold, swap old tool outputs
-                // for placeholders (recent turns stay untouched).
-                let pct = cfg.auto_compact.get();
-                if pct > 0 && last_ctx >= cfg.context_window.saturating_mul(pct * 2 / 3) / 100 {
-                    let outputs = crate::history::prune_tool_outputs(
-                        &mut history,
-                        crate::history::KEEP_RECENT_TURNS,
-                    );
-                    if outputs > 0 {
-                        let _ = event_tx.send(AgentEvent::Pruned { outputs }).await;
-                    }
-                }
+                maybe_prune(&mut history, &cfg, last_ctx, &event_tx).await;
                 journal.begin_turn();
                 // A steer message that raced the previous turn's end (pushed
                 // just as it finished) joins this prompt instead of being
@@ -318,8 +339,9 @@ async fn worker<M>(
                         pending.join("\n\n")
                     }
                 };
-                let mut cancelled = run_once(
+                let mut cancelled = run_turn(
                     &agent,
+                    &reviewer,
                     &mut history,
                     text,
                     attachments,
@@ -330,18 +352,48 @@ async fn worker<M>(
                     &steer,
                 )
                 .await;
-                // Steer messages that missed every tool boundary (or arrived
-                // after the last one) run as follow-up prompts of the same
-                // turn, so they are never silently dropped.
-                while !cancelled {
-                    let leftover = steer.drain();
-                    if leftover.is_empty() {
+                // `/goal`: after the turn, ask the judge whether the goal is
+                // met and keep running follow-up turns until it is (or the
+                // round limit is hit, or Esc stops it).
+                let mut round = 0u64;
+                while !cancelled && let Some(goal_text) = goal.clone() {
+                    let Some((done, reason)) =
+                        check_goal(&goal_judge, &history, &goal_text, &mut cancel_rx).await
+                    else {
+                        let _ = event_tx
+                            .send(AgentEvent::Error(
+                                "goal check failed; the goal is still set — send a message to \
+                                 continue, or /goal off"
+                                    .into(),
+                            ))
+                            .await;
+                        break;
+                    };
+                    let _ = event_tx
+                        .send(AgentEvent::GoalCheck {
+                            round,
+                            max: cfg.goal_max_rounds,
+                            done,
+                            reason: reason.clone(),
+                        })
+                        .await;
+                    if done {
+                        // Reached: the goal is cleared so the next prompt is
+                        // an ordinary turn again.
+                        goal = None;
                         break;
                     }
-                    cancelled = run_once(
+                    if round >= cfg.goal_max_rounds {
+                        break;
+                    }
+                    round += 1;
+                    maybe_prune(&mut history, &cfg, last_ctx, &event_tx).await;
+                    journal.begin_turn();
+                    cancelled = run_turn(
                         &agent,
+                        &reviewer,
                         &mut history,
-                        leftover.join("\n\n"),
+                        goal_continuation(&goal_text, &reason),
                         Vec::new(),
                         &event_tx,
                         &cfg,
@@ -382,6 +434,154 @@ async fn worker<M>(
             }
         }
     }
+}
+
+/// Soft context stage, before full compaction is needed: at 2/3 of the
+/// auto-compact threshold, swap old tool outputs for placeholders (recent
+/// turns stay untouched). Runs before every turn the worker starts,
+/// including the follow-up turns of a `/goal` loop.
+async fn maybe_prune(
+    history: &mut [Message],
+    cfg: &Config,
+    last_ctx: u64,
+    event_tx: &mpsc::Sender<AgentEvent>,
+) {
+    let pct = cfg.auto_compact.get();
+    if pct == 0 || last_ctx < cfg.context_window.saturating_mul(pct * 2 / 3) / 100 {
+        return;
+    }
+    let outputs = crate::history::prune_tool_outputs(history, crate::history::KEEP_RECENT_TURNS);
+    if outputs > 0 {
+        let _ = event_tx.send(AgentEvent::Pruned { outputs }).await;
+    }
+}
+
+/// One user turn: the prompt itself, then any steer messages that missed
+/// every tool boundary (or arrived after the last one) as follow-up prompts
+/// of the same turn, so they are never silently dropped. Returns whether the
+/// turn was cancelled.
+#[allow(clippy::too_many_arguments)]
+async fn run_turn<M>(
+    agent: &Agent<M>,
+    reviewer: &std::sync::Arc<Agent<M>>,
+    history: &mut Vec<Message>,
+    prompt: String,
+    attachments: Vec<Attachment>,
+    event_tx: &mpsc::Sender<AgentEvent>,
+    cfg: &Config,
+    cancel: &mut watch::Receiver<()>,
+    last_ctx: &mut u64,
+    steer: &crate::steer::SteerQueue,
+) -> bool
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: GetTokenUsage,
+{
+    let mut cancelled = run_once(
+        agent,
+        reviewer,
+        history,
+        prompt,
+        attachments,
+        event_tx,
+        cfg,
+        cancel,
+        last_ctx,
+        steer,
+    )
+    .await;
+    while !cancelled {
+        let leftover = steer.drain();
+        if leftover.is_empty() {
+            break;
+        }
+        cancelled = run_once(
+            agent,
+            reviewer,
+            history,
+            leftover.join("\n\n"),
+            Vec::new(),
+            event_tx,
+            cfg,
+            cancel,
+            last_ctx,
+            steer,
+        )
+        .await;
+    }
+    cancelled
+}
+
+/// Ask the tool-less judge whether the `/goal` condition is met, given the
+/// conversation so far. `None` means it could not answer (cancelled, an
+/// error, or a reply naming neither verdict).
+async fn check_goal<M>(
+    judge: &Agent<M>,
+    history: &[Message],
+    goal: &str,
+    cancel: &mut watch::Receiver<()>,
+) -> Option<(bool, String)>
+where
+    M: CompletionModel + 'static,
+{
+    let request = format!(
+        "The goal the human set: {goal}\n\n\
+         Judging only by what the conversation above shows was actually done, has this \
+         goal been fully achieved? Answer with one line, `DONE: <what shows it is \
+         finished>` or `CONTINUE: <what is still missing>`."
+    );
+    let history = history.to_vec();
+    let _ = cancel.borrow_and_update(); // discard stale signals
+    let answer = tokio::select! {
+        biased;
+        _ = cancel.changed() => return None,
+        res = async { judge.prompt(request).history(history).await } => res.ok()?,
+    };
+    parse_goal_verdict(&answer)
+}
+
+/// Read `DONE`/`CONTINUE` (and the reason after it) out of the judge's
+/// reply, which reasoning models pad with prose. Anything else is rejected
+/// so the loop stops instead of guessing.
+fn parse_goal_verdict(answer: &str) -> Option<(bool, String)> {
+    for line in answer.lines() {
+        let line = line
+            .trim()
+            .trim_start_matches(['-', '*', '#', '>', '`', ' ']);
+        let upper = line.to_ascii_uppercase();
+        let (done, keyword) = if upper.starts_with("DONE") {
+            (true, 4)
+        } else if upper.starts_with("CONTINUE") {
+            (false, 8)
+        } else {
+            continue;
+        };
+        let rest = &line[keyword..];
+        if rest.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let reason = rest
+            .trim_start_matches([':', '-', '—', '*', '.', ' '])
+            .trim()
+            .trim_end_matches(['*', '`'])
+            .trim()
+            .to_string();
+        return Some((done, reason));
+    }
+    None
+}
+
+/// The prompt that starts another `/goal` round. It restates the goal and
+/// what the judge found missing; the model is never told about the loop
+/// itself, so nothing about it leaks into the system prompt.
+fn goal_continuation(goal: &str, reason: &str) -> String {
+    format!(
+        "[picocode goal check: the goal is not reached yet.\n\
+         Goal: {goal}\n\
+         Still missing: {reason}\n\
+         Keep working on it now — do the next concrete step yourself instead of \
+         asking what to do.]"
+    )
 }
 
 /// Ask the tool-less compactor agent to summarize the messages older than
@@ -458,6 +658,7 @@ async fn compact<M>(
 #[allow(clippy::too_many_arguments)]
 async fn run_once<M>(
     agent: &Agent<M>,
+    reviewer: &std::sync::Arc<Agent<M>>,
     history: &mut Vec<Message>,
     prompt: String,
     attachments: Vec<Attachment>,
@@ -471,6 +672,9 @@ where
     M: CompletionModel + 'static,
     M::StreamingResponse: GetTokenUsage,
 {
+    // What the user asked for, before the mode and attachment notes are
+    // appended: the approval reviewer judges calls against it in auto mode.
+    let intent = prompt.clone();
     // In plan mode, tell the model up front instead of letting it discover
     // the blocked tools by trial and error (the approval hook still denies
     // any write it attempts anyway).
@@ -530,7 +734,14 @@ where
     let _ = cancel.borrow_and_update(); // discard stale signals
 
     'attempts: loop {
-        let hook = ApprovalHook::new(event_tx.clone(), cfg.approval.clone(), cfg.mode.clone());
+        let hook = ApprovalHook::new(
+            event_tx.clone(),
+            cfg.approval.clone(),
+            cfg.mode.clone(),
+            reviewer.clone(),
+            intent.clone(),
+            cfg.root.clone(),
+        );
         // rig's multi-turn driver needs some bound, but picocode doesn't cap
         // turns itself: the context window (with auto-compact) is the real
         // limit, so pass an effectively-unlimited value.
@@ -751,6 +962,28 @@ mod tests {
 
     fn test_cfg() -> Config {
         Config::for_tests()
+    }
+
+    #[test]
+    fn goal_verdicts_are_read_out_of_padded_replies() {
+        assert_eq!(
+            parse_goal_verdict("DONE: the tests pass"),
+            Some((true, "the tests pass".to_string()))
+        );
+        assert_eq!(
+            parse_goal_verdict("Let me check.\n\n**CONTINUE** — two tests still fail\n"),
+            Some((false, "two tests still fail".to_string()))
+        );
+        // Neither verdict named: the loop stops rather than guessing.
+        assert_eq!(parse_goal_verdict("Hard to say, honestly."), None);
+        assert_eq!(parse_goal_verdict("CONTINUED work is needed"), None);
+    }
+
+    #[test]
+    fn the_goal_continuation_restates_goal_and_gap() {
+        let p = goal_continuation("all tests pass", "two tests still fail");
+        assert!(p.contains("all tests pass"));
+        assert!(p.contains("two tests still fail"));
     }
 
     #[test]

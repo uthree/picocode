@@ -316,7 +316,9 @@ impl ChatView {
                         .flex_none()
                         .mt_0p5(),
                 )
-                .child(entry.text.clone())
+                // The text takes the row's remaining width and wraps inside
+                // it; as a bare flex child a long warning runs off the window.
+                .child(div().flex_1().min_w_0().child(entry.text.clone()))
                 .into_any_element(),
             EntryKind::Summary => div()
                 .px_3()

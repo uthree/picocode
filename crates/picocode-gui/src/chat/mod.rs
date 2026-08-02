@@ -166,6 +166,11 @@ pub struct ChatView {
     /// Files staged (drag & drop or the attach button) to send with the
     /// next prompt, shown as chips above the input box.
     pending_attachments: Vec<Attachment>,
+    /// The `/goal` condition, while one is set (the worker runs the loop;
+    /// this copy drives the status bar and a bare `/goal`).
+    goal: Option<String>,
+    /// Follow-up turns the current goal has already run, for the status bar.
+    goal_round: u64,
     /// Counter naming the temp PNGs saved from clipboard image pastes.
     clip_count: usize,
     /// Latest context composition reported by the worker, shown by /status.
@@ -269,7 +274,7 @@ impl ChatView {
 
         let sessions_dir = session::sessions_dir_for(&cfg);
         let git_branch = picocode_core::git::branch(&cfg.root);
-        let view = Self {
+        let mut view = Self {
             cfg,
             entries: Vec::new(),
             input,
@@ -309,6 +314,8 @@ impl ChatView {
             est_out: 0,
             math_cache: crate::tex::MathCache::new(),
             queued: Vec::new(),
+            goal: None,
+            goal_round: 0,
             pending_attachments: Vec::new(),
             clip_count: 0,
             context_info: None,
@@ -320,6 +327,13 @@ impl ChatView {
             list_state: ListState::new(0, ListAlignment::Bottom, px(512.)),
         };
         picocode_core::state::save_last_model(&view.cfg);
+        // Starting unattended (--auto / --bypass) is announced the same way
+        // as switching into it during the session.
+        match view.cfg.mode.get() {
+            Mode::Bypass => view.push(EntryKind::Warning, t!("bypass_warning").to_string()),
+            Mode::Auto => view.push(EntryKind::Warning, t!("auto_warning").to_string()),
+            _ => {}
+        }
         view
     }
 
@@ -624,6 +638,8 @@ impl ChatView {
             ParseOutcome::Command(command) => match command {
                 Command::Clear => {
                     let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
+                    self.goal = None;
+                    self.goal_round = 0;
                     self.entries.clear();
                     self.queued.clear();
                     self.pending_attachments.clear();
@@ -656,6 +672,7 @@ impl ChatView {
                 }
                 Command::Quit => cx.quit(),
                 Command::Mode(mode) => self.select_mode(mode, cx),
+                Command::Goal(arg) => self.set_goal(arg, cx),
                 Command::Model(None) => self.toggle_menu(Menu::Model, window, cx),
                 Command::Model(Some(name)) => self.switch_model(&name, cx),
                 Command::Resume(None) => self.open_session_picker(cx),
@@ -758,13 +775,46 @@ impl ChatView {
             return;
         }
         self.cfg.mode.set(mode);
-        if mode == Mode::Bypass {
-            self.push(EntryKind::Warning, t!("bypass_warning").to_string());
-        } else {
-            self.push(
+        match mode {
+            Mode::Bypass => self.push(EntryKind::Warning, t!("bypass_warning").to_string()),
+            Mode::Auto => self.push(EntryKind::Warning, t!("auto_warning").to_string()),
+            _ => self.push(
                 EntryKind::Notice,
                 t!("mode_changed", mode = mode_name(mode)).to_string(),
-            );
+            ),
+        }
+        cx.notify();
+    }
+
+    /// `/goal`: set, show or clear the condition the agent keeps working
+    /// towards. Setting one is announced like a mode switch — from then on
+    /// the agent starts turns by itself.
+    fn set_goal(&mut self, arg: Option<String>, cx: &mut Context<Self>) {
+        match arg {
+            None => match &self.goal {
+                Some(goal) => self.push(EntryKind::Notice, t!("goal_current", goal = goal).into()),
+                None => self.push(EntryKind::Notice, t!("goal_none").into()),
+            },
+            Some(arg) if arg == "off" || arg == "clear" => {
+                self.goal = None;
+                self.goal_round = 0;
+                let _ = self.cmd_tx.try_send(WorkerCmd::SetGoal(None));
+                self.push(EntryKind::Notice, t!("goal_cleared").into());
+            }
+            Some(goal) => {
+                self.goal = Some(goal.clone());
+                self.goal_round = 0;
+                let _ = self.cmd_tx.try_send(WorkerCmd::SetGoal(Some(goal.clone())));
+                self.push(
+                    EntryKind::Warning,
+                    t!(
+                        "goal_warning",
+                        rounds = self.cfg.goal_max_rounds,
+                        goal = goal
+                    )
+                    .into(),
+                );
+            }
         }
         cx.notify();
     }

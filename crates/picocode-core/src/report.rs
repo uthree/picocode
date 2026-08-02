@@ -83,6 +83,10 @@ pub fn permissions_text(cfg: &Config) -> String {
         Mode::ReadOnly => "destructive calls ask unless allow-listed",
         Mode::Edit => "file writes run freely; other destructive calls ask unless allow-listed",
         Mode::Plan => "bash and file writes are denied; web tools ask unless allow-listed",
+        Mode::Auto => {
+            "like edit, but a reviewer model answers the prompts instead of you \
+             (destructive commands still ask)"
+        }
         Mode::Bypass => "EVERYTHING runs without confirmation (deny rules still apply)",
     };
     let rules = cfg.approval.snapshot();

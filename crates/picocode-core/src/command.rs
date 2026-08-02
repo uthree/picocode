@@ -55,6 +55,9 @@ pub enum Command {
     /// `/remote` (show the workspace and the configured remotes) or
     /// `/remote <name|host:/path|local>` (switch workspace).
     Remote(Option<String>),
+    /// `/goal <condition>` sets the goal picocode keeps working towards,
+    /// `/goal off` clears it, and a bare `/goal` shows the current one.
+    Goal(Option<String>),
     Mode(Mode),
     Permissions,
     Config,
@@ -139,8 +142,16 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Mode: investigate and plan, writes blocked",
     },
     CommandSpec {
+        name: "/auto",
+        description: "Mode: let a reviewer model answer the approval prompts",
+    },
+    CommandSpec {
         name: "/bypass",
         description: "Mode: run EVERYTHING unconfirmed (isolated envs)",
+    },
+    CommandSpec {
+        name: "/goal",
+        description: "Keep working until a condition is met: /goal <condition> (off clears)",
     },
     CommandSpec {
         name: "/permissions",
@@ -198,7 +209,9 @@ pub fn parse(input: &str) -> ParseOutcome {
         "/read-only" => no_arg(Command::Mode(Mode::ReadOnly), name, arg),
         "/edit" => no_arg(Command::Mode(Mode::Edit), name, arg),
         "/plan" => no_arg(Command::Mode(Mode::Plan), name, arg),
+        "/auto" => no_arg(Command::Mode(Mode::Auto), name, arg),
         "/bypass" => no_arg(Command::Mode(Mode::Bypass), name, arg),
+        "/goal" => Ok(Command::Goal(arg_string().filter(|a| !a.is_empty()))),
         "/permissions" => no_arg(Command::Permissions, name, arg),
         "/config" | "/settings" => no_arg(Command::Config, name, arg),
         "/status" | "/usage" => no_arg(Command::Status, name, arg),
@@ -447,6 +460,31 @@ mod tests {
             find_prompt_preset(&prompts, "nope"),
             PresetMatch::None
         ));
+    }
+
+    #[test]
+    fn goal_takes_a_condition_or_switches_off() {
+        assert_eq!(
+            parse("/goal all tests pass"),
+            ParseOutcome::Command(Command::Goal(Some("all tests pass".into())))
+        );
+        // A bare /goal shows the current one; `off` is handled by the front
+        // ends, which also clear their own copy.
+        assert_eq!(parse("/goal"), ParseOutcome::Command(Command::Goal(None)));
+        assert_eq!(
+            parse("/goal off"),
+            ParseOutcome::Command(Command::Goal(Some("off".into())))
+        );
+    }
+
+    #[test]
+    fn auto_is_a_mode_of_its_own() {
+        assert_eq!(
+            parse("/auto"),
+            ParseOutcome::Command(Command::Mode(Mode::Auto))
+        );
+        // Command-only, like bypass: Shift+Tab never lands on it.
+        assert!(!Mode::CYCLE.contains(&Mode::Auto));
     }
 
     #[test]

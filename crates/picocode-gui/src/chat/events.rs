@@ -56,6 +56,44 @@ impl ChatView {
                 // y/n/a and Esc go to the dialog, not the text input.
                 self.dialog_focus.focus(window);
             }
+            AgentEvent::AutoDecision {
+                name,
+                allowed,
+                reason,
+            } => {
+                let (kind, key) = if allowed {
+                    (EntryKind::Notice, "auto_approved")
+                } else {
+                    (EntryKind::Warning, "auto_refused")
+                };
+                self.push(kind, t!(key, name = name, reason = reason).to_string());
+            }
+            AgentEvent::GoalCheck {
+                round,
+                max,
+                done,
+                reason,
+            } => {
+                self.goal_round = round;
+                if done {
+                    self.goal = None;
+                    self.goal_round = 0;
+                    self.push(
+                        EntryKind::Notice,
+                        t!("goal_reached", reason = reason).into(),
+                    );
+                } else if round >= max {
+                    self.push(
+                        EntryKind::Warning,
+                        t!("goal_gave_up", max = max, reason = reason).into(),
+                    );
+                } else {
+                    self.push(
+                        EntryKind::Notice,
+                        t!("goal_continuing", round = round, max = max, reason = reason).into(),
+                    );
+                }
+            }
             AgentEvent::UserQuestion {
                 title,
                 question,

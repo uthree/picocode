@@ -43,6 +43,14 @@ use crate::input::{expand_pastes, spawn_input_thread};
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
 
+/// Shown when auto mode is entered (and at startup with `--auto`), in the
+/// same spirit as the bypass warning: the delegation is deliberate, so it
+/// should never be a surprise afterwards.
+const AUTO_WARNING: &str = "auto mode: approval prompts are answered by a reviewer model \
+     instead of you, so tool calls run unattended (deny rules still apply, and destructive \
+     commands like sudo, rm outside the project or git push still ask you). Every decision \
+     is printed as it is made. Shift+Tab or /read-only to leave.";
+
 pub const LOGO: &str = r"            ███                                          █████
            ░░░                                          ░░███
  ████████  ████   ██████   ██████   ██████   ██████   ███████   ██████
@@ -113,6 +121,11 @@ pub struct App {
     /// Backgrounded (timed-out) bash commands still running, shown in the
     /// status bar.
     pub background_jobs: usize,
+    /// The `/goal` condition, while one is set (the worker owns the loop;
+    /// this copy drives the status bar and `/goal` without an argument).
+    pub goal: Option<String>,
+    /// Follow-up turns the current goal has already run, for the status bar.
+    pub goal_round: u64,
     /// True while an auto-compaction is pending or has failed — blocks
     /// re-triggering until a compaction succeeds or a new prompt is sent,
     /// so a failing compactor can't retry in a loop.
@@ -207,6 +220,8 @@ impl App {
             mcp,
             backend,
             background_jobs: 0,
+            goal: None,
+            goal_round: 0,
             auto_compact_tried: false,
             model_label: cfg.model_label(),
             git_branch: picocode_core::git::branch(&cfg.root),
@@ -302,13 +317,15 @@ impl App {
                 format!("Models: {} — /model <name> to switch", names.join(", ")),
             );
         }
-        if cfg.mode.get() == picocode_core::config::Mode::Bypass {
-            app.push(
+        match cfg.mode.get() {
+            picocode_core::config::Mode::Bypass => app.push(
                 EntryKind::Warning,
                 "bypass mode: EVERY tool call runs without confirmation (deny rules \
                  still apply). Meant for isolated environments such as containers."
                     .to_string(),
-            );
+            ),
+            picocode_core::config::Mode::Auto => app.push(EntryKind::Warning, AUTO_WARNING.into()),
+            _ => {}
         }
         // Fetch the provider's model list in the background so `/model` can
         // offer and validate provider models right away.
@@ -709,6 +726,8 @@ impl App {
                     self.reasoning_open = false;
                     self.follow = true;
                     self.top_line = 0;
+                    self.goal = None;
+                    self.goal_round = 0;
                     let _ = self.cmd_tx.send(WorkerCmd::Clear).await;
                     // The cleared conversation stays on disk; start a fresh
                     // log.
@@ -737,6 +756,7 @@ impl App {
                 Command::Config => self.settings = Some(SettingsMenu { selected: 0 }),
                 Command::Status => self.show_status(),
                 Command::Mode(mode) => self.set_mode(mode),
+                Command::Goal(arg) => self.set_goal(arg).await,
                 Command::Model(None) => self.open_model_picker(),
                 Command::Model(Some(name)) => self.switch_model(&name).await,
                 Command::Resume(None) => self.open_session_picker(),
@@ -861,17 +881,60 @@ impl App {
     /// Explicit mode switch via the /read-only, /edit, /plan and /bypass
     /// commands. Bypass is only reachable this way and comes with a warning.
     fn set_mode(&mut self, mode: picocode_core::config::Mode) {
+        use picocode_core::config::Mode;
         self.cfg.mode.set(mode);
-        if mode == picocode_core::config::Mode::Bypass {
-            self.push(
+        match mode {
+            Mode::Bypass => self.push(
                 EntryKind::Warning,
                 "bypass mode: EVERY tool call now runs without confirmation (deny rules \
                  still apply). Meant for isolated environments such as containers. \
                  Shift+Tab or /read-only to leave."
                     .to_string(),
-            );
-        } else {
-            self.push(EntryKind::Notice, format!("Mode: {}", mode.label()));
+            ),
+            Mode::Auto => self.push(EntryKind::Warning, AUTO_WARNING.into()),
+            _ => self.push(EntryKind::Notice, format!("Mode: {}", mode.label())),
+        }
+    }
+
+    /// `/goal`: set, show or clear the condition the agent keeps working
+    /// towards. Setting one is announced like a mode switch — the agent
+    /// runs turns on its own from then on.
+    async fn set_goal(&mut self, arg: Option<String>) {
+        match arg {
+            None => match &self.goal {
+                Some(goal) => self.push(
+                    EntryKind::Notice,
+                    format!("Goal: {goal} — /goal off to clear"),
+                ),
+                None => self.push(
+                    EntryKind::Notice,
+                    "No goal set — /goal <condition> to set one".to_string(),
+                ),
+            },
+            Some(arg) if arg == "off" || arg == "clear" => {
+                self.goal = None;
+                self.goal_round = 0;
+                let _ = self.cmd_tx.send(WorkerCmd::SetGoal(None)).await;
+                self.push(EntryKind::Notice, "Goal cleared".to_string());
+            }
+            Some(goal) => {
+                self.goal = Some(goal.clone());
+                self.goal_round = 0;
+                let _ = self
+                    .cmd_tx
+                    .send(WorkerCmd::SetGoal(Some(goal.clone())))
+                    .await;
+                self.push(
+                    EntryKind::Warning,
+                    format!(
+                        "goal mode: after each turn a reviewer model judges whether the goal \
+                         is reached, and picocode keeps working on its own until it is — up to \
+                         {} more turns, spending tokens unattended. Esc stops the run, \
+                         /goal off clears the goal.\nGoal: {goal}",
+                        self.cfg.goal_max_rounds
+                    ),
+                );
+            }
         }
     }
 
@@ -910,6 +973,11 @@ impl App {
     /// Current permission mode, for the status bar.
     pub fn mode(&self) -> picocode_core::config::Mode {
         self.cfg.mode.get()
+    }
+
+    /// Follow-up turns a `/goal` may run, for the status bar's `goal n/m`.
+    pub fn goal_max_rounds(&self) -> u64 {
+        self.cfg.goal_max_rounds
     }
 
     /// "dir (branch)" for the input-box title.

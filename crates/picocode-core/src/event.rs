@@ -22,6 +22,23 @@ pub enum AgentEvent {
         args: String,
         respond: oneshot::Sender<bool>,
     },
+    /// In auto mode: the reviewer model answered an approval prompt on the
+    /// user's behalf. Reported so the user can see what ran unattended.
+    AutoDecision {
+        name: String,
+        allowed: bool,
+        reason: String,
+    },
+    /// In goal mode: the reviewer model judged whether the `/goal` condition
+    /// is met after a turn. `round` counts the checks so far and `max` is
+    /// the round limit, so a front end can show `2/10` and say when the
+    /// loop stopped short.
+    GoalCheck {
+        round: u64,
+        max: u64,
+        done: bool,
+        reason: String,
+    },
     /// The model asked the user a question via a dialog (`submit_plan`'s
     /// approval). The answer is the selected index, or `None` if dismissed
     /// with Esc. `title` names the dialog box.
@@ -92,6 +109,10 @@ pub enum WorkerCmd {
     },
     /// Clear the conversation history.
     Clear,
+    /// Set (or clear, with `None`) the `/goal` condition: after each turn
+    /// the worker asks the reviewer model whether it is met and keeps
+    /// working until it is, the round limit is reached, or Esc stops it.
+    SetGoal(Option<String>),
     /// Summarize the history and replace it with the summary.
     Compact,
     /// Record a user-run `!` shell command and its output in the history so

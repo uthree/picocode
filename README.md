@@ -17,7 +17,12 @@ OpenAI-compatible server (vLLM, etc.).
   confined to the project directory
 - **Approval flow** for anything that changes state or talks to the
   network, with allow/deny rules and **permission modes**
-  (read-only / edit / plan / bypass)
+  (read-only / edit / plan / auto / bypass) — `auto` hands the
+  confirmations to a reviewer model, with deny rules and the destructive
+  commands still reserved for you
+- **Goals** (`/goal <condition>`) — picocode keeps starting turns on its
+  own until a reviewer model judges the condition met (bounded by
+  `goal_max_rounds`)
 - **Model switching** (`/model`), **context compaction** (`/compact`),
   **session autosave and resume** (`/resume`), **settings** (`/config`),
   **direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),

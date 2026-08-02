@@ -10,8 +10,13 @@ crates/
   picocode-core/src/     — the agent engine (library)
     config/      — CLI args and config file (mod), permission modes and
                    approval rules (rules), web-search settings (search)
-    agent.rs     — rig agent construction and the streaming worker
-    approval.rs  — approval gate for destructive tools (rig AgentHook)
+    agent.rs     — rig agent construction and the streaming worker, plus
+                   the `/goal` loop (a tool-less judge decides after each
+                   turn whether to run another one)
+    approval.rs  — approval gate for destructive tools (rig AgentHook);
+                   in auto mode a tool-less reviewer agent answers the
+                   prompts instead of the user, with the always-ask
+                   commands and a fall back to asking as guard rails
     command.rs   — shared slash-command parser and command list (both
                    front ends execute the same parsed Command)
     attachment.rs — user file attachments (image/audio/PDF) sent as

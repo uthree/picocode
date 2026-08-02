@@ -90,6 +90,12 @@ pub struct Args {
     #[arg(long)]
     pub bypass: bool,
 
+    /// Start in auto mode: the approval prompts are answered by a reviewer
+    /// model instead of you (deny rules and the always-ask commands still
+    /// reach you). Ignored when --bypass is given.
+    #[arg(long)]
+    pub auto: bool,
+
     /// Open a remote workspace over SSH: `host:/path` (host is an ssh alias
     /// from ~/.ssh/config or user@host), or the name of a `[[remotes]]`
     /// entry. All tools then operate on the remote host.
@@ -120,6 +126,11 @@ pub struct Args {
     /// starts (E2E for mid-turn injection).
     #[arg(long, hide = true, requires = "smoke")]
     pub smoke_steer: Option<String>,
+
+    /// Goal set before the --smoke prompt runs, so the goal loop can be
+    /// driven headlessly (E2E for `/goal`).
+    #[arg(long, hide = true, requires = "smoke")]
+    pub smoke_goal: Option<String>,
 }
 
 impl Args {
@@ -132,12 +143,14 @@ impl Args {
             model: None,
             base_url: None,
             bypass: false,
+            auto: false,
             remote,
             print: None,
             attach: Vec::new(),
             smoke: None,
             smoke_attach: None,
             smoke_steer: None,
+            smoke_goal: None,
         }
     }
 }
@@ -175,6 +188,9 @@ pub(crate) struct FileConfig {
     /// Context usage (percent of the window) at which the conversation is
     /// compacted automatically after a turn; 0 disables (default 85).
     auto_compact: Option<u64>,
+    /// How many follow-up turns a `/goal` may run before it stops and hands
+    /// back to the user (default 10).
+    goal_max_rounds: Option<u64>,
     /// Tools to leave unregistered entirely (schemas never sent to the
     /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
     disable_tools: Option<Vec<String>>,
@@ -210,6 +226,8 @@ pub const DEFAULT_READ_MAX_LINES: u64 = 2000;
 pub const DEFAULT_READ_MAX_LINE_BYTES: u64 = 500;
 /// Default auto-compaction threshold (percent of the context window).
 pub const DEFAULT_AUTO_COMPACT: u64 = 85;
+/// Default `/goal` round limit: follow-up turns before the loop hands back.
+pub const DEFAULT_GOAL_MAX_ROUNDS: u64 = 10;
 
 /// Fallback context-window size when a model entry doesn't declare one.
 /// Only used for the status-bar usage gauge.
@@ -501,6 +519,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         read_max_lines: project.read_max_lines.or(global.read_max_lines),
         read_max_line_bytes: project.read_max_line_bytes.or(global.read_max_line_bytes),
         auto_compact: project.auto_compact.or(global.auto_compact),
+        goal_max_rounds: project.goal_max_rounds.or(global.goal_max_rounds),
         after_edit: project.after_edit.or(global.after_edit),
         submit_key: project.submit_key.or(global.submit_key),
         // Like the approval lists: a project can add disables, not re-enable.
@@ -534,6 +553,7 @@ struct Settings {
     read_max_lines: u64,
     read_max_line_bytes: u64,
     auto_compact: u64,
+    goal_max_rounds: u64,
     disable_tools: Vec<String>,
 }
 
@@ -557,6 +577,10 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
     if auto_compact > 99 {
         anyhow::bail!("auto_compact must be 0 (off) to 99 (percent of the context window)");
     }
+    let goal_max_rounds = file.goal_max_rounds.unwrap_or(DEFAULT_GOAL_MAX_ROUNDS);
+    if goal_max_rounds == 0 || goal_max_rounds > 100 {
+        anyhow::bail!("goal_max_rounds must be 1 to 100 follow-up turns");
+    }
     let mut disable_tools = file.disable_tools.clone().unwrap_or_default();
     disable_tools.sort();
     disable_tools.dedup();
@@ -573,6 +597,7 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
         read_max_lines,
         read_max_line_bytes,
         auto_compact,
+        goal_max_rounds,
         disable_tools,
     })
 }
@@ -665,6 +690,10 @@ pub struct Config {
     /// Auto-compaction threshold in percent of the context window (0 = off),
     /// checked after each completed turn and adjustable at runtime (`/config`).
     pub auto_compact: NumHandle,
+    /// How many follow-up turns a `/goal` runs before handing back to the
+    /// user. Read by the worker, which is respawned whenever the workspace
+    /// or the model changes, so a plain number is enough.
+    pub goal_max_rounds: u64,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -842,12 +871,13 @@ impl Config {
             read_max_lines: NumHandle::new(settings.read_max_lines),
             read_max_line_bytes: NumHandle::new(settings.read_max_line_bytes),
             auto_compact: NumHandle::new(settings.auto_compact),
+            goal_max_rounds: settings.goal_max_rounds,
             root,
             approval: RulesHandle::new(file.approval.clone()),
-            mode: ModeHandle::new(if args.bypass {
-                Mode::Bypass
-            } else {
-                Mode::default()
+            mode: ModeHandle::new(match (args.bypass, args.auto) {
+                (true, _) => Mode::Bypass,
+                (false, true) => Mode::Auto,
+                _ => Mode::default(),
             }),
             search: SearchHandle::new(search),
             disable_tools: settings.disable_tools,
@@ -906,6 +936,7 @@ impl Config {
         self.read_max_lines.set(settings.read_max_lines);
         self.read_max_line_bytes.set(settings.read_max_line_bytes);
         self.auto_compact.set(settings.auto_compact);
+        self.goal_max_rounds = settings.goal_max_rounds;
         self.disable_tools = settings.disable_tools;
         self.approval = RulesHandle::new(file.approval);
         self.after_edit = file.after_edit.filter(|c| !c.trim().is_empty());
@@ -940,6 +971,7 @@ impl Config {
             read_max_lines: NumHandle::new(2000),
             read_max_line_bytes: NumHandle::new(500),
             auto_compact: NumHandle::new(85),
+            goal_max_rounds: DEFAULT_GOAL_MAX_ROUNDS,
             root: std::path::PathBuf::from("/tmp/proj"),
             submit_key: crate::keys::SubmitKey::default(),
             approval: RulesHandle::new(ApprovalRules::default()),

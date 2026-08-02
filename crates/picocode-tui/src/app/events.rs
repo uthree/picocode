@@ -75,6 +75,49 @@ impl App {
                     respond,
                 });
             }
+            AgentEvent::AutoDecision {
+                name,
+                allowed,
+                reason,
+            } => {
+                self.close_blocks();
+                let verb = if allowed { "approved" } else { "refused" };
+                self.push(
+                    if allowed {
+                        EntryKind::Notice
+                    } else {
+                        EntryKind::Warning
+                    },
+                    format!("auto {verb} {name}: {reason}"),
+                );
+            }
+            AgentEvent::GoalCheck {
+                round,
+                max,
+                done,
+                reason,
+            } => {
+                self.close_blocks();
+                self.goal_round = round;
+                if done {
+                    self.goal = None;
+                    self.goal_round = 0;
+                    self.push(EntryKind::Notice, format!("Goal reached: {reason}"));
+                } else if round >= max {
+                    self.push(
+                        EntryKind::Warning,
+                        format!(
+                            "Goal not reached after {max} follow-up turns — stopping. \
+                             Still missing: {reason}"
+                        ),
+                    );
+                } else {
+                    self.push(
+                        EntryKind::Notice,
+                        format!("Goal not reached ({round}/{max}) — continuing: {reason}"),
+                    );
+                }
+            }
             AgentEvent::UserQuestion {
                 title,
                 question,

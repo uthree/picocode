@@ -144,6 +144,10 @@ impl App {
             new_cfg.context_window = self.cfg.context_window;
         }
         new_cfg.mode.set(self.cfg.mode.get());
+        // The goal belonged to the conversation being left behind, and the
+        // fresh worker starts without one.
+        self.goal = None;
+        self.goal_round = 0;
 
         let (new_tx, new_steer) = match picocode_core::agent::spawn(
             &new_cfg,
