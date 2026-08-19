@@ -28,7 +28,7 @@ use gpui::{
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::{ActiveTheme, StyledExt, Theme};
+use gpui_component::{ActiveTheme, Sizable, StyledExt, Theme};
 use rust_i18n::t;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -113,6 +113,11 @@ pub struct ChatView {
     sessions_dir: Option<PathBuf>,
     /// Rows of the open `/resume` dialog, if any.
     session_picker: Option<Vec<session::SessionSummary>>,
+    /// Whether the session sidebar is shown (persisted in `saved`).
+    sidebar: bool,
+    /// This project's saved sessions, newest first — the sidebar's rows.
+    /// Re-read from disk when the sidebar opens and after each autosave.
+    sessions: Vec<session::SessionSummary>,
     /// Whether the `/config` dialog is open.
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
@@ -294,6 +299,10 @@ impl ChatView {
             session_id: session::new_id(),
             sessions_dir,
             session_picker: None,
+            // Open until the user closes it: the session list is only
+            // useful if it is seen.
+            sidebar: saved.sidebar.unwrap_or(true),
+            sessions: Vec::new(),
             settings_open: false,
             add_model: None,
             add_remote: None,
@@ -327,6 +336,7 @@ impl ChatView {
             list_state: ListState::new(0, ListAlignment::Bottom, px(512.)),
         };
         picocode_core::state::save_last_model(&view.cfg);
+        view.refresh_sessions();
         // Starting unattended (--auto / --bypass) is announced the same way
         // as switching into it during the session.
         match view.cfg.mode.get() {
@@ -643,23 +653,7 @@ impl ChatView {
                 self.push(EntryKind::Error, message);
             }
             ParseOutcome::Command(command) => match command {
-                Command::Clear => {
-                    let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
-                    self.goal = None;
-                    self.goal_round = 0;
-                    self.entries.clear();
-                    self.queued.clear();
-                    self.pending_attachments.clear();
-                    self.context_info = None;
-                    self.tokens_in = 0;
-                    self.tokens_out = 0;
-                    self.est_out = 0;
-                    // A cleared conversation starts a fresh session log.
-                    self.session_id = session::new_id();
-                    self.expanded_reasoning.clear();
-                    self.push(EntryKind::Notice, t!("cleared").to_string());
-                    self.reset_list();
-                }
+                Command::Clear => self.new_session(cx),
                 Command::Compact => {
                     let _ = self.cmd_tx.try_send(WorkerCmd::Compact);
                     self.push(EntryKind::Notice, t!("compacting").to_string());
@@ -945,6 +939,78 @@ impl Render for ChatView {
                 .into_any_element()
         };
 
+        // The prompt box and the row of context above it (working
+        // directory, git branch, queued prompts, staged attachments).
+        let input_row = div()
+            .v_flex()
+            .gap_1()
+            .p_3()
+            .border_t_1()
+            .border_color(border)
+            .children(self.render_queued(cx))
+            .children(self.render_attachments(cx))
+            .child(
+                div()
+                    .h_flex()
+                    .gap_1()
+                    .items_center()
+                    .text_sm()
+                    .text_color(muted_fg)
+                    .child(
+                        div()
+                            .id("workdir")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .px_1()
+                            .hover(move |s| s.bg(muted))
+                            .child(self.workdir_label())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_menu(Menu::Workspace, window, cx)
+                            })),
+                    )
+                    .children(self.git_branch.as_ref().map(|branch| {
+                        div()
+                            .h_flex()
+                            .gap_0p5()
+                            .items_center()
+                            .child(
+                                gpui_component::Icon::default()
+                                    .path("icons/git-branch.svg")
+                                    .size_3p5()
+                                    .flex_none(),
+                            )
+                            .child(branch.clone())
+                    })),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("attach")
+                            .ghost()
+                            .icon(gpui_component::Icon::default().path("icons/paperclip.svg"))
+                            .tooltip(t!("attach_tooltip").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_attachments(cx))),
+                    )
+                    .child(div().flex_1().child({
+                        // A leading `!` means a direct shell command
+                        // and a leading `/` a slash command; recolor
+                        // the input's border so the mode is obvious
+                        // while typing (mirrors the TUI's palette).
+                        let input = Input::new(&self.input);
+                        let value = self.input.read(cx).value();
+                        if value.starts_with('!') {
+                            input.border_color(cx.theme().yellow)
+                        } else if value.starts_with('/') {
+                            input.border_color(cx.theme().cyan)
+                        } else {
+                            input
+                        }
+                    }))
+                    .child(send_or_stop),
+            );
+
         div()
             .v_flex()
             .relative()
@@ -960,84 +1026,45 @@ impl Render for ChatView {
                     this.add_attachments(paths.paths(), cx);
                 },
             ))
-            .child(div().flex_1().p_4().child(transcript))
-            .children(self.render_completions(cx))
+            // The session sidebar runs the full height beside the
+            // conversation column; the status bar belongs to that column,
+            // so the mode chip and the state indicator line up with the
+            // input box rather than with the window edge.
             .child(
+                // Plain flex row, not `h_flex`: that one centers its
+                // children, and both columns must fill the height.
                 div()
-                    .v_flex()
-                    .gap_1()
-                    .p_3()
-                    .border_t_1()
-                    .border_color(border)
-                    .children(self.render_queued(cx))
-                    .children(self.render_attachments(cx))
+                    .flex()
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .children(self.render_sidebar(cx))
                     .child(
                         div()
-                            .h_flex()
-                            .gap_1()
-                            .items_center()
-                            .text_sm()
-                            .text_color(muted_fg)
+                            .v_flex()
+                            .flex_1()
+                            .min_w_0()
                             .child(
-                                div()
-                                    .id("workdir")
-                                    .cursor_pointer()
-                                    .rounded_md()
-                                    .px_1()
-                                    .hover(move |s| s.bg(muted))
-                                    .child(self.workdir_label())
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_menu(Menu::Workspace, window, cx)
-                                    })),
+                                div().h_flex().items_center().px_2().pt_2().child(
+                                    Button::new("toggle-sidebar")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(
+                                            gpui_component::Icon::default()
+                                                .path("icons/panel-left.svg"),
+                                        )
+                                        .tooltip(t!("sidebar_tooltip").to_string())
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
+                                        ),
+                                ),
                             )
-                            .children(self.git_branch.as_ref().map(|branch| {
-                                div()
-                                    .h_flex()
-                                    .gap_0p5()
-                                    .items_center()
-                                    .child(
-                                        gpui_component::Icon::default()
-                                            .path("icons/git-branch.svg")
-                                            .size_3p5()
-                                            .flex_none(),
-                                    )
-                                    .child(branch.clone())
-                            })),
-                    )
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("attach")
-                                    .ghost()
-                                    .icon(
-                                        gpui_component::Icon::default().path("icons/paperclip.svg"),
-                                    )
-                                    .tooltip(t!("attach_tooltip").to_string())
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.pick_attachments(cx)),
-                                    ),
-                            )
-                            .child(div().flex_1().child({
-                                // A leading `!` means a direct shell command
-                                // and a leading `/` a slash command; recolor
-                                // the input's border so the mode is obvious
-                                // while typing (mirrors the TUI's palette).
-                                let input = Input::new(&self.input);
-                                let value = self.input.read(cx).value();
-                                if value.starts_with('!') {
-                                    input.border_color(cx.theme().yellow)
-                                } else if value.starts_with('/') {
-                                    input.border_color(cx.theme().cyan)
-                                } else {
-                                    input
-                                }
-                            }))
-                            .child(send_or_stop),
+                            .child(div().flex_1().min_h_0().px_4().pb_4().child(transcript))
+                            .children(self.render_completions(cx))
+                            .child(input_row)
+                            .child(self.render_status_bar(cx)),
                     ),
             )
-            .child(self.render_status_bar(cx))
             .children(self.render_ctx_menu(window, cx))
             .children(self.render_menu(cx))
             .children(self.render_settings(cx))

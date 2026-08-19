@@ -24,7 +24,8 @@ OpenAI-compatible server (vLLM, etc.).
   own until a reviewer model judges the condition met (bounded by
   `goal_max_rounds`)
 - **Model switching** (`/model`), **context compaction** (`/compact`),
-  **session autosave and resume** (`/resume`), **settings** (`/config`),
+  **session autosave and resume** (`/resume`, or the GUI's session
+  sidebar), **settings** (`/config`),
   **direct shell** (`!<command>`), **instruction files** (`AGENTS.md`),
   **pluggable web search** (DuckDuckGo / SearXNG / Brave)
 - **File attachments** — send images (and audio / PDF on providers that

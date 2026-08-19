@@ -165,7 +165,7 @@ impl ChatView {
                 }
                 self.running = false;
                 self.est_out = 0;
-                self.autosave();
+                self.autosave(cx);
                 self.flush_queued();
             }
             AgentEvent::ShellOutput { output } => self.push(EntryKind::ToolOut, output),
@@ -181,7 +181,7 @@ impl ChatView {
                         t!("undo_done", files = summary).to_string(),
                     );
                     // Persist the history record the worker just added.
-                    self.autosave();
+                    self.autosave(cx);
                 }
             }
             AgentEvent::BackgroundStarted { id, command } => {
@@ -254,7 +254,7 @@ impl ChatView {
                 self.est_out = 0;
                 // Tools may have switched branches during the turn.
                 self.git_branch = picocode_core::git::branch(&self.cfg.root);
-                self.autosave();
+                self.autosave(cx);
                 self.flush_queued();
             }
             AgentEvent::Error(e) => {

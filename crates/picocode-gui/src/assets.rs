@@ -115,6 +115,17 @@ const ICONS: &[(&str, &str)] = &[
             r#"<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>"#
         ),
     ),
+    // Session sidebar: the panel toggle and the new-session button.
+    (
+        "icons/panel-left.svg",
+        lucide!(r#"<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>"#),
+    ),
+    (
+        "icons/square-pen.svg",
+        lucide!(
+            r#"<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2 2 0 1 1 3 3L12 15l-4 1 1-4Z"/>"#
+        ),
+    ),
 ];
 
 pub struct Assets;

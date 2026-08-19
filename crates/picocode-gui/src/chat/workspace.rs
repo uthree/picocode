@@ -313,6 +313,8 @@ impl ChatView {
         self.cfg = new_cfg;
         self.backend = backend;
         self.sessions_dir = session::sessions_dir_for(&self.cfg);
+        // Sessions are per project: the sidebar now lists the new one's.
+        self.refresh_sessions();
         self.git_branch = picocode_core::git::branch(&self.cfg.root);
         self.session_id = session::new_id();
         self.entries.clear();

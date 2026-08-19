@@ -42,6 +42,9 @@ pub struct GuiSettings {
     /// insert a newline).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_key: Option<SubmitKey>,
+    /// Whether the session sidebar is open (remembered across runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
