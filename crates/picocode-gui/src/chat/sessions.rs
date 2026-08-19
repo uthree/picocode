@@ -2,7 +2,10 @@
 //! per-turn autosave.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, Context, SharedString, div, px};
+use gpui::{
+    AnyElement, ClipboardItem, Context, KeyDownEvent, MouseButton, MouseDownEvent, SharedString,
+    Window, div, px,
+};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
 use rust_i18n::t;
@@ -14,6 +17,7 @@ use picocode_core::transcript::EntryKind;
 use crate::settings;
 
 use super::ChatView;
+use super::dialogs::overlay;
 
 /// Width of the session sidebar.
 const SIDEBAR_W: f32 = 220.;
@@ -225,6 +229,21 @@ impl ChatView {
                 detail,
                 active,
                 theme,
+            )
+            // Right-click opens the per-session menu (open, copy id,
+            // delete) wherever the row was clicked.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener({
+                    let id = s.id.clone();
+                    move |this, ev: &MouseDownEvent, _, cx| {
+                        if this.dialog_open() {
+                            return;
+                        }
+                        this.session_menu = Some((id.clone(), ev.position));
+                        cx.notify();
+                    }
+                }),
             );
             rows = rows.child(if active {
                 row
@@ -269,6 +288,227 @@ impl ChatView {
                 .into_any_element(),
         )
     }
+
+    /// Right-click menu on a sidebar row: open the session, copy its id
+    /// (for `/resume <id>`) or delete it.
+    pub(super) fn render_session_menu(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (id, pos) = self.session_menu.clone()?;
+        let current = id == self.session_id;
+        let theme = cx.theme();
+        // Keep the panel inside the window.
+        let viewport = window.viewport_size();
+        let x = pos.x.min(viewport.width - px(200.)).max(px(0.));
+        let y = pos.y.min(viewport.height - px(120.)).max(px(0.));
+
+        let mut panel = div()
+            .v_flex()
+            .w(px(190.))
+            .p_1()
+            .rounded_lg()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_lg()
+            .text_sm();
+        // Resuming the session you are already in is a no-op, so that row
+        // is only offered on the others.
+        if !current {
+            panel = panel.child(
+                menu_item(
+                    "session-menu-open",
+                    t!("session_menu_open").to_string(),
+                    theme,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        this.session_menu = None;
+                        this.resume_session(&id, cx);
+                    }
+                })),
+            );
+        }
+        panel = panel
+            .child(
+                menu_item(
+                    "session-menu-copy",
+                    t!("session_menu_copy_id").to_string(),
+                    theme,
+                )
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(id.clone()));
+                        this.session_menu = None;
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
+                menu_item(
+                    "session-menu-delete",
+                    t!("session_menu_delete").to_string(),
+                    theme,
+                )
+                .text_color(theme.danger)
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, window, cx| this.confirm_delete_session(&id, window, cx)
+                })),
+            );
+
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(
+                    div()
+                        .id("session-menu-backdrop")
+                        .absolute()
+                        .inset_0()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.session_menu = None;
+                            cx.notify();
+                        })),
+                )
+                .child(div().absolute().left(x).top(y).occlude().child(panel))
+                .into_any_element(),
+        )
+    }
+
+    /// Ask before deleting: the session file is the only copy of that
+    /// conversation.
+    fn confirm_delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.session_menu = None;
+        // Clearing the conversation under a running turn would strand it,
+        // so the current session waits until the turn ends.
+        if id == self.session_id && self.running {
+            self.push(EntryKind::Error, t!("session_delete_running").to_string());
+            cx.notify();
+            return;
+        }
+        let title = self
+            .sessions
+            .iter()
+            .find(|s| s.id == id)
+            .filter(|s| !s.snippet.is_empty())
+            .map(|s| s.snippet.clone())
+            .unwrap_or_else(|| id.to_string());
+        self.session_delete = Some((id.to_string(), title));
+        self.dialog_focus.focus(window);
+        cx.notify();
+    }
+
+    /// The delete confirmation dialog.
+    pub(super) fn render_session_delete(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (id, title) = self.session_delete.clone()?;
+        let theme = cx.theme();
+        Some(
+            overlay()
+                .child(
+                    div()
+                        .id("session-delete-dialog")
+                        .track_focus(&self.dialog_focus)
+                        .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                            if ev.keystroke.key == "escape" {
+                                this.session_delete = None;
+                                cx.notify();
+                            }
+                        }))
+                        .v_flex()
+                        .w(px(420.))
+                        .gap_3()
+                        .p_4()
+                        .rounded_lg()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                            div()
+                                .font_bold()
+                                .child(t!("session_delete_title").to_string()),
+                        )
+                        .child(div().text_sm().child(title))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(t!("session_delete_note").to_string()),
+                        )
+                        .child(
+                            div()
+                                .h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    Button::new("session-delete-cancel")
+                                        .label(t!("cancel").to_string())
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.session_delete = None;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    Button::new("session-delete-confirm")
+                                        .danger()
+                                        .label(t!("delete").to_string())
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.delete_session(&id.clone(), cx)
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Delete the session file. Deleting the conversation you are in also
+    /// starts a fresh one, so the next autosave doesn't write it back.
+    fn delete_session(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.session_delete = None;
+        let Some(dir) = self.sessions_dir.clone() else {
+            self.push(EntryKind::Error, t!("no_home").to_string());
+            cx.notify();
+            return;
+        };
+        if let Err(e) = session::delete(&dir, id) {
+            self.push(
+                EntryKind::Error,
+                t!("session_delete_failed", error = format!("{e:#}")).to_string(),
+            );
+            cx.notify();
+            return;
+        }
+        if id == self.session_id {
+            self.new_session(cx);
+        }
+        self.push(
+            EntryKind::Notice,
+            t!("session_deleted", id = id).to_string(),
+        );
+        self.refresh_sessions();
+        cx.notify();
+    }
+}
+
+/// One row of the per-session right-click menu.
+fn menu_item(
+    id: &'static str,
+    label: String,
+    theme: &gpui_component::theme::Theme,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .cursor_pointer()
+        .rounded_md()
+        .px_2()
+        .py_1()
+        .hover(|s| s.bg(theme.muted))
+        .child(label)
 }
 
 /// One sidebar row: the first prompt over its age and message count. The

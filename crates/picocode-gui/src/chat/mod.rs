@@ -118,6 +118,10 @@ pub struct ChatView {
     /// This project's saved sessions, newest first — the sidebar's rows.
     /// Re-read from disk when the sidebar opens and after each autosave.
     sessions: Vec<session::SessionSummary>,
+    /// Open right-click menu on a sidebar row: (session id, click position).
+    session_menu: Option<(String, Point<Pixels>)>,
+    /// Session waiting for the delete confirmation: (id, row title).
+    session_delete: Option<(String, String)>,
     /// Whether the `/config` dialog is open.
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
@@ -303,6 +307,8 @@ impl ChatView {
             // useful if it is seen.
             sidebar: saved.sidebar.unwrap_or(true),
             sessions: Vec::new(),
+            session_menu: None,
+            session_delete: None,
             settings_open: false,
             add_model: None,
             add_remote: None,
@@ -593,6 +599,7 @@ impl ChatView {
         self.approval.is_some()
             || self.question.is_some()
             || self.session_picker.is_some()
+            || self.session_delete.is_some()
             || self.settings_open
             || self.add_model.is_some()
             || self.prompt_edit.is_some()
@@ -1044,20 +1051,43 @@ impl Render for ChatView {
                             .v_flex()
                             .flex_1()
                             .min_w_0()
+                            // Toolbar: the sidebar toggle on the left, the
+                            // settings button (same dialog as `/config`)
+                            // on the right.
                             .child(
-                                div().h_flex().items_center().px_2().pt_2().child(
-                                    Button::new("toggle-sidebar")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(
-                                            gpui_component::Icon::default()
-                                                .path("icons/panel-left.svg"),
-                                        )
-                                        .tooltip(t!("sidebar_tooltip").to_string())
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
-                                        ),
-                                ),
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_2()
+                                    .pt_2()
+                                    .child(
+                                        Button::new("toggle-sidebar")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(
+                                                gpui_component::Icon::default()
+                                                    .path("icons/panel-left.svg"),
+                                            )
+                                            .tooltip(t!("sidebar_tooltip").to_string())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_sidebar(cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("open-settings")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(
+                                                gpui_component::Icon::default()
+                                                    .path("icons/settings-2.svg"),
+                                            )
+                                            .tooltip(t!("settings_tooltip").to_string())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.settings_open = true;
+                                                cx.notify();
+                                            })),
+                                    ),
                             )
                             .child(div().flex_1().min_h_0().px_4().pb_4().child(transcript))
                             .children(self.render_completions(cx))
@@ -1072,6 +1102,8 @@ impl Render for ChatView {
             .children(self.render_add_remote(cx))
             .children(self.render_prompt_edit(cx))
             .children(self.render_session_picker(cx))
+            .children(self.render_session_menu(window, cx))
+            .children(self.render_session_delete(cx))
             .children(self.render_approval(cx))
             .children(self.render_question(cx))
             .children(self.render_image_preview(cx))

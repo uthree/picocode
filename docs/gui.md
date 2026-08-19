@@ -138,11 +138,17 @@ signing/notarization) may come later.
   over its age and message count, and the one you are in is highlighted
   (a conversation with nothing saved yet shows as "new session"). Click
   a row to load it: the same path `/resume` takes, so a running turn
-  refuses with a notice instead of switching under the agent's feet. The
-  ✎ button in its header starts a new session (`/clear` — the old one
-  stays in the list), and the panel button at the top of the
-  conversation shows or hides the sidebar, remembered across restarts.
-  Switching workspaces re-lists the new project's sessions.
+  refuses with a notice instead of switching under the agent's feet.
+  Right-clicking a row opens a menu: open the session, copy its id (what
+  `/resume <id>` takes) or delete it — deleting asks first, and deleting
+  the conversation you are in also starts a fresh one so the next
+  autosave doesn't write the file straight back. The ✎ button in its
+  header starts a new session (`/clear` — the old one stays in the
+  list), and the panel button at the top of the conversation shows or
+  hides the sidebar, remembered across restarts. Switching workspaces
+  re-lists the new project's sessions.
+- **Toolbar**: above the conversation, the sidebar toggle on the left and
+  a settings button on the right — the same dialog as `/config`.
 - **Theme**: follows the system light/dark appearance live by default; the
   `/config` theme row forces light or dark. A separate "color theme" row
   picks the palette family — Default, Ayu, Catppuccin, Everforest,

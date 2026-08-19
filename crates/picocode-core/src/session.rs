@@ -167,6 +167,18 @@ pub fn load(dir: &Path, id: &str) -> anyhow::Result<SessionFile> {
     Ok(session)
 }
 
+/// Delete a saved session. A file that is already gone is not an error:
+/// the row the user clicked may have been removed by another window.
+pub fn delete(dir: &Path, id: &str) -> anyhow::Result<()> {
+    let path = dir.join(format!("{id}.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow::Error::new(e))
+            .with_context(|| format!("failed to delete {}", path.display())),
+    }
+}
+
 /// All readable sessions in the directory, most recently saved first.
 /// Unreadable or incompatible files are skipped.
 pub fn list(dir: &Path) -> Vec<SessionSummary> {
@@ -306,6 +318,17 @@ mod tests {
         assert_eq!(sessions[0].messages, 2);
         assert_eq!(sessions[0].snippet, "second session prompt");
         assert_eq!(sessions[1].id, "old");
+    }
+
+    #[test]
+    fn delete_removes_the_file_and_forgives_a_missing_one() {
+        let dir = tempfile::tempdir().unwrap();
+        save(dir.path(), "s1", &sample("m", "p")).unwrap();
+        delete(dir.path(), "s1").unwrap();
+        assert!(list(dir.path()).is_empty());
+        assert!(load(dir.path(), "s1").is_err());
+        // Deleting again (another window got there first) is a no-op.
+        delete(dir.path(), "s1").unwrap();
     }
 
     #[test]

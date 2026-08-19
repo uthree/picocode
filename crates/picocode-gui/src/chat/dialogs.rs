@@ -929,7 +929,7 @@ impl ChatView {
 }
 
 /// Full-window dimmed backdrop for dialogs.
-fn overlay() -> gpui::Div {
+pub(super) fn overlay() -> gpui::Div {
     div()
         .absolute()
         .inset_0()
