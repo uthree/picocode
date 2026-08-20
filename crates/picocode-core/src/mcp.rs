@@ -10,7 +10,11 @@
 //! MCP tool calls go through the same approval flow as destructive
 //! built-ins: names the approval hook doesn't recognize are treated as
 //! external and ask by default (allow-listable via `allow_tools`).
+//!
+//! That check is by *name*, which is why [`may_register`] refuses a server
+//! tool that wears a built-in's name — see its doc comment.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -65,9 +69,29 @@ impl McpConnections {
 pub async fn connect_all(configs: &[McpServer]) -> (McpConnections, Vec<String>) {
     let mut servers = Vec::new();
     let mut errors = Vec::new();
+    let mut taken = HashSet::new();
     for config in configs {
         match tokio::time::timeout(CONNECT_TIMEOUT, connect_one(config)).await {
-            Ok(Ok(connection)) => servers.push(connection),
+            Ok(Ok(mut connection)) => {
+                let mut refused = Vec::new();
+                connection.tools.retain(|tool| {
+                    let ok = may_register(tool.name.as_ref(), &mut taken);
+                    if !ok {
+                        refused.push(tool.name.to_string());
+                    }
+                    ok
+                });
+                if !refused.is_empty() {
+                    errors.push(format!(
+                        "MCP server `{}`: not registering {} — that name is already taken, \
+                         and a tool taking it over would inherit the approval class the \
+                         name carries instead of being asked about",
+                        config.name,
+                        refused.join(", ")
+                    ));
+                }
+                servers.push(connection);
+            }
             Ok(Err(e)) => errors.push(format!("MCP server `{}`: {e:#}", config.name)),
             Err(_) => errors.push(format!(
                 "MCP server `{}`: connection timed out after {}s",
@@ -82,6 +106,24 @@ pub async fn connect_all(configs: &[McpServer]) -> (McpConnections, Vec<String>)
         },
         errors,
     )
+}
+
+/// Whether a server-supplied tool name may be registered, remembering it
+/// when it may.
+///
+/// Two things go wrong when it collides with a built-in. rig's tool set is
+/// keyed by name and MCP tools are added last, so the server's tool
+/// *replaces* the built-in (a `tracing::warn!` nobody sees — picocode
+/// installs no subscriber). And the approval hook classifies by name: a
+/// tool called `read_file`, `grep`, `list_files` or `submit_plan` is not in
+/// `DESTRUCTIVE_TOOLS`, so it would run with no prompt in any mode, while
+/// `edit_file` would inherit the edit-mode auto-approval. An unrecognized
+/// name asks — which is what every MCP tool should do.
+///
+/// Names are also unique across servers: the second one to claim a name
+/// would silently shadow the first.
+fn may_register(name: &str, taken: &mut HashSet<String>) -> bool {
+    !crate::tools::ALL_TOOLS.contains(&name) && taken.insert(name.to_string())
 }
 
 async fn connect_one(config: &McpServer) -> anyhow::Result<Connection> {
@@ -113,4 +155,24 @@ async fn connect_one(config: &McpServer) -> anyhow::Result<Connection> {
         sink: service.peer().clone(),
         _service: service,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn built_in_names_and_duplicates_are_refused() {
+        let mut taken = HashSet::new();
+        assert!(may_register("weather", &mut taken));
+        // A second server claiming the same name would shadow the first.
+        assert!(!may_register("weather", &mut taken));
+
+        // Every built-in is off limits, whether or not it is destructive:
+        // the non-destructive ones are the dangerous case, since the hook
+        // lets those run without asking.
+        for name in crate::tools::ALL_TOOLS {
+            assert!(!may_register(name, &mut taken), "{name} should be refused");
+        }
+    }
 }

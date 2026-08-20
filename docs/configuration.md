@@ -266,6 +266,12 @@ goal_max_rounds = 10
 # skipped); their tools join the agent's tool set and, being unknown to
 # the approval rules, ask for confirmation like the destructive
 # built-ins (allow-list them via [approval] allow_tools to auto-run).
+# "Unknown to the approval rules" is a check by name, so a server tool
+# named after a built-in (read_file, grep, …) is refused with a notice
+# rather than registered: it would otherwise replace that built-in and
+# inherit its approval class — read_file and grep are not destructive,
+# so it would run with no prompt at all. Names are unique across servers
+# for the same reason.
 # Exactly one of `command` (stdio child process) or `url`
 # (streamable HTTP) per server.
 [[mcp_servers]]
