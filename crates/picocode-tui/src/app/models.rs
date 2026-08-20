@@ -277,11 +277,12 @@ impl App {
             }
             KeyCode::Enter => {
                 // A fetched row switches to that model; the form rows switch
-                // to the typed one.
-                let model = if form.field >= 3 {
-                    form.fetched[form.field - 3].clone()
-                } else {
-                    form.model.trim().to_string()
+                // to the typed one. `field` is only re-clamped by Up/Down,
+                // while a second Tab can replace `fetched` with a shorter
+                // list underneath it — so index by `get`, not by `[]`.
+                let model = match form.fetched.get(form.field.wrapping_sub(3)) {
+                    Some(name) => name.clone(),
+                    None => form.model.trim().to_string(),
                 };
                 if model.is_empty() {
                     form.note = "type a model name (or Tab to fetch, ↑↓ to pick one)".to_string();

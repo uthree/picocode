@@ -176,6 +176,11 @@ impl App {
                                 names.sort();
                                 form.note = format!("{} model(s) served", names.len());
                                 form.fetched = names;
+                                // A shorter list than last time leaves the
+                                // cursor past the end; put it back on a row
+                                // that exists.
+                                let rows = 3 + form.fetched.len();
+                                form.field = form.field.min(rows - 1);
                             }
                             Err(e) => form.note = format!("fetch failed: {e}"),
                         }

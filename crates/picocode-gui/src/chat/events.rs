@@ -119,6 +119,11 @@ impl ChatView {
                 self.context_info = Some(breakdown);
             }
             AgentEvent::ModelList { label, result } => match result {
+                // Drop a reply from an endpoint that is no longer current:
+                // switching provider starts a new fetch, and a slow answer
+                // from the old one would otherwise fill the model menu with
+                // models this provider does not serve.
+                Ok(_) if label != self.model_list_label() => {}
                 Ok(mut names) => {
                     names.sort();
                     self.available_models = names;

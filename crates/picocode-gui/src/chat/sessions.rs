@@ -31,9 +31,10 @@ impl ChatView {
         let Some(dir) = self.sessions_dir.clone() else {
             return;
         };
+        let id = self.session_id.clone();
         let saved = self.rt.spawn(session::autosave(
             dir,
-            self.session_id.clone(),
+            id.clone(),
             self.cfg.root.display().to_string(),
             self.cfg.model_label(),
             self.entries.clone(),
@@ -43,6 +44,14 @@ impl ChatView {
         cx.spawn(async move |this, cx| {
             let _ = saved.await;
             let _ = this.update(cx, |view, cx| {
+                // Starting a new session stops *future* autosaves writing
+                // this id, but not the one already in flight — without this
+                // a session deleted right after a turn came straight back.
+                if view.deleted_sessions.remove(&id)
+                    && let Some(dir) = &view.sessions_dir
+                {
+                    let _ = session::delete(dir, &id);
+                }
                 view.refresh_sessions();
                 cx.notify();
             });
@@ -483,6 +492,9 @@ impl ChatView {
             cx.notify();
             return;
         }
+        // An autosave spawned before this may still be writing the file;
+        // its continuation checks this set and deletes again.
+        self.deleted_sessions.insert(id.to_string());
         if id == self.session_id {
             self.new_session(cx);
         }

@@ -122,6 +122,10 @@ pub struct ChatView {
     session_menu: Option<(String, Point<Pixels>)>,
     /// Session waiting for the delete confirmation: (id, row title).
     session_delete: Option<(String, String)>,
+    /// Sessions deleted while an autosave of them may still be in flight.
+    /// The autosave continuation deletes the file again rather than letting
+    /// the write win the race.
+    deleted_sessions: std::collections::HashSet<String>,
     /// Whether the `/config` dialog is open.
     settings_open: bool,
     /// Open add-model dialog (reached from the model menu), if any.
@@ -309,6 +313,7 @@ impl ChatView {
             sessions: Vec::new(),
             session_menu: None,
             session_delete: None,
+            deleted_sessions: std::collections::HashSet::new(),
             settings_open: false,
             add_model: None,
             add_remote: None,

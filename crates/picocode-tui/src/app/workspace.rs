@@ -80,8 +80,12 @@ impl App {
                 form.path.pop();
             }
             // A suggestion row fills the host and moves on to the path.
+            // `hosts` is fixed once the form opens, so the index is in range
+            // — `get` keeps it that way if that ever stops being true.
             KeyCode::Enter if form.field >= 3 => {
-                form.host = form.hosts[form.field - 3].clone();
+                if let Some(host) = form.hosts.get(form.field - 3) {
+                    form.host = host.clone();
+                }
                 form.field = 2;
             }
             KeyCode::Enter => {

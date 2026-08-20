@@ -39,14 +39,21 @@ impl AddModel {
 impl ChatView {
     /// Ask the provider for its model list in the background; the answer
     /// arrives as a `ModelList` event through the regular pump.
+    /// Identifies the endpoint a model list belongs to, so a reply that
+    /// arrives after a provider switch can be told apart from the one that
+    /// was asked for.
+    pub(super) fn model_list_label(&self) -> String {
+        format!(
+            "{} @ {}",
+            config::provider_name(self.cfg.provider),
+            models::base_url(self.cfg.provider, self.cfg.base_url.as_deref())
+        )
+    }
+
     pub(super) fn refresh_models(&self) {
         let provider = self.cfg.provider;
         let base = self.cfg.base_url.clone();
-        let label = format!(
-            "{} @ {}",
-            config::provider_name(provider),
-            models::base_url(provider, base.as_deref())
-        );
+        let label = self.model_list_label();
         let event_tx = self.event_tx.clone();
         self.rt.spawn(async move {
             let result = models::fetch(provider, base.as_deref())

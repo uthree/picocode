@@ -929,10 +929,16 @@ impl ChatView {
 }
 
 /// Full-window dimmed backdrop for dialogs.
+///
+/// `occlude` is what makes the dialog modal: dimming alone still let clicks
+/// through to whatever sat behind, and clicking the dark area is exactly
+/// what people do to dismiss a dialog. A click landing on a sidebar row
+/// there would resume another session behind the open dialog.
 pub(super) fn overlay() -> gpui::Div {
     div()
         .absolute()
         .inset_0()
+        .occlude()
         .flex()
         .items_center()
         .justify_center()
