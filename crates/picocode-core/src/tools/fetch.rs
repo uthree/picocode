@@ -57,9 +57,18 @@ fn is_blocked(ip: IpAddr) -> bool {
     }
 }
 
-/// Resolve `url`'s host and refuse it if anything it points at is blocked.
-/// The lookup happens here rather than trusting the hostname, so a public
-/// name resolving to 10.0.0.1 is caught too.
+/// Tail shared by both refusals below.
+const REFUSED: &str = "web_fetch does not reach link-local or private addresses (cloud \
+     metadata endpoints and internal services). If that is really the intent, run it \
+     yourself with a `!` command.";
+
+/// Refuse `url` if the host is, or resolves to, a blocked address.
+///
+/// A literal address is checked as written: asking the resolver about one is
+/// pointless, and `getaddrinfo` rejects an IPv6 literal outright on a machine
+/// with no IPv6 — which would refuse the URL with "could not resolve" instead
+/// of saying why. A name is looked up, so a public host pointing at 10.0.0.1
+/// is caught too.
 ///
 /// This is a check, not a guarantee: DNS can answer differently for the
 /// connection that follows (rebinding). Closing that would mean dialing the
@@ -70,9 +79,19 @@ async fn check_destination(url: &url::Url) -> Result<(), ToolError> {
             "only http:// and https:// URLs are supported",
         ));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| ToolError::new(format!("`{url}` has no host")))?;
+    let literal = |ip: IpAddr| {
+        if is_blocked(ip) {
+            Err(ToolError::new(format!("{ip} — {REFUSED}")))
+        } else {
+            Ok(())
+        }
+    };
+    let host = match url.host() {
+        Some(url::Host::Ipv4(v4)) => return literal(v4.into()),
+        Some(url::Host::Ipv6(v6)) => return literal(v6.into()),
+        Some(url::Host::Domain(host)) => host,
+        None => return Err(ToolError::new(format!("`{url}` has no host"))),
+    };
     let port = url.port_or_known_default().unwrap_or(80);
     let addrs: Vec<_> = tokio::net::lookup_host((host, port))
         .await
@@ -80,9 +99,7 @@ async fn check_destination(url: &url::Url) -> Result<(), ToolError> {
         .collect();
     match addrs.iter().find(|a| is_blocked(a.ip())) {
         Some(bad) => Err(ToolError::new(format!(
-            "{host} resolves to {} — web_fetch does not reach link-local or private \
-             addresses (cloud metadata endpoints and internal services). If that is \
-             really the intent, run it yourself with a `!` command.",
+            "{host} resolves to {} — {REFUSED}",
             bad.ip()
         ))),
         None => Ok(()),
@@ -360,6 +377,9 @@ mod tests {
         assert!(err.0.contains("only http"));
     }
 
+    /// Address literals must be judged without a lookup: a runner with no
+    /// IPv6 cannot resolve `fd00::1` at all, and "could not resolve" is the
+    /// wrong reason to refuse it.
     #[tokio::test]
     async fn refuses_link_local_and_private_destinations() {
         for url in [
@@ -369,6 +389,7 @@ mod tests {
             "http://192.168.1.1/",
             "http://172.16.5.4:8080/",
             "http://[fd00::1]/",
+            "http://[fe80::1]/",
         ] {
             let err = WebFetch::new()
                 .call(FetchArgs { url: url.into() })
