@@ -9,9 +9,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Bare `cargo test`/`cargo clippy` follow `default-members`, which is just
+  # picocode-tui: that ran 21 of the 168 tests and never linted the other two
+  # crates. Everything below names its packages explicitly.
   check:
-    name: fmt · clippy · test
-    runs-on: ubuntu-latest
+    name: fmt · clippy · test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -22,15 +29,45 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
+      # Cheap and platform-independent, so only one runner pays for it.
       - name: Format check
-        run: cargo fmt --check
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
 
+      # picocode-gui is excluded here and covered by the macos job: gpui
+      # needs Vulkan and extra system packages on Linux, and is untested on
+      # Windows (see crates/picocode-gui/Cargo.toml).
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude picocode-gui --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace --exclude picocode-gui
 
       - name: Build
-        run: cargo build
+        run: cargo build --workspace --exclude picocode-gui
+
+  # The GUI ships for macOS only, so that is where it is linted and tested.
+  gui:
+    name: clippy · test (gui, macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-gui
+
+      - name: Clippy
+        run: cargo clippy -p picocode-gui --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p picocode-gui
