@@ -44,9 +44,30 @@ pub(super) struct SearchFileConfig {
 pub struct SearchConfig {
     pub provider: SearchProvider,
     pub base_url: Option<String>,
+    /// Which provider `base_url` was written for. `[search]` has one
+    /// endpoint field, and the provider can change at runtime, so the two
+    /// have to be kept together — see [`SearchConfig::endpoint_for`].
+    pub base_url_provider: SearchProvider,
     pub max_results: usize,
     /// API key for providers that need one (brave).
     pub api_key: Option<String>,
+}
+
+impl SearchConfig {
+    /// The configured endpoint override, but only for the provider it was
+    /// configured for.
+    ///
+    /// Switching providers in `/config` changes `provider` alone, so a
+    /// searxng `base_url` used to carry over to brave — and brave requests
+    /// carry `X-Subscription-Token`, so the user's real Brave key went to
+    /// their searxng host. No malicious config needed.
+    pub fn endpoint_for(&self, provider: SearchProvider) -> Option<&str> {
+        if self.base_url_provider == provider {
+            self.base_url.as_deref()
+        } else {
+            None
+        }
+    }
 }
 
 pub(super) fn resolve_search(
@@ -67,6 +88,7 @@ pub(super) fn resolve_search(
     Ok(SearchConfig {
         provider,
         base_url: file.base_url,
+        base_url_provider: provider,
         max_results: file.max_results.unwrap_or(5).clamp(1, 20),
         api_key: brave_key,
     })
@@ -110,7 +132,8 @@ impl SearchHandle {
         .into_iter()
         .filter(|p| match p {
             SearchProvider::Duckduckgo => true,
-            SearchProvider::Searxng => cfg.base_url.is_some(),
+            // Only an endpoint configured *as* searxng makes searxng usable.
+            SearchProvider::Searxng => cfg.endpoint_for(SearchProvider::Searxng).is_some(),
             SearchProvider::Brave => cfg.api_key.is_some(),
         })
         .collect()
@@ -148,6 +171,7 @@ mod tests {
         let handle = SearchHandle::new(SearchConfig {
             provider: SearchProvider::Duckduckgo,
             base_url: None,
+            base_url_provider: SearchProvider::Duckduckgo,
             max_results: 5,
             api_key: None,
         });
@@ -165,6 +189,7 @@ mod tests {
         let handle = SearchHandle::new(SearchConfig {
             provider: SearchProvider::Duckduckgo,
             base_url: None,
+            base_url_provider: SearchProvider::Duckduckgo,
             max_results: 5,
             api_key: Some("k".into()),
         });
@@ -178,6 +203,33 @@ mod tests {
         assert_eq!(handle.snapshot().provider, SearchProvider::Duckduckgo);
         handle.cycle_provider(-1);
         assert_eq!(handle.snapshot().provider, SearchProvider::Brave);
+    }
+
+    /// `[search]` has one endpoint field but the provider can change at
+    /// runtime. Brave requests carry the API key in a header, so a searxng
+    /// URL must not follow a switch to brave.
+    #[test]
+    fn an_endpoint_only_applies_to_the_provider_it_was_configured_for() {
+        let file: SearchFileConfig = toml::from_str::<FileConfig>(
+            "[search]\nprovider = \"searxng\"\nbase_url = \"https://searx.example\"",
+        )
+        .unwrap()
+        .search;
+        let cfg = resolve_search(file, Some("brave-key".into())).unwrap();
+
+        assert_eq!(
+            cfg.endpoint_for(SearchProvider::Searxng),
+            Some("https://searx.example")
+        );
+        assert_eq!(cfg.endpoint_for(SearchProvider::Brave), None);
+        assert_eq!(cfg.endpoint_for(SearchProvider::Duckduckgo), None);
+
+        // …and it still does not apply after /config switches to brave.
+        let handle = SearchHandle::new(cfg);
+        handle.set_provider(SearchProvider::Brave);
+        let after = handle.snapshot();
+        assert_eq!(after.provider, SearchProvider::Brave);
+        assert_eq!(after.endpoint_for(SearchProvider::Brave), None);
     }
 
     #[test]

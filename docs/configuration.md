@@ -339,6 +339,11 @@ max_results = 5                   # provider and max_results are also
 # provider = "brave"              # Brave Search API; needs BRAVE_API_KEY
 ```
 
+`base_url` belongs to the provider it is written next to. Switching provider
+in `/config` does not carry it across — brave requests send `BRAVE_API_KEY`
+in a header, and a searxng endpoint following the switch would have handed
+the key to that host.
+
 ## The bash tool
 
 The `bash` tool runs commands via `sh -c` (`cmd /C` on Windows). A command

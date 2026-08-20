@@ -1045,6 +1045,7 @@ impl Config {
             search: SearchHandle::new(SearchConfig {
                 provider: SearchProvider::Duckduckgo,
                 base_url: None,
+                base_url_provider: SearchProvider::Duckduckgo,
                 max_results: 5,
                 api_key: None,
             }),

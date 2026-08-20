@@ -58,7 +58,9 @@ impl WebSearch {
         cfg: &SearchConfig,
         query: &str,
     ) -> Result<Vec<SearchResult>, ToolError> {
-        let base = cfg.base_url.as_deref().unwrap_or(DUCKDUCKGO_ENDPOINT);
+        let base = cfg
+            .endpoint_for(SearchProvider::Duckduckgo)
+            .unwrap_or(DUCKDUCKGO_ENDPOINT);
         let body = self
             .get(
                 &format!("{}/html/", base.trim_end_matches('/')),
@@ -76,7 +78,9 @@ impl WebSearch {
     ) -> Result<Vec<SearchResult>, ToolError> {
         // base_url presence is validated at config load (and the runtime
         // provider cycle only offers searxng when it is set).
-        let base = cfg.base_url.as_deref().unwrap_or_default();
+        let base = cfg
+            .endpoint_for(SearchProvider::Searxng)
+            .unwrap_or_default();
         let body = self
             .get(
                 &format!("{}/search", base.trim_end_matches('/')),
@@ -92,7 +96,11 @@ impl WebSearch {
         cfg: &SearchConfig,
         query: &str,
     ) -> Result<Vec<SearchResult>, ToolError> {
-        let base = cfg.base_url.as_deref().unwrap_or(BRAVE_ENDPOINT);
+        // Only a base_url configured for brave is used here: the key rides
+        // along in a header, so it must not follow a switch from searxng.
+        let base = cfg
+            .endpoint_for(SearchProvider::Brave)
+            .unwrap_or(BRAVE_ENDPOINT);
         let count = cfg.max_results.to_string();
         let body = self
             .get(
@@ -386,6 +394,7 @@ mod tests {
         let cfg = SearchConfig {
             provider: SearchProvider::Duckduckgo,
             base_url: None,
+            base_url_provider: SearchProvider::Duckduckgo,
             max_results: 5,
             api_key: None,
         };
