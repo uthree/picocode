@@ -112,6 +112,13 @@ current model and keeps writing to the same log. Empty conversations are
 never written. The TUI and the GUI share the same session store, so either
 front end can resume the other's conversations.
 
+`<project>` is the project path with non-alphanumeric characters replaced by
+`-`, plus a short digest of the full path — the readable part alone is not
+unique (`~/work/a-b` and `~/work/a/b` flatten to the same thing), and two
+projects sharing one store would show each other's conversations. A store
+written by an earlier version, under the name without the digest, is moved
+across the first time the project is opened.
+
 ## The config file
 
 picocode reads `picocode.toml` from the project root — the nearest ancestor

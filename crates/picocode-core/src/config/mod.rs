@@ -287,19 +287,10 @@ impl RemoteSpec {
         format!("{}:{}", self.destination, self.path.display())
     }
 
-    /// Filesystem-safe slug identifying this remote for session storage,
-    /// e.g. `ssh-user@host-srv-app`.
-    pub fn slug(&self) -> String {
-        let raw = format!("ssh-{}-{}", self.destination, self.path.display());
-        raw.chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect()
+    /// Text identifying this remote for session storage; `session::keyed_slug`
+    /// turns it into the directory name.
+    pub fn store_key(&self) -> String {
+        format!("ssh-{}-{}", self.destination, self.path.display())
     }
 }
 

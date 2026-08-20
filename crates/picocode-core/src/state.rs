@@ -24,11 +24,12 @@ pub struct LastModel {
 /// `$XDG_DATA_HOME/picocode/state/<project-slug>.json` (default
 /// `~/.local/share/…`, with `%USERPROFILE%` as the home on Windows).
 pub fn state_path(root: &Path) -> Option<PathBuf> {
-    Some(
-        crate::session::data_dir()?
-            .join("picocode/state")
-            .join(format!("{}.json", crate::session::slug(root))),
-    )
+    use crate::session::{keyed_slug, legacy_slug, migrate_legacy};
+    let text = root.display().to_string();
+    let dir = crate::session::data_dir()?.join("picocode/state");
+    let path = dir.join(format!("{}.json", keyed_slug(&text)));
+    migrate_legacy(&dir.join(format!("{}.json", legacy_slug(&text))), &path);
+    Some(path)
 }
 
 /// Load the saved state; any unreadable or invalid file counts as none.

@@ -49,18 +49,24 @@ pub struct SessionSummary {
 /// Where this project's sessions live:
 /// `$XDG_DATA_HOME`/picocode/sessions/<project-slug> (default `~/.local/share`).
 pub fn sessions_dir(root: &Path) -> Option<PathBuf> {
-    Some(data_dir()?.join("picocode/sessions").join(slug(root)))
+    sessions_dir_keyed(&root.display().to_string())
 }
 
 /// Sessions directory for a config: a remote workspace is keyed by its
-/// host+path slug (so remote sessions don't collide with a same-named
-/// local project and always live on the local machine).
+/// host+path (so remote sessions don't collide with a same-named local
+/// project and always live on the local machine).
 pub fn sessions_dir_for(cfg: &crate::config::Config) -> Option<PathBuf> {
-    let key = match &cfg.remote {
-        Some(spec) => spec.slug(),
-        None => slug(&cfg.root),
-    };
-    Some(data_dir()?.join("picocode/sessions").join(key))
+    sessions_dir_keyed(&match &cfg.remote {
+        Some(spec) => spec.store_key(),
+        None => cfg.root.display().to_string(),
+    })
+}
+
+fn sessions_dir_keyed(text: &str) -> Option<PathBuf> {
+    let base = data_dir()?.join("picocode/sessions");
+    let dir = base.join(keyed_slug(text));
+    migrate_legacy(&base.join(legacy_slug(text)), &dir);
+    Some(dir)
 }
 
 /// Base directory for picocode's data: `$XDG_DATA_HOME`, defaulting to
@@ -74,12 +80,39 @@ pub fn data_dir() -> Option<PathBuf> {
     }
 }
 
-pub(crate) fn slug(root: &Path) -> String {
-    root.display()
-        .to_string()
-        .chars()
+/// Filesystem-safe store key for a project path or remote target: a
+/// readable part where every non-alphanumeric character becomes `-`, plus a
+/// short digest of the original text.
+///
+/// The readable part alone is not injective — `~/work/a-b` and `~/work/a/b`
+/// both flatten to `-work-a-b`, and two unrelated projects then shared one
+/// session store and one saved-model file, each seeing the other's
+/// conversations. The digest separates them while keeping the directory
+/// name recognisable.
+pub(crate) fn keyed_slug(text: &str) -> String {
+    let digest = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(text));
+    format!("{}-{}", legacy_slug(text), &digest[..8])
+}
+
+/// The pre-digest name, kept only to find a store written by an older
+/// version. It is exactly the prefix of [`keyed_slug`]'s output.
+pub(crate) fn legacy_slug(text: &str) -> String {
+    text.chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect()
+}
+
+/// Move a store saved under the pre-digest name into place, once. A missing
+/// old entry is the normal case; a rename that cannot happen leaves the old
+/// entry untouched and simply starts the new store empty.
+pub(crate) fn migrate_legacy(old: &Path, new: &Path) {
+    if !new.exists()
+        && old.exists()
+        && let Some(parent) = new.parent()
+    {
+        let _ = std::fs::create_dir_all(parent);
+        let _ = std::fs::rename(old, new);
+    }
 }
 
 /// A new unique session id. The counter disambiguates ids created within the
@@ -343,7 +376,39 @@ mod tests {
     #[test]
     fn ids_are_unique_and_slug_is_filesystem_safe() {
         assert_ne!(new_id(), new_id());
-        assert_eq!(slug(Path::new("/a/b c/d")), "-a-b-c-d");
+        let s = keyed_slug("/a/b c/d");
+        assert!(s.starts_with("-a-b-c-d-"), "{s}");
+        assert!(s.chars().all(|c| c.is_alphanumeric() || c == '-'), "{s}");
+    }
+
+    /// Two paths that flatten to the same readable name must not share a
+    /// store: they used to, and each project saw the other's sessions.
+    #[test]
+    fn slugs_of_different_paths_never_collide() {
+        assert_eq!(legacy_slug("/work/a-b"), legacy_slug("/work/a/b"));
+        assert_ne!(keyed_slug("/work/a-b"), keyed_slug("/work/a/b"));
+        // Same path, same key — the digest is of the text, not of a clock.
+        assert_eq!(keyed_slug("/work/a-b"), keyed_slug("/work/a-b"));
+    }
+
+    #[test]
+    fn a_store_under_the_old_name_is_moved_over() {
+        let base = tempfile::tempdir().unwrap();
+        let old = base.path().join(legacy_slug("/work/proj"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("s.json"), "{}").unwrap();
+
+        let new = base.path().join(keyed_slug("/work/proj"));
+        migrate_legacy(&old, &new);
+        assert!(new.join("s.json").exists());
+        assert!(!old.exists());
+
+        // An existing new store is never overwritten by a stale old one.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("other.json"), "{}").unwrap();
+        migrate_legacy(&old, &new);
+        assert!(!new.join("other.json").exists());
+        assert!(old.exists());
     }
 
     #[test]
