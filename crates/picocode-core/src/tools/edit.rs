@@ -5,7 +5,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve, truncate_output};
+use super::{ToolError, resolve_in, truncate_output};
 use crate::backend::Workspace;
 
 /// Hard cap on the configured `after_edit` command.
@@ -138,7 +138,7 @@ impl Tool for EditFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.ws.root, &args.path)?;
+        let path = resolve_in(&self.ws, &args.path)?;
         let backend = &self.ws.backend;
 
         // No (or empty) old_string: whole-file create/overwrite (the former

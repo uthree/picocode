@@ -2,7 +2,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve};
+use super::{ToolError, resolve_in};
 use crate::backend::Workspace;
 
 const MAX_MATCHES: usize = 200;
@@ -53,7 +53,7 @@ impl Tool for Grep {
         let re = regex::Regex::new(&args.pattern)
             .map_err(|e| ToolError::new(format!("invalid regex: {e}")))?;
         let base = match &args.path {
-            Some(p) => resolve(&self.ws.root, p)?,
+            Some(p) => resolve_in(&self.ws, p)?,
             None => self.ws.root.clone(),
         };
 

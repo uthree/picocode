@@ -14,7 +14,7 @@ OpenAI-compatible server (vLLM, etc.).
   code blocks and line diffs for file edits
 - **8 built-in tools**: `read_file` / `list_files` / `grep` / `edit_file` /
   `bash` / `web_search` / `web_fetch` / `submit_plan` — file tools are
-  confined to the project directory
+  confined to the project directory, symlinks leading out of it included
 - **Approval flow** for anything that changes state or talks to the
   network, with allow/deny rules and **permission modes**
   (read-only / edit / plan / auto / bypass) — `auto` hands the

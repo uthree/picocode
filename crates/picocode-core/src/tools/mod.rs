@@ -142,10 +142,58 @@ impl ToolError {
     }
 }
 
+/// Resolve a tool path against the workspace root and confine it to the
+/// project: [`resolve`] applies `..` lexically, and on a local workspace
+/// [`confine_through_symlinks`] additionally refuses paths that only look
+/// contained. Every file tool goes through this.
+pub(crate) fn resolve_in(ws: &crate::backend::Workspace, path: &str) -> Result<PathBuf, ToolError> {
+    let out = resolve(&ws.root, path)?;
+    // A remote workspace's paths live on the other host, so canonicalizing
+    // them here would consult the wrong filesystem; the lexical check is
+    // all that applies there.
+    if !ws.backend.is_remote() {
+        confine_through_symlinks(&ws.root, path, &out)?;
+    }
+    Ok(out)
+}
+
+/// Refuse a path that stays inside the root lexically but leaves it once
+/// symlinks are followed. `resolve` never touches the filesystem, so a
+/// directory symlink committed in a repository (`out -> ~/.ssh`) used to
+/// pass the check while the OS resolved the write straight through it —
+/// and `edit_file` is auto-approved in edit mode, so nothing else asked.
+///
+/// Only the part of the path that already exists can hold a symlink, so
+/// the deepest existing ancestor is what gets canonicalized. This is a
+/// check, not a lock: a symlink swapped in between here and the open still
+/// wins that race, which would need `openat`/`O_NOFOLLOW` to close.
+fn confine_through_symlinks(root: &Path, path: &str, out: &Path) -> Result<(), ToolError> {
+    let real_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let mut existing = out;
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            if real.starts_with(&real_root) {
+                return Ok(());
+            }
+            return Err(ToolError::new(format!(
+                "path `{path}` leaves the working directory ({}) through a symlink; \
+                 file tools stay inside the project — use bash if you really need to \
+                 follow it",
+                root.display()
+            )));
+        }
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            // Nothing along the path exists yet, so there is no link to follow.
+            None => return Ok(()),
+        }
+    }
+}
+
 /// Resolve a (possibly relative) path against the tool root and confine it
 /// to the root: `..` is applied lexically and the result must stay inside
-/// the working directory. File tools can never touch anything outside the
-/// project; the model is told to fall back to `bash` (which asks) instead.
+/// the working directory. Lexical only — callers want [`resolve_in`],
+/// which also closes the symlink route out of the project.
 pub(crate) fn resolve(root: &Path, path: &str) -> Result<PathBuf, ToolError> {
     let p = Path::new(path);
     let joined = if p.is_absolute() {
@@ -241,6 +289,75 @@ mod tests {
         assert!(resolve(root, "src/../../other").is_err());
         let err = resolve(root, "/etc/hosts").unwrap_err().to_string();
         assert!(err.contains("outside the working directory"));
+    }
+
+    /// Needs real symlinks, which unprivileged Windows cannot create.
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_out_of_the_project_are_refused() {
+        use crate::backend::Workspace;
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("src")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.path().join("out")).unwrap();
+        let ws = Workspace::local(project.path().to_path_buf());
+
+        // Lexically contained — this is exactly what the old check allowed.
+        assert!(resolve(&ws.root, "out/secret").is_ok());
+
+        let err = resolve_in(&ws, "out/secret").unwrap_err().to_string();
+        assert!(err.contains("through a symlink"), "{err}");
+        // Also refused when the file behind the link does not exist yet:
+        // that is the create/overwrite path.
+        assert!(resolve_in(&ws, "out/authorized_keys").is_err());
+
+        // Links that stay inside the project, and ordinary paths, still work.
+        std::os::unix::fs::symlink(project.path().join("src"), project.path().join("inner"))
+            .unwrap();
+        assert!(resolve_in(&ws, "inner/main.rs").is_ok());
+        assert!(resolve_in(&ws, "src/main.rs").is_ok());
+        assert!(resolve_in(&ws, "brand/new/file.rs").is_ok());
+    }
+
+    /// Windows: creating a symlink needs a privilege an ordinary user does
+    /// not have, but a directory junction needs none and `canonicalize`
+    /// follows it just the same — so that is the escape to cover here.
+    #[cfg(windows)]
+    #[test]
+    fn junctions_out_of_the_project_are_refused() {
+        use crate::backend::Workspace;
+        use std::os::windows::process::CommandExt as _;
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "s").unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("src")).unwrap();
+
+        let link = project.path().join("out");
+        let made = std::process::Command::new("cmd")
+            .raw_arg("/C")
+            .raw_arg(format!(
+                "mklink /J \"{}\" \"{}\"",
+                link.display(),
+                outside.path().display()
+            ))
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(made, "could not create a junction to test with");
+
+        let ws = Workspace::local(project.path().to_path_buf());
+        assert!(resolve(&ws.root, "out/secret").is_ok());
+
+        let err = resolve_in(&ws, "out/secret").unwrap_err().to_string();
+        assert!(err.contains("through a symlink"), "{err}");
+        assert!(resolve_in(&ws, "out/authorized_keys").is_err());
+
+        assert!(resolve_in(&ws, "src/main.rs").is_ok());
+        assert!(resolve_in(&ws, "brand/new/file.rs").is_ok());
     }
 
     #[test]

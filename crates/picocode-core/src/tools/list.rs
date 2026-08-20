@@ -5,7 +5,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ToolError, resolve};
+use super::{ToolError, resolve_in};
 use crate::backend::Workspace;
 
 const MAX_ENTRIES: usize = 500;
@@ -49,7 +49,7 @@ impl Tool for ListFiles {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let base = match &args.path {
-            Some(p) => resolve(&self.ws.root, p)?,
+            Some(p) => resolve_in(&self.ws, p)?,
             None => self.ws.root.clone(),
         };
         if !self.ws.backend.is_dir(&base).await {

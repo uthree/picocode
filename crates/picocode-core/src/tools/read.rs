@@ -3,7 +3,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{ReadStamps, ToolError, resolve};
+use super::{ReadStamps, ToolError, resolve_in};
 use crate::attachment::{Attachment, AttachmentKind, looks_like_text};
 use crate::backend::Workspace;
 use crate::config::NumHandle;
@@ -72,7 +72,7 @@ impl Tool for ReadFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let path = resolve(&self.ws.root, &args.path)?;
+        let path = resolve_in(&self.ws, &args.path)?;
         let bytes = self
             .ws
             .backend
