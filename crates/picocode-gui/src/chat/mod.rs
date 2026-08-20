@@ -186,6 +186,8 @@ pub struct ChatView {
     goal_round: u64,
     /// Counter naming the temp PNGs saved from clipboard image pastes.
     clip_count: usize,
+    /// Owner-only scratch directory those PNGs go into, removed on exit.
+    clip_dir: picocode_core::clipboard::ScratchDir,
     /// Latest context composition reported by the worker, shown by /status.
     context_info: Option<picocode_core::context::Breakdown>,
     /// Rolling generation-speed meter behind the status bar's tok/s.
@@ -338,6 +340,7 @@ impl ChatView {
             goal_round: 0,
             pending_attachments: Vec::new(),
             clip_count: 0,
+            clip_dir: Default::default(),
             context_info: None,
             speed: picocode_core::speed::SpeedMeter::default(),
             ctx_menu: None,

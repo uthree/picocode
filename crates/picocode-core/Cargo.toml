@@ -28,6 +28,7 @@ url.workspace = true
 similar.workspace = true
 arboard.workspace = true
 png.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true

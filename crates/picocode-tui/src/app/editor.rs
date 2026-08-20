@@ -214,9 +214,8 @@ impl App {
     /// terminal's own paste keeps working independently of this.
     pub(super) fn paste_clipboard(&mut self) {
         use picocode_core::clipboard::{self, Pasted};
-        let dir = std::env::temp_dir().join(format!("picocode-{}", std::process::id()));
         self.clip_count += 1;
-        match clipboard::read(&dir, self.clip_count) {
+        match clipboard::read(&mut self.clip_dir, self.clip_count) {
             Ok(Some(Pasted::Files(paths))) => {
                 for path in paths {
                     self.stage_file(&path, &path.display().to_string());

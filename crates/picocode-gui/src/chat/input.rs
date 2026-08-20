@@ -247,9 +247,8 @@ impl ChatView {
             cx.propagate();
             return;
         }
-        let dir = std::env::temp_dir().join(format!("picocode-{}", std::process::id()));
         self.clip_count += 1;
-        match clipboard::read(&dir, self.clip_count) {
+        match clipboard::read(&mut self.clip_dir, self.clip_count) {
             Ok(Some(Pasted::Files(paths))) => self.add_attachments(&paths, cx),
             Ok(Some(Pasted::Image(path))) => self.add_attachments(&[path], cx),
             // Text, empty or unreadable: let the input paste text as usual.

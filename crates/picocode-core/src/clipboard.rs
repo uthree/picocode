@@ -8,6 +8,31 @@
 
 use std::path::{Path, PathBuf};
 
+/// Scratch directory for clipboard images, created on first paste and
+/// removed when it drops.
+///
+/// The path used to be `$TMPDIR/picocode-<pid>/clipboard-<n>.png`, which is
+/// guessable: on a shared `/tmp` another user could pre-create it as a
+/// symlink and catch the write. Nothing cleaned it up either, so pasted
+/// screenshots outlived the session. `tempfile` gives a random name and,
+/// on unix, owner-only permissions.
+#[derive(Default)]
+pub struct ScratchDir(Option<tempfile::TempDir>);
+
+impl ScratchDir {
+    fn path(&mut self) -> std::io::Result<&Path> {
+        if self.0.is_none() {
+            self.0 = Some(tempfile::Builder::new().prefix("picocode-").tempdir()?);
+        }
+        // Just assigned above when it was None.
+        Ok(self
+            .0
+            .as_ref()
+            .expect("scratch dir was just created")
+            .path())
+    }
+}
+
 /// What the clipboard held.
 pub enum Pasted {
     /// Copied files (e.g. Finder ⌘C) — stage as attachments.
@@ -19,10 +44,10 @@ pub enum Pasted {
 }
 
 /// Read the clipboard, preferring files, then image data, then text.
-/// Image data is written to `dir` as `clipboard-<n>.png` so it can go
+/// Image data is written into `scratch` as `clipboard-<n>.png` so it can go
 /// through the normal file-attachment path. `Ok(None)` means the
 /// clipboard holds nothing usable.
-pub fn read(dir: &Path, n: usize) -> Result<Option<Pasted>, String> {
+pub fn read(scratch: &mut ScratchDir, n: usize) -> Result<Option<Pasted>, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     if let Ok(files) = clipboard.get().file_list()
         && !files.is_empty()
@@ -32,7 +57,11 @@ pub fn read(dir: &Path, n: usize) -> Result<Option<Pasted>, String> {
     // Image errors (unsupported source format, …) fall through to text
     // rather than failing the paste; only failing to *save* is an error.
     if let Ok(image) = clipboard.get_image() {
-        let path = save_png(&image, dir, n)
+        let dir = scratch
+            .path()
+            .map_err(|e| format!("could not make a scratch directory: {e}"))?
+            .to_path_buf();
+        let path = save_png(&image, &dir, n)
             .map_err(|e| format!("could not save the pasted image: {e}"))?;
         return Ok(Some(Pasted::Image(path)));
     }
@@ -91,8 +120,8 @@ mod tests {
     #[test]
     #[ignore = "reads the real system clipboard"]
     fn real_clipboard_read() {
-        let dir = tempfile::tempdir().unwrap();
-        match read(dir.path(), 1) {
+        let mut scratch = ScratchDir::default();
+        match read(&mut scratch, 1) {
             Ok(Some(Pasted::Files(paths))) => println!("files: {paths:?}"),
             Ok(Some(Pasted::Image(path))) => {
                 let len = std::fs::metadata(&path).unwrap().len();

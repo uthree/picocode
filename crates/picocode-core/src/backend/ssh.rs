@@ -4,12 +4,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::AsyncWriteExt;
-
-/// Serial for unique control-socket names within the process.
-static NEXT: AtomicU64 = AtomicU64::new(0);
 
 /// A connected remote host. Dropping it tears the ControlMaster down.
 pub struct SshBackend {
@@ -18,6 +14,11 @@ pub struct SshBackend {
     /// Path to the ControlMaster socket shared by every later ssh call.
     control: PathBuf,
     label: String,
+    /// Owns the directory `control` lives in: a random, owner-only name
+    /// instead of the guessable `$TMPDIR/pc-ssh-<pid>-<n>.sock`, removed
+    /// when the connection is dropped. Multiplexing through a socket
+    /// someone else can pre-create is not a socket worth having.
+    _dir: tempfile::TempDir,
 }
 
 /// Single-quote a string for a POSIX remote shell: wrap in `'…'` and
@@ -69,9 +70,12 @@ impl SshBackend {
     /// `user@host`). Authentication is entirely ssh's own (keys, agent,
     /// `~/.ssh/config`); we never handle credentials.
     pub async fn connect(destination: &str) -> anyhow::Result<Self> {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // Keep the socket path short — unix sockets cap at ~104 bytes.
-        let control = std::env::temp_dir().join(format!("pc-ssh-{}-{n}.sock", std::process::id()));
+        // Keep the socket path short — unix sockets cap at ~104 bytes — and
+        // unguessable, since anyone who can create it first can sit in the
+        // middle of the multiplexed session. `tempfile` also makes the
+        // directory owner-only and removes it when the backend drops.
+        let dir = tempfile::Builder::new().prefix("pc-ssh-").tempdir()?;
+        let control = dir.path().join("s");
 
         // Establish the master in the background; ControlPersist keeps it
         // alive briefly after we exit so a clean shutdown doesn't race.
@@ -105,6 +109,7 @@ impl SshBackend {
             destination: destination.to_string(),
             control,
             label: destination.to_string(),
+            _dir: dir,
         };
         // Resolve `user@host` for the label (an alias hides both).
         if let Ok(out) = backend

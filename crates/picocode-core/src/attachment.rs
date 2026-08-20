@@ -20,7 +20,12 @@ use crate::config::Provider;
 /// Bytes sniffed from a file's head to decide whether it is text.
 const SNIFF_BYTES: usize = 8 * 1024;
 /// Cap on the inlined contents of a text attachment.
-const TEXT_ATTACHMENT_MAX_BYTES: usize = 64 * 1024;
+const TEXT_ATTACHMENT_MAX_BYTES: u64 = 64 * 1024;
+/// Cap on a media attachment's file size. The bytes are base64-encoded
+/// (~4/3 the size) and the result is held in memory alongside them, so an
+/// oversized file is an out-of-memory rather than a slow request. Well
+/// above any real screenshot or PDF.
+const MEDIA_ATTACHMENT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 /// What kind of media a file is, judged by its extension (or, for `Text`,
 /// its contents).
@@ -131,25 +136,40 @@ impl Attachment {
 
     /// Read the file and build the rig message content for it.
     pub fn to_user_content(&self) -> std::io::Result<UserContent> {
-        let bytes = std::fs::read(&self.path)?;
-        // Text attachments are inlined, not base64-encoded media.
+        use std::io::Read as _;
+
+        let total = std::fs::metadata(&self.path)?.len();
+        // Text attachments are inlined, not base64-encoded media. Only the
+        // part that will actually be shown is read, so a huge log file never
+        // enters memory just to have most of it thrown away.
         if self.kind == AttachmentKind::Text {
-            let total = bytes.len();
-            let mut end = total.min(TEXT_ATTACHMENT_MAX_BYTES);
-            // Back off to a UTF-8 boundary (a byte that isn't a continuation).
-            while end > 0 && end < total && (bytes[end] & 0xC0) == 0x80 {
-                end -= 1;
-            }
+            let mut bytes = Vec::new();
+            std::fs::File::open(&self.path)?
+                .take(TEXT_ATTACHMENT_MAX_BYTES)
+                .read_to_end(&mut bytes)?;
+            let truncated = (bytes.len() as u64) < total;
+            // The read can stop mid-character. `error_len() == None` is
+            // exactly "the input ended inside a sequence", so trim there;
+            // invalid bytes *within* the file are left to from_utf8_lossy.
+            let end = match std::str::from_utf8(&bytes) {
+                Ok(_) => bytes.len(),
+                Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                Err(_) => bytes.len(),
+            };
             let body = String::from_utf8_lossy(&bytes[..end]);
             let mut text = format!("Contents of the attached file {}:\n\n{body}", self.name());
-            if end < total {
-                text.push_str(&format!(
-                    "\n… (truncated: {} of {} bytes shown)",
-                    end, total
-                ));
+            if truncated {
+                text.push_str(&format!("\n… (truncated: {end} of {total} bytes shown)"));
             }
             return Ok(UserContent::text(text));
         }
+        if total > MEDIA_ATTACHMENT_MAX_BYTES {
+            return Err(std::io::Error::other(format!(
+                "{} is {total} bytes; attachments are capped at {MEDIA_ATTACHMENT_MAX_BYTES}",
+                self.name()
+            )));
+        }
+        let bytes = std::fs::read(&self.path)?;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         let ext = self
             .path
@@ -281,5 +301,68 @@ mod tests {
                 .unwrap()
                 .supported_by(Provider::Ollama)
         );
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    fn text_of(content: &UserContent) -> String {
+        match content {
+            UserContent::Text(t) => t.text.clone(),
+            other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_large_text_file_is_truncated_without_being_read_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.log");
+        let total = (TEXT_ATTACHMENT_MAX_BYTES as usize) * 3;
+        std::fs::write(&path, "a".repeat(total)).unwrap();
+
+        let att = Attachment::detect(&path).unwrap();
+        assert_eq!(att.kind, AttachmentKind::Text);
+        let text = text_of(&att.to_user_content().unwrap());
+        assert!(text.contains(&format!("of {total} bytes shown")), "{text}");
+        // Only the cap made it in, plus the header and the notice.
+        assert!(
+            text.len() < TEXT_ATTACHMENT_MAX_BYTES as usize + 500,
+            "{}",
+            text.len()
+        );
+    }
+
+    /// The cap can land inside a multi-byte character.
+    #[test]
+    fn truncation_stops_at_a_character_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cjk.txt");
+        // 3 bytes per character, so the 64 KiB cap cannot land on a boundary.
+        let chars = (TEXT_ATTACHMENT_MAX_BYTES as usize / 3) + 100;
+        std::fs::write(&path, "あ".repeat(chars)).unwrap();
+
+        let att = Attachment::detect(&path).unwrap();
+        let text = text_of(&att.to_user_content().unwrap());
+        assert!(!text.contains('\u{fffd}'), "left a replacement character");
+        assert!(text.contains("bytes shown"), "{text}");
+    }
+
+    #[test]
+    fn an_oversized_media_file_is_refused_instead_of_buffered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.png");
+        let att = Attachment {
+            path: path.clone(),
+            kind: AttachmentKind::Image,
+        };
+        // A sparse file: the point is the length check, not the bytes.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MEDIA_ATTACHMENT_MAX_BYTES + 1).unwrap();
+        drop(file);
+
+        let err = att.to_user_content().unwrap_err();
+        assert!(err.to_string().contains("capped at"), "{err}");
     }
 }
