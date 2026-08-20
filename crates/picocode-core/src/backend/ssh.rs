@@ -168,11 +168,26 @@ impl SshBackend {
     }
 
     pub async fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
-        // `cat > path` with the bytes on stdin: binary-safe.
+        // `cat > tmp && mv tmp path` with the bytes on stdin: binary-safe,
+        // and the target is replaced in one step. Writing straight to it
+        // would truncate first, so a dropped connection mid-transfer left a
+        // half-written file with nothing to recover from. The temp file sits
+        // beside the target so the rename stays on one filesystem, and the
+        // permissions of an existing file are carried over (`cp --preserve`
+        // is not portable, so `chmod --reference` is tried and ignored).
+        let quoted = shq(&path.display().to_string());
+        let tmp = shq(&format!("{}.picocode-tmp", path.display()));
+        // Every step is chained so a failed `cat` can never reach the `mv`:
+        // moving a truncated temp file over the target would be exactly the
+        // failure this is meant to prevent.
+        let script = format!(
+            "{{ cat > {tmp} && {{ chmod --reference={quoted} {tmp} 2>/dev/null || true; }} \
+             && mv -f {tmp} {quoted}; }} || {{ rm -f {tmp}; exit 1; }}"
+        );
         let mut child = self
             .ssh()
             .arg("--")
-            .arg(format!("cat > {}", shq(&path.display().to_string())))
+            .arg(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

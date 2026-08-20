@@ -75,10 +75,11 @@ impl Backend {
         }
     }
 
-    /// Write bytes to a file (creating it).
+    /// Write bytes to a file (creating it), replacing the old contents in
+    /// one step rather than truncating and refilling.
     pub async fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         match self {
-            Backend::Local => tokio::fs::write(path, data).await,
+            Backend::Local => write_atomically(path, data).await,
             Backend::Ssh(s) => s.write(path, data).await,
         }
     }
@@ -183,4 +184,108 @@ async fn local_walk(base: &Path) -> io::Result<Vec<PathBuf>> {
     })
     .await
     .map_err(io::Error::other)
+}
+
+/// Replace a file's contents in one step: write a sibling temp file, then
+/// rename it over the target.
+///
+/// A plain write truncates first, so a crash, a full disk or a dropped
+/// connection mid-write left the file empty or half-written — and the undo
+/// journal only lives in memory, so there was nothing to recover from.
+///
+/// Two cases deliberately keep the plain write. A symlink target must be
+/// written *through*, not replaced by a regular file. And a rename does not
+/// carry the original's permissions, so those are copied onto the temp file
+/// first — otherwise editing an executable script would silently drop its
+/// mode bits.
+async fn write_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
+    let is_symlink = tokio::fs::symlink_metadata(path)
+        .await
+        .is_ok_and(|m| m.file_type().is_symlink());
+    let name = path.file_name();
+    let (Some(dir), Some(name)) = (path.parent(), name) else {
+        return tokio::fs::write(path, data).await;
+    };
+    if is_symlink {
+        return tokio::fs::write(path, data).await;
+    }
+
+    let tmp = dir.join(format!(".{}.picocode-tmp", name.to_string_lossy()));
+    tokio::fs::write(&tmp, data).await?;
+    if let Ok(meta) = tokio::fs::metadata(path).await {
+        let _ = tokio::fs::set_permissions(&tmp, meta.permissions()).await;
+    }
+    match tokio::fs::rename(&tmp, path).await {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Leaving the temp file behind would be worse than the failure.
+            let _ = tokio::fs::remove_file(&tmp).await;
+            Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn writes_replace_the_file_without_a_truncated_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        let backend = Backend::Local;
+
+        backend.write(&path, b"first").await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        backend.write(&path, b"second").await.unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+
+        // No temp file survives a successful write.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("picocode-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// The rename would otherwise replace the link with a regular file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symlink_is_written_through_rather_than_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        std::fs::write(&target, "old").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        Backend::Local.write(&link, b"new").await.unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    /// A rename brings the temp file's fresh permissions with it, so an
+    /// edited script would lose its executable bit.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn permissions_survive_a_write() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.sh");
+        std::fs::write(&path, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        Backend::Local
+            .write(&path, b"#!/bin/sh\necho hi\n")
+            .await
+            .unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "{mode:o}");
+    }
 }
