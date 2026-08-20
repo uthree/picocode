@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use rig::tool::Tool;
 use serde::Deserialize;
@@ -74,9 +75,9 @@ impl Tool for ListFiles {
                 if dir.as_os_str().is_empty() {
                     break;
                 }
-                entries.insert(format!("{}/", dir.display()));
+                entries.insert(format!("{}/", posix(dir)));
             }
-            entries.insert(file.display().to_string());
+            entries.insert(posix(file));
         }
         let entries: Vec<String> = entries.into_iter().collect();
 
@@ -96,6 +97,18 @@ impl Tool for ListFiles {
     }
 }
 
+/// Render a relative path with `/` separators on every platform. Directory
+/// rows always ended in `/`, so a Windows listing used to mix the two
+/// (`src/` next to `src\main.rs`, and `a\b/` within one row); the ssh
+/// backend reports posix paths either way, so `/` is the one form that
+/// makes local and remote listings agree.
+fn posix(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +125,19 @@ mod tests {
         assert!(out.contains("src/main.rs"));
         assert!(out.contains("src/"));
         assert!(!out.contains("ignored.txt"));
+        // Separators are posix on every platform, never mixed within a row.
+        assert!(!out.contains('\\'), "{out}");
+    }
+
+    #[tokio::test]
+    async fn nested_paths_use_one_separator_style() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
+        std::fs::write(dir.path().join("a/b/c/deep.rs"), "").unwrap();
+        let tool = ListFiles::new(Workspace::local(dir.path().to_path_buf()));
+        let out = tool.call(ListArgs { path: None }).await.unwrap();
+        assert!(out.contains("a/b/c/deep.rs"), "{out}");
+        assert!(out.contains("a/b/c/"), "{out}");
+        assert!(!out.contains('\\'), "{out}");
     }
 }

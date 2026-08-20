@@ -112,6 +112,10 @@ pub fn shell_for(
 /// Write-allowed paths: project root, temp dirs, /dev, plus the
 /// configured extras (with `~` expanded). Paths are canonicalized where
 /// possible so symlinked roots (e.g. /tmp → /private/tmp) match.
+///
+/// Only the Seatbelt and Landlock builds have a sandbox to feed; elsewhere
+/// this would be dead code and fail the `-D warnings` clippy run.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn write_paths(root: &Path, settings: &SandboxSettings) -> Vec<PathBuf> {
     let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let mut paths = vec![

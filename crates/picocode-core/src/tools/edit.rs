@@ -366,6 +366,16 @@ mod tests {
         assert!(!err.0.contains("closest"), "{}", err.0);
     }
 
+    /// The hook runs through the platform shell, so the test commands have
+    /// to be written in it: cmd.exe separates with `&`, not `;`, and has no
+    /// `true` (a `;` command would just echo itself and "pass").
+    const OK_CMD: &str = if cfg!(windows) { "exit 0" } else { "true" };
+    const FAIL_CMD: &str = if cfg!(windows) {
+        "echo broken& exit 3"
+    } else {
+        "echo broken; exit 3"
+    };
+
     #[tokio::test]
     async fn after_edit_verdict_is_appended() {
         // Passing check: terse verdict.
@@ -373,7 +383,7 @@ mod tests {
         std::fs::write(dir.path().join("f.txt"), "a\n").unwrap();
         let tool = EditFile::new(
             Workspace::local(dir.path().to_path_buf()),
-            Some("true".into()),
+            Some(OK_CMD.into()),
             Default::default(),
             Default::default(),
         );
@@ -386,13 +396,16 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("Edited"));
-        assert!(out.contains("after_edit check (`true`): passed"), "{out}");
+        assert!(
+            out.contains(&format!("after_edit check (`{OK_CMD}`): passed")),
+            "{out}"
+        );
 
         // Failing check: exit code and output are included (also covers the
         // whole-file write path).
         let tool = EditFile::new(
             Workspace::local(dir.path().to_path_buf()),
-            Some("echo broken; exit 3".into()),
+            Some(FAIL_CMD.into()),
             Default::default(),
             Default::default(),
         );
@@ -410,7 +423,7 @@ mod tests {
         // A failed edit runs no check.
         let tool = EditFile::new(
             Workspace::local(dir.path().to_path_buf()),
-            Some("true".into()),
+            Some(OK_CMD.into()),
             Default::default(),
             Default::default(),
         );
