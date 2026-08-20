@@ -154,6 +154,16 @@ pub struct App {
     jobs: picocode_core::tools::BackgroundJobs,
     /// Signals the worker to abort the generation in progress (Esc).
     cancel_tx: watch::Sender<()>,
+    /// Where a workspace connection running on the tokio runtime reports
+    /// back. Connecting can take a while (SSH auth, an unreachable host),
+    /// so it must not happen inside the key handler — that blocks the whole
+    /// event loop, redraws included.
+    open_tx: mpsc::Sender<workspace::Opened>,
+    /// The receiving half, moved out by [`App::run`].
+    open_rx: Option<mpsc::Receiver<workspace::Opened>>,
+    /// True while such a connection is in flight, so a second `/remote`
+    /// does not race it.
+    connecting: bool,
     /// Id of the session being written; a fresh one is issued by /clear.
     session_id: String,
     /// Where sessions are stored (None disables persistence, e.g. no $HOME).
@@ -191,7 +201,11 @@ impl App {
         backend: picocode_core::backend::Backend,
         enhanced_keys: bool,
     ) -> Self {
+        let (open_tx, open_rx) = mpsc::channel(1);
         let mut app = Self {
+            open_tx,
+            open_rx: Some(open_rx),
+            connecting: false,
             entries: Vec::new(),
             input: String::new(),
             cursor: 0,
@@ -346,6 +360,10 @@ impl App {
         mut terminal: DefaultTerminal,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
     ) -> anyhow::Result<()> {
+        let mut open_rx = self
+            .open_rx
+            .take()
+            .expect("App::run consumes the App, so this can only run once");
         let mut term_rx = spawn_input_thread();
         let mut tick = tokio::time::interval(Duration::from_millis(120));
 
@@ -354,6 +372,7 @@ impl App {
             tokio::select! {
                 Some(ev) = term_rx.recv() => self.handle_terminal_event(ev).await,
                 Some(ev) = agent_rx.recv() => self.handle_agent_event(ev),
+                Some(opened) = open_rx.recv() => self.apply_opened(opened),
                 _ = tick.tick(), if self.running > 0 => {
                     self.spinner = self.spinner.wrapping_add(1);
                 }
@@ -481,7 +500,7 @@ impl App {
                     self.remote_picker = None;
                     match name {
                         Some(name) => {
-                            self.switch_workspace(&name).await;
+                            self.switch_workspace(&name, None);
                         }
                         None => self.open_add_remote(),
                     }
@@ -782,7 +801,7 @@ impl App {
                 }
                 Command::Remote(None) => self.open_remote_picker(),
                 Command::Remote(Some(target)) => {
-                    self.switch_workspace(&target).await;
+                    self.switch_workspace(&target, None);
                 }
             },
         }

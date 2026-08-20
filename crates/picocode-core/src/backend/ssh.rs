@@ -75,8 +75,19 @@ impl SshBackend {
 
         // Establish the master in the background; ControlPersist keeps it
         // alive briefly after we exit so a clean shutdown doesn't race.
+        // ConnectTimeout bounds the wait on an unreachable host, where the
+        // TCP retries alone would take minutes.
         let status = tokio::process::Command::new("ssh")
-            .args(["-N", "-f", "-M", "-o", "ControlPersist=30", "-S"])
+            .args([
+                "-N",
+                "-f",
+                "-M",
+                "-o",
+                "ControlPersist=30",
+                "-o",
+                "ConnectTimeout=10",
+                "-S",
+            ])
             .arg(&control)
             .arg(destination)
             .stdin(Stdio::null())

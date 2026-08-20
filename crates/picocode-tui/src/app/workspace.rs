@@ -7,6 +7,21 @@ use picocode_core::session;
 
 use super::{AddRemoteForm, App, EntryKind, LOGO, RemotePicker};
 
+/// A workspace connection that ran on the tokio runtime, on its way back to
+/// the event loop. Carrying the label and snippet along keeps
+/// [`App::apply_opened`] free of state that would have to survive the wait.
+pub(super) struct Opened {
+    /// What the user asked to open, for the success and failure notices.
+    pub label: String,
+    /// picocode.toml block to print after a successful connection made from
+    /// the add-remote form.
+    pub snippet: Option<String>,
+    pub result: anyhow::Result<(
+        picocode_core::config::Config,
+        picocode_core::backend::Backend,
+    )>,
+}
+
 impl App {
     /// `/remote` with no argument: open the workspace dialog.
     pub(super) fn open_remote_picker(&mut self) {
@@ -79,16 +94,12 @@ impl App {
                 form.note = format!("connecting to {host}…");
                 let target = format!("{host}:{path}");
                 self.add_remote = None;
-                if self.switch_workspace(&target).await {
-                    let name = if name.is_empty() { &host } else { &name };
-                    self.push(
-                        EntryKind::Notice,
-                        format!(
-                            "To keep this remote, add it to picocode.toml:\n{}",
-                            picocode_core::workspace::toml_snippet(name, &host, &path)
-                        ),
-                    );
-                }
+                let name = if name.is_empty() { &host } else { &name };
+                let snippet = format!(
+                    "To keep this remote, add it to picocode.toml:\n{}",
+                    picocode_core::workspace::toml_snippet(name, &host, &path)
+                );
+                self.switch_workspace(&target, Some(snippet));
             }
             _ => {}
         }
@@ -99,9 +110,11 @@ impl App {
     /// picocode.toml and instruction files) and the worker respawns on the
     /// new backend. The conversation does not travel along — a different
     /// workspace starts a fresh session log, like launching picocode there.
-    /// Nothing changes until the connection is up, so a failed switch
-    /// leaves the current workspace running. Returns whether it happened.
-    pub(super) async fn switch_workspace(&mut self, target: &str) -> bool {
+    ///
+    /// This only *starts* the connection; [`App::apply_opened`] finishes it
+    /// when the runtime reports back. Nothing changes until then, so a
+    /// failed switch leaves the current workspace running.
+    pub(super) fn switch_workspace(&mut self, target: &str, snippet: Option<String>) {
         use picocode_core::workspace;
 
         if self.running > 0 {
@@ -109,18 +122,25 @@ impl App {
                 EntryKind::Error,
                 "Cannot change the workspace while a turn is running".to_string(),
             );
-            return false;
+            return;
+        }
+        if self.connecting {
+            self.push(
+                EntryKind::Error,
+                "Already opening a workspace — wait for that to finish".to_string(),
+            );
+            return;
         }
         let spec = match workspace::parse_target(target, &self.cfg.remotes) {
             Ok(spec) => spec,
             Err(e) => {
                 self.push(EntryKind::Error, format!("{e:#}"));
-                return false;
+                return;
             }
         };
         if spec.as_ref().map(|s| s.to_arg()) == self.cfg.remote.as_ref().map(|s| s.to_arg()) {
             self.push(EntryKind::Notice, "Already on that workspace".to_string());
-            return false;
+            return;
         }
         let label = match &spec {
             Some(spec) => spec.to_arg(),
@@ -128,11 +148,39 @@ impl App {
         };
         self.push(EntryKind::Notice, format!("Opening {label}…"));
 
-        let (mut new_cfg, backend) = match workspace::open(spec.as_ref()).await {
+        // Connecting can block for a long time — SSH auth, a ProxyJump, an
+        // unreachable host — so it runs on the tokio runtime and reports
+        // back through `open_rx`. Awaiting it here would freeze the event
+        // loop: no redraw, no keys, no way out.
+        self.connecting = true;
+        let tx = self.open_tx.clone();
+        tokio::spawn(async move {
+            let result = workspace::open(spec.as_ref()).await;
+            let _ = tx
+                .send(Opened {
+                    label,
+                    snippet,
+                    result,
+                })
+                .await;
+        });
+    }
+
+    /// Finish a switch started by [`App::switch_workspace`]. Nothing changed
+    /// until now, so a failed connection leaves the current workspace
+    /// running.
+    pub(super) fn apply_opened(&mut self, opened: Opened) {
+        let Opened {
+            label,
+            snippet,
+            result,
+        } = opened;
+        self.connecting = false;
+        let (mut new_cfg, backend) = match result {
             Ok(pair) => pair,
             Err(e) => {
                 self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
-                return false;
+                return;
             }
         };
         // The new workspace selects no model of its own: keep the current one.
@@ -160,7 +208,7 @@ impl App {
             Ok(pair) => pair,
             Err(e) => {
                 self.push(EntryKind::Error, format!("Failed to open {label}: {e:#}"));
-                return false;
+                return;
             }
         };
         // Dropping the old sender shuts the old worker down.
@@ -205,6 +253,9 @@ impl App {
             self.push(EntryKind::Notice, format!("Loaded {}", names.join(", ")));
         }
         self.refresh_models();
-        true
+        // A connection made from the add-remote form is worth keeping.
+        if let Some(snippet) = snippet {
+            self.push(EntryKind::Notice, snippet);
+        }
     }
 }
