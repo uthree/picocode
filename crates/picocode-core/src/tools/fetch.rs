@@ -1,6 +1,8 @@
+use std::net::IpAddr;
 use std::time::Duration;
 
 use base64::Engine;
+use futures::StreamExt as _;
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
@@ -12,6 +14,74 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 24_000;
 const TEXT_WIDTH: usize = 100;
+/// Redirects followed before giving up. Each hop is re-checked against
+/// [`is_blocked`], which is why they are followed here rather than by
+/// reqwest: a public URL that redirects to 169.254.169.254 would otherwise
+/// sail straight past the check on the original address.
+const MAX_REDIRECTS: usize = 5;
+
+/// Addresses `web_fetch` will not reach: the cloud metadata endpoints on
+/// the link-local range and the private networks around them. The model
+/// chooses this URL, and a page it just read can suggest one as easily as
+/// the user can, so "somewhere on the company network" is not a
+/// destination it should be able to pick.
+///
+/// Loopback is deliberately *not* blocked: a local dev server is the one
+/// internal address the user plainly meant, and picocode is already running
+/// on that machine.
+fn is_blocked(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                // "this network", and the carrier-grade NAT range.
+                || a == 0
+                || (a == 100 && (64..128).contains(&b))
+        }
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            v6.is_unspecified()
+                || first & 0xfe00 == 0xfc00 // unique local
+                || first & 0xffc0 == 0xfe80 // link local
+                || v6.to_ipv4_mapped().is_some_and(|v4| is_blocked(v4.into()))
+        }
+    }
+}
+
+/// Resolve `url`'s host and refuse it if anything it points at is blocked.
+/// The lookup happens here rather than trusting the hostname, so a public
+/// name resolving to 10.0.0.1 is caught too.
+///
+/// This is a check, not a guarantee: DNS can answer differently for the
+/// connection that follows (rebinding). Closing that would mean dialing the
+/// address we checked and carrying the Host header ourselves.
+async fn check_destination(url: &url::Url) -> Result<(), ToolError> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(ToolError::new(
+            "only http:// and https:// URLs are supported",
+        ));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| ToolError::new(format!("`{url}` has no host")))?;
+    let port = url.port_or_known_default().unwrap_or(80);
+    let addrs: Vec<_> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| ToolError::new(format!("could not resolve {host}: {e}")))?
+        .collect();
+    match addrs.iter().find(|a| is_blocked(a.ip())) {
+        Some(bad) => Err(ToolError::new(format!(
+            "{host} resolves to {} — web_fetch does not reach link-local or private \
+             addresses (cloud metadata endpoints and internal services). If that is \
+             really the intent, run it yourself with a `!` command.",
+            bad.ip()
+        ))),
+        None => Ok(()),
+    }
+}
 
 /// Image MIME type of a fetched body, from its magic bytes first (servers
 /// mislabel), then the Content-Type header. Only the formats providers
@@ -63,6 +133,8 @@ impl WebFetch {
         crate::config::install_tls_provider();
         let client = reqwest::Client::builder()
             .timeout(TIMEOUT)
+            // Redirects are followed by hand so every hop gets checked.
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("picocode/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("failed to build HTTP client");
@@ -101,18 +173,36 @@ impl Tool for WebFetch {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if !args.url.starts_with("http://") && !args.url.starts_with("https://") {
-            return Err(ToolError::new(
-                "only http:// and https:// URLs are supported",
-            ));
-        }
+        let mut url = url::Url::parse(args.url.trim())
+            .map_err(|e| ToolError::new(format!("`{}` is not a valid URL: {e}", args.url)))?;
 
-        let response = self
-            .client
-            .get(&args.url)
-            .send()
-            .await
-            .map_err(|e| ToolError::new(format!("request failed: {e}")))?;
+        let mut hops = 0;
+        let response = loop {
+            check_destination(&url).await?;
+            let response = self
+                .client
+                .get(url.clone())
+                .send()
+                .await
+                .map_err(|e| ToolError::new(format!("request failed: {e}")))?;
+            if !response.status().is_redirection() || hops == MAX_REDIRECTS {
+                break response;
+            }
+            let next = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|target| url.join(target).ok());
+            match next {
+                Some(next) => {
+                    url = next;
+                    hops += 1;
+                }
+                // A redirect status with no usable Location: report what
+                // came back rather than pretending it was a redirect.
+                None => break response,
+            }
+        };
 
         let status = response.status();
         let content_type = response
@@ -122,6 +212,9 @@ impl Tool for WebFetch {
             .unwrap_or("")
             .to_ascii_lowercase();
 
+        // Content-Length is only a hint — it is absent on chunked responses,
+        // and a server is free to lie — so the cap is enforced as the body
+        // arrives rather than after buffering all of it.
         if let Some(len) = response.content_length()
             && len as usize > MAX_BODY_BYTES
         {
@@ -129,16 +222,18 @@ impl Tool for WebFetch {
                 "response too large ({len} bytes; limit is {MAX_BODY_BYTES})"
             )));
         }
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ToolError::new(format!("failed to read response body: {e}")))?;
-        if bytes.len() > MAX_BODY_BYTES {
-            return Err(ToolError::new(format!(
-                "response too large ({} bytes; limit is {MAX_BODY_BYTES})",
-                bytes.len()
-            )));
+        let mut stream = response.bytes_stream();
+        let mut bytes: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk =
+                chunk.map_err(|e| ToolError::new(format!("failed to read response body: {e}")))?;
+            if bytes.len() + chunk.len() > MAX_BODY_BYTES {
+                return Err(ToolError::new(format!(
+                    "response too large (over {MAX_BODY_BYTES} bytes; the limit is enforced \
+                     while reading, so the rest was not downloaded)"
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
         }
 
         // Images ride the same tool-output convention as read_file: rig
@@ -150,7 +245,7 @@ impl Tool for WebFetch {
                 "Fetched the image at {} ({mime}, {} bytes). The image content is \
                  included in this tool result; if you cannot see any image, this \
                  provider cannot show images from tools.",
-                args.url,
+                url,
                 bytes.len()
             );
             return Ok(json!({
@@ -187,7 +282,9 @@ impl Tool for WebFetch {
             String::from_utf8_lossy(&bytes).into_owned()
         };
 
-        let mut out = format!("[{status}] {}\n\n", args.url);
+        // The final URL, not the one asked for: after a redirect the model
+        // should see where the text actually came from.
+        let mut out = format!("[{status}] {url}\n\n");
         out.push_str(&truncate_output(text.trim(), MAX_OUTPUT_BYTES));
         Ok(out)
     }
@@ -252,6 +349,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.0.contains("only http"));
+    }
+
+    #[tokio::test]
+    async fn refuses_link_local_and_private_destinations() {
+        for url in [
+            // The cloud metadata endpoint, the classic SSRF target.
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/admin",
+            "http://192.168.1.1/",
+            "http://172.16.5.4:8080/",
+            "http://[fd00::1]/",
+        ] {
+            let err = WebFetch::new()
+                .call(FetchArgs { url: url.into() })
+                .await
+                .unwrap_err();
+            assert!(
+                err.0.contains("does not reach link-local or private"),
+                "{url}: {}",
+                err.0
+            );
+        }
+    }
+
+    #[test]
+    fn loopback_stays_reachable_for_local_dev_servers() {
+        assert!(!is_blocked("127.0.0.1".parse().unwrap()));
+        assert!(!is_blocked("::1".parse().unwrap()));
+        assert!(!is_blocked("93.184.216.34".parse().unwrap()));
+        // …including through an IPv4-mapped address.
+        assert!(is_blocked("::ffff:169.254.169.254".parse().unwrap()));
+        assert!(is_blocked("0.0.0.0".parse().unwrap()));
+    }
+
+    /// Serve one redirect to `target`, so the hop can be checked too.
+    fn serve_redirect(target: String) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\n\
+                         Connection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    #[tokio::test]
+    async fn redirects_are_followed_and_re_checked() {
+        // An ordinary redirect still lands on its target.
+        let target = serve_once(r#"{"ok":true}"#, "application/json");
+        let url = serve_redirect(target);
+        let out = WebFetch::new().call(FetchArgs { url }).await.unwrap();
+        assert!(out.contains(r#"{"ok":true}"#));
+
+        // A public URL redirecting into the metadata endpoint does not get
+        // there: the check on the first address would otherwise be all of it.
+        let url = serve_redirect("http://169.254.169.254/latest/meta-data/".to_string());
+        let err = WebFetch::new().call(FetchArgs { url }).await.unwrap_err();
+        assert!(
+            err.0.contains("does not reach link-local or private"),
+            "{}",
+            err.0
+        );
     }
 
     #[tokio::test]

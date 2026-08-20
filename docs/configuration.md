@@ -44,6 +44,12 @@ only until a symlink is followed — the kind a cloned repository can carry
 (the model is pointed at `bash`, which asks). A remote workspace keeps the
 lexical check alone: its paths live on the other host.
 
+`web_fetch` will not reach link-local or private addresses — cloud metadata
+endpoints (169.254.169.254) and internal services — whatever the hostname
+resolves to, and every redirect hop is checked the same way. Loopback stays
+reachable, so a local dev server still works. Responses stop downloading at
+2 MB rather than being buffered first.
+
 One precedence, in every mode: **deny rules > mode (plan/bypass) > allow
 rules > ask**. `/permissions` prints the effective rules at any time.
 
