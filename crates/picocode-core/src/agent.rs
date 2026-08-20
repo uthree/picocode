@@ -41,12 +41,14 @@ pub fn spawn(
     // takes a completion-model expression (evaluated once for the agent and
     // once for the compactor) so an arm can pre-configure the model —
     // Anthropic enables prompt caching this way.
-    let journal = crate::undo::UndoJournal::new();
     let stamps = tools::ReadStamps::default();
     let ws = crate::backend::Workspace {
         backend: backend.clone(),
         root: cfg.root.clone(),
     };
+    // The journal does its own I/O through the workspace backend, and asks
+    // the read stamps whether a file still holds what picocode wrote.
+    let journal = crate::undo::UndoJournal::new(ws.clone(), stamps.clone());
     macro_rules! spawn_for {
         ($model:expr) => {{
             let model = $model;
@@ -400,7 +402,7 @@ async fn worker<M, F>(
             }
             WorkerCmd::SetGoal(text) => goal = text,
             WorkerCmd::Undo => {
-                let restored = journal.undo();
+                let restored = journal.undo().await;
                 let summary = undo_summary(&restored);
                 // Tell the model its edits were rolled back, the same way
                 // `!` shell commands are recorded — otherwise it believes
@@ -1035,6 +1037,10 @@ fn undo_summary(restored: &[crate::undo::Restored]) -> String {
         .map(|r| match r {
             Restored::Reverted(p) => format!("restored {}", p.display()),
             Restored::Removed(p) => format!("deleted {} (the edit had created it)", p.display()),
+            Restored::Skipped(p) => format!(
+                "left {} alone — it changed outside picocode since that turn",
+                p.display()
+            ),
             Restored::Failed(p, e) => format!("FAILED to restore {}: {e}", p.display()),
         })
         .collect::<Vec<_>>()

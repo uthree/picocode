@@ -83,6 +83,15 @@ impl Backend {
         }
     }
 
+    /// Delete a file. Used by `/undo` to take back a file the turn created;
+    /// a file that is already gone is not an error on either backend.
+    pub async fn remove_file(&self, path: &Path) -> io::Result<()> {
+        match self {
+            Backend::Local => tokio::fs::remove_file(path).await,
+            Backend::Ssh(s) => s.remove_file(path).await,
+        }
+    }
+
     /// Create a directory and all missing parents.
     pub async fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         match self {

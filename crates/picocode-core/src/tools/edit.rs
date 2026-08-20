@@ -145,7 +145,7 @@ impl Tool for EditFile {
         // write_file).
         let Some(old_string) = args.old_string.filter(|s| !s.is_empty()) else {
             self.check_stale(&path).await?;
-            self.journal.record(&path);
+            self.journal.record(&path).await;
             let mut out = write_whole_file(backend, &path, &args.new_string).await?;
             self.stamps.record(backend, &path).await;
             self.append_after_edit(&mut out).await;
@@ -181,7 +181,7 @@ impl Tool for EditFile {
             )),
             1 => {
                 self.check_stale(&path).await?;
-                self.journal.record(&path);
+                self.journal.record(&path).await;
                 let updated = content.replacen(&old_string, &args.new_string, 1);
                 backend
                     .write(&path, updated.as_bytes())

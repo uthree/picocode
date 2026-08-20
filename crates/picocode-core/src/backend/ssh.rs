@@ -147,6 +147,15 @@ impl SshBackend {
         Self::check(out, "read failed")
     }
 
+    /// `rm -f`, so a file that is already gone succeeds — the same shape
+    /// the local backend's NotFound handling gives `/undo`.
+    pub async fn remove_file(&self, path: &Path) -> io::Result<()> {
+        let out = self
+            .run(&format!("rm -f -- {}", shq(&path.display().to_string())))
+            .await?;
+        Self::check(out, "delete failed").map(|_| ())
+    }
+
     pub async fn write(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         // `cat > path` with the bytes on stdin: binary-safe.
         let mut child = self

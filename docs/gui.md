@@ -109,7 +109,8 @@ signing/notarization) may come later.
 - **Commands**: the same set as the TUI (one shared parser, so aliases
   and errors behave identically): `/clear`, `/compact`, `/undo` (revert
   the last turn's file edits; repeatable — `edit_file` changes only, bash
-  side effects are not tracked), `/jobs` (background-jobs popup — also
+  side effects are not tracked, and a file you edited yourself since that
+  turn is left alone), `/jobs` (background-jobs popup — also
   reachable from the status-bar chip — with a kill button per job) and
   `/jobs kill <id>`, `/attach <path>` (stages like the 📎 button;
   `/attach` lists, `/attach clear` unstages), `/prompt` (a dialog editing
