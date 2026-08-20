@@ -130,7 +130,10 @@ signing/notarization) may come later.
   transcript — plus the GUI-only theme row),
   `/status` (with a color-coded context breakdown — a segmented bar plus
   legend showing how much of the window the system prompt, instructions,
-  messages, tool activity and attachments take), `/permissions`, `/quit`.
+  messages, tool activity and attachments take), `/permissions`,
+  `/trust` (allow this project's picocode.toml to run commands and relax
+  approvals — see
+  [configuration.md](configuration.md#trusting-a-project-config)), `/quit`.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
 - **Session sidebar**: this project's saved sessions, newest first, in a

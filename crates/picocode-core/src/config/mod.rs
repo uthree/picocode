@@ -754,6 +754,13 @@ pub struct Config {
     pub instructions: Vec<(String, String)>,
     /// Config files that were loaded, for the startup notice.
     pub config_files: Vec<String>,
+    /// The project `picocode.toml` the trust gate applies to, whether or not
+    /// it exists — what `/trust` records.
+    pub project_config: PathBuf,
+    /// Settings that `picocode.toml` asked for and did not get, because the
+    /// file is not trusted yet. Empty in the ordinary case; when it is not,
+    /// the front ends say so at startup and `/trust` allows them.
+    pub gated_settings: Vec<&'static str>,
     /// Context-window size of the active model (for the usage gauge).
     pub context_window: u64,
 }
@@ -828,7 +835,7 @@ impl Config {
             .ancestors()
             .find(|d| d.join("picocode.toml").is_file())
             .map(Path::to_path_buf)
-            .unwrap_or(cwd);
+            .unwrap_or_else(|| cwd.clone());
 
         let mut config_files = Vec::new();
         let global = match global_config_path() {
@@ -842,9 +849,25 @@ impl Config {
             None => None,
         };
         let project_path = local_root.join("picocode.toml");
-        let project = load_file(&project_path)?;
+        let mut project = load_file(&project_path)?;
         if project.is_some() {
-            config_files.push("picocode.toml".to_string());
+            // Name the file in full when the ancestor walk found it above
+            // the working directory: "picocode.toml" would hide that.
+            config_files.push(if local_root == cwd {
+                "picocode.toml".to_string()
+            } else {
+                project_path.display().to_string()
+            });
+        }
+        // A project config can run commands and relax approvals, and it is
+        // found by walking up from the working directory — so the settings
+        // that carry that power wait for `/trust`. See config::trust.
+        let mut gated_settings = Vec::new();
+        if let Some(file) = project.as_mut()
+            && let Ok(bytes) = std::fs::read(&project_path)
+            && !trust::is_trusted(&project_path, &bytes)
+        {
+            gated_settings = trust::strip(file);
         }
         let file = merge(global.unwrap_or_default(), project.unwrap_or_default());
 
@@ -944,6 +967,8 @@ impl Config {
             },
             instructions,
             config_files,
+            project_config: project_path,
+            gated_settings,
             context_window,
             local_file: file,
         })
@@ -1043,6 +1068,8 @@ impl Config {
             sandbox: crate::sandbox::SandboxSettings::default(),
             instructions: Vec::new(),
             config_files: Vec::new(),
+            project_config: std::path::PathBuf::from("/tmp/proj/picocode.toml"),
+            gated_settings: Vec::new(),
             context_window: DEFAULT_CONTEXT_WINDOW,
             local_file: Default::default(),
         }
@@ -1051,6 +1078,7 @@ impl Config {
 
 mod rules;
 mod search;
+pub mod trust;
 
 pub use rules::*;
 pub use search::*;

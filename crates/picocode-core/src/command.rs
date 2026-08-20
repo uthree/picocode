@@ -36,6 +36,15 @@ pub enum PromptAction {
     Preset(String),
 }
 
+/// What the `/trust` command should do.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TrustAction {
+    /// `/trust`: trust the project config exactly as it is on disk now.
+    Allow,
+    /// `/trust revoke`: forget it, re-arming the gate.
+    Revoke,
+}
+
 /// A parsed slash command, ready for the front end to execute.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -59,6 +68,9 @@ pub enum Command {
     /// `/goal off` clears it, and a bare `/goal` shows the current one.
     Goal(Option<String>),
     Mode(Mode),
+    /// `/trust` allows this project's picocode.toml to use the settings the
+    /// trust gate holds back; `/trust revoke` takes that back.
+    Trust(TrustAction),
     Permissions,
     Config,
     Status,
@@ -154,6 +166,10 @@ pub const COMMANDS: &[CommandSpec] = &[
         description: "Keep working until a condition is met: /goal <condition> (off clears)",
     },
     CommandSpec {
+        name: "/trust",
+        description: "Allow this project's picocode.toml to run commands and relax approvals",
+    },
+    CommandSpec {
         name: "/permissions",
         description: "Show the effective permission rules",
     },
@@ -212,6 +228,11 @@ pub fn parse(input: &str) -> ParseOutcome {
         "/auto" => no_arg(Command::Mode(Mode::Auto), name, arg),
         "/bypass" => no_arg(Command::Mode(Mode::Bypass), name, arg),
         "/goal" => Ok(Command::Goal(arg_string().filter(|a| !a.is_empty()))),
+        "/trust" => match arg {
+            None => Ok(Command::Trust(TrustAction::Allow)),
+            Some("revoke") => Ok(Command::Trust(TrustAction::Revoke)),
+            Some(rest) => Err(format!("unknown /trust action `{rest}` (try `revoke`)")),
+        },
         "/permissions" => no_arg(Command::Permissions, name, arg),
         "/config" | "/settings" => no_arg(Command::Config, name, arg),
         "/status" | "/usage" => no_arg(Command::Status, name, arg),

@@ -186,6 +186,49 @@ impl App {
     }
 
     /// `/permissions`: show what the current mode and config rules do.
+    /// `/trust` and `/trust revoke`. The gated settings are read at startup,
+    /// so allowing them takes effect on the next run rather than now — say
+    /// so instead of pretending otherwise.
+    pub(super) fn run_trust(&mut self, allow: bool) {
+        use picocode_core::config::trust::Outcome;
+        let path = self.cfg.project_config.clone();
+        let (kind, text) = match picocode_core::config::trust::apply(&path, allow) {
+            Ok(Outcome::Trusted(settings)) => (
+                EntryKind::Notice,
+                format!(
+                    "Trusted {} — {} apply from the next start of picocode.",
+                    path.display(),
+                    settings.join(", ")
+                ),
+            ),
+            Ok(Outcome::TrustedNothingGated) => (
+                EntryKind::Notice,
+                format!(
+                    "Trusted {} — it asks for nothing that was being held back.",
+                    path.display()
+                ),
+            ),
+            Ok(Outcome::NoConfig) => (
+                EntryKind::Notice,
+                format!("No project config to trust ({})", path.display()),
+            ),
+            Ok(Outcome::Revoked) => (
+                EntryKind::Notice,
+                format!(
+                    "No longer trusting {} — its commands and approval rules stop \
+                     applying at the next start.",
+                    path.display()
+                ),
+            ),
+            Ok(Outcome::WasNotTrusted) => (
+                EntryKind::Notice,
+                format!("{} was not trusted", path.display()),
+            ),
+            Err(e) => (EntryKind::Error, format!("Could not update trust: {e:#}")),
+        };
+        self.push(kind, text);
+    }
+
     pub(super) fn show_permissions(&mut self) {
         let text = format!(
             "{} `!` commands are typed by you and skip all rules.",

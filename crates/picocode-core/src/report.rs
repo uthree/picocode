@@ -22,6 +22,21 @@ pub struct StatusInfo<'a> {
     pub mcp: Option<String>,
 }
 
+/// Why part of `picocode.toml` did not apply, and what to do about it.
+/// Only meaningful when `cfg.gated_settings` is non-empty.
+pub fn gated_settings_text(cfg: &Config) -> String {
+    format!(
+        "{} is not trusted yet, so these settings were ignored: {}.\n\
+         A project config can run commands (after_edit, [[mcp_servers]]), relax \
+         approval rules and redirect the endpoint your API key goes to — and \
+         picocode finds it by walking up from the working directory, so it may \
+         not even be yours. Read the file, then `/trust` to allow it from the \
+         next start (`/trust revoke` takes it back).",
+        cfg.project_config.display(),
+        cfg.gated_settings.join(", ")
+    )
+}
+
 /// The `/status` (alias `/usage`) overview block.
 pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
     let entry = match &cfg.active_model {

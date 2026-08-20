@@ -39,7 +39,10 @@ Tools fall into two classes. **Local reads** (`read_file`, `list_files`,
 talks to the network (`bash`, `edit_file`, `web_search`, `web_fetch`) is
 **destructive** and asks for y/n confirmation by default.
 File tools only ever touch the project directory: absolute paths and `..`
-escaping the root are rejected (the model is pointed at `bash`, which asks).
+escaping the root are rejected, and so are paths that stay inside the root
+only until a symlink is followed — the kind a cloned repository can carry
+(the model is pointed at `bash`, which asks). A remote workspace keeps the
+lexical check alone: its paths live on the other host.
 
 One precedence, in every mode: **deny rules > mode (plan/bypass) > allow
 rules > ask**. `/permissions` prints the effective rules at any time.
@@ -112,6 +115,31 @@ finds the same config, sessions and saved state — merged over the global
 `~/.config/picocode/config.toml`. Project values win; approval lists are
 concatenated; `[[models]]` and `default_model` travel together (a project
 that defines its own `[[models]]` starts from a clean slate).
+
+### Trusting a project config
+
+A project config is not only preferences: `after_edit` runs a shell command
+after every write, `[[mcp_servers]]` launches a child process at startup,
+`[approval] allow_tools` / `allow_bash` pre-authorise tool calls, `[sandbox]`
+can switch the OS guard off, and a `base_url` decides which endpoint your
+provider API key is sent to. Since the file is found by walking *up* from the
+working directory, it may not even belong to the project you opened — a
+`picocode.toml` in `~/Downloads` covers everything below it.
+
+So those settings wait for you. On the first start in a project, everything
+else in `picocode.toml` applies as usual and the list above is held back with
+a notice naming what was skipped. Read the file, then:
+
+```
+/trust           # allow this picocode.toml, from the next start
+/trust revoke    # take it back
+```
+
+Trust is recorded as the file's SHA-256 in
+`$XDG_DATA_HOME/picocode/trusted.json`, so *any* later edit — the agent
+writing to `picocode.toml` included — puts the gate back up. Deny rules
+(`deny_tools`, `deny_bash`) are never gated: a project can only tighten with
+those. The global config is never gated either; you put it there yourself.
 
 ```toml
 default_model = "local"    # [[models]] entry used at startup (default: first)

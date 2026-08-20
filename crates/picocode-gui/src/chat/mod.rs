@@ -343,6 +343,12 @@ impl ChatView {
         };
         picocode_core::state::save_last_model(&view.cfg);
         view.refresh_sessions();
+        // Settings this project's picocode.toml asked for and did not get:
+        // it has to be trusted first (`/trust`).
+        if !view.cfg.gated_settings.is_empty() {
+            let text = picocode_core::report::gated_settings_text(&view.cfg);
+            view.push(EntryKind::Warning, text);
+        }
         // Starting unattended (--auto / --bypass) is announced the same way
         // as switching into it during the session.
         match view.cfg.mode.get() {
@@ -443,6 +449,41 @@ impl ChatView {
     fn show_permissions(&mut self) {
         let text = picocode_core::report::permissions_text(&self.cfg);
         self.push(EntryKind::Notice, text);
+    }
+
+    /// `/trust` and `/trust revoke`. The gated settings are read at startup,
+    /// so allowing them takes effect on the next run rather than now.
+    fn run_trust(&mut self, allow: bool) {
+        use picocode_core::config::trust::Outcome;
+        let path = self.cfg.project_config.clone();
+        let file = path.display().to_string();
+        let (kind, text) = match picocode_core::config::trust::apply(&path, allow) {
+            Ok(Outcome::Trusted(settings)) => (
+                EntryKind::Notice,
+                t!("trust_allowed", file = file, settings = settings.join(", ")).to_string(),
+            ),
+            Ok(Outcome::TrustedNothingGated) => (
+                EntryKind::Notice,
+                t!("trust_allowed_empty", file = file).to_string(),
+            ),
+            Ok(Outcome::NoConfig) => (
+                EntryKind::Notice,
+                t!("trust_no_config", file = file).to_string(),
+            ),
+            Ok(Outcome::Revoked) => (
+                EntryKind::Notice,
+                t!("trust_revoked", file = file).to_string(),
+            ),
+            Ok(Outcome::WasNotTrusted) => (
+                EntryKind::Notice,
+                t!("trust_was_not_trusted", file = file).to_string(),
+            ),
+            Err(e) => (
+                EntryKind::Error,
+                t!("trust_failed", error = format!("{e:#}")).to_string(),
+            ),
+        };
+        self.push(kind, text);
     }
 
     /// Cycle the theme preference and apply it.
@@ -699,6 +740,9 @@ impl ChatView {
                 Command::Remote(Some(target)) => self.switch_workspace(&target, cx),
                 Command::Config => self.settings_open = true,
                 Command::Status => self.show_status(),
+                Command::Trust(action) => {
+                    self.run_trust(action == picocode_core::command::TrustAction::Allow)
+                }
                 Command::Permissions => self.show_permissions(),
             },
         }

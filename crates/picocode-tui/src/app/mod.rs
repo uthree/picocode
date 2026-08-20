@@ -264,6 +264,12 @@ impl App {
                 format!("Config: {}", cfg.config_files.join(", ")),
             );
         }
+        if !cfg.gated_settings.is_empty() {
+            app.push(
+                EntryKind::Warning,
+                picocode_core::report::gated_settings_text(cfg),
+            );
+        }
         app.push(
             EntryKind::Notice,
             format!("Mode: {} — Shift+Tab to switch", cfg.mode.get().label()),
@@ -752,6 +758,9 @@ impl App {
                 }
                 Command::Jobs(JobsAction::List) => self.show_jobs(),
                 Command::Jobs(JobsAction::Kill(id)) => self.kill_job(id),
+                Command::Trust(action) => {
+                    self.run_trust(action == picocode_core::command::TrustAction::Allow)
+                }
                 Command::Permissions => self.show_permissions(),
                 Command::Config => self.settings = Some(SettingsMenu { selected: 0 }),
                 Command::Status => self.show_status(),

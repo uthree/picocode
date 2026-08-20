@@ -25,6 +25,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "proce
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Digest of a project picocode.toml, for the trust gate in config::trust.
+sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 anyhow = "1"
