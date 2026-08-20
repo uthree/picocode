@@ -189,10 +189,12 @@ impl ApprovalRules {
     /// 2. local read tools and dialogs always run;
     /// 3. bypass mode runs everything else;
     /// 4. plan mode denies the mutating tools (bash and file writes);
-    /// 5. allow rules always allow;
-    /// 6. edit and auto modes additionally allow file writes
+    /// 5. in auto mode the [`needs_human`] commands ask regardless of the
+    ///    allow rules — those bound the reviewer, not the user;
+    /// 6. allow rules always allow;
+    /// 7. edit and auto modes additionally allow file writes
     ///    (project-confined);
-    /// 7. whatever is left asks — the user, or in auto mode the reviewer
+    /// 8. whatever is left asks — the user, or in auto mode the reviewer
     ///    model (the approval hook decides who answers).
     pub fn decide(
         &self,
@@ -230,6 +232,16 @@ impl ApprovalRules {
                  Do not retry this call."
                     .to_string(),
             );
+        }
+        // The always-ask list bounds *auto mode*: it exists so the reviewer
+        // model never gets to approve these. An allow rule is the user's own
+        // decision and still applies when the user is the one answering, but
+        // in auto mode nobody is — and `allow_bash = ["git"]`, written with
+        // `git status` in mind, would otherwise hand `git push` to the
+        // reviewer. This is the guarantee `crate::approval`'s module doc
+        // makes about auto mode.
+        if mode == Mode::Auto && needs_human(tool, bash_command) {
+            return Decision::Ask;
         }
         if in_list(&self.allow_tools) {
             return Decision::Allow;
@@ -765,6 +777,34 @@ mod tests {
                 "{cmd} should be reviewable"
             );
         }
+    }
+
+    /// An allow rule is the user's own decision, so it stands while the user
+    /// is the one answering. In auto mode nobody is, and the always-ask list
+    /// is exactly the set the reviewer may not decide.
+    #[test]
+    fn allow_rules_do_not_hand_always_ask_commands_to_the_reviewer() {
+        let r = rules(&[], &[], &["git"], &[]);
+        // Interactive modes honour the allow rule.
+        assert_eq!(
+            r.decide(Mode::Edit, "bash", Some("git push origin main"), true),
+            Decision::Allow
+        );
+        // Auto mode does not — the user answers this one.
+        assert_eq!(
+            r.decide(Mode::Auto, "bash", Some("git push origin main"), true),
+            Decision::Ask
+        );
+        // Anything not on the always-ask list still auto-runs in auto mode.
+        assert_eq!(
+            r.decide(Mode::Auto, "bash", Some("git status"), true),
+            Decision::Allow
+        );
+        // Bypass is still bypass, and deny still wins.
+        assert_eq!(
+            r.decide(Mode::Bypass, "bash", Some("git push"), true),
+            Decision::Allow
+        );
     }
 
     /// cmd.exe ignores case, so a rule that only matches one spelling is

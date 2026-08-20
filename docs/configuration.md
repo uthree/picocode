@@ -51,7 +51,10 @@ reachable, so a local dev server still works. Responses stop downloading at
 2 MB rather than being buffered first.
 
 One precedence, in every mode: **deny rules > mode (plan/bypass) > allow
-rules > ask**. `/permissions` prints the effective rules at any time.
+rules > ask**, with one exception in auto mode, where the always-ask
+commands come before the allow rules (see
+[auto mode](#auto-mode-letting-a-model-answer-the-prompts)).
+`/permissions` prints the effective rules at any time.
 
 Allow rules come from the config file or from the approval dialog's `a`
 (always) answer, which adds one at runtime — the tool's name to
@@ -85,6 +88,10 @@ as they happen, so nothing runs unattended without a record.
 The delegation is bounded on every side:
 
 - deny rules and plan-mode blocks are decided before the reviewer is asked;
+- the always-ask commands below reach you even when an `allow_bash` rule
+  covers them: those rules bound what *you* have to confirm, and in auto
+  mode you are not the one answering (in every other mode an allow rule
+  still allows, since you chose it and you are there);
 - destructive or outward-facing commands always ask **you**, whatever the
   reviewer would say: `sudo`/`su`/`doas`, `rm` reaching outside the project
   (an absolute path or `~`), `git push`, `git reset --hard`, `mkfs`, `dd`,
