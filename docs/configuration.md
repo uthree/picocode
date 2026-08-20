@@ -84,7 +84,12 @@ The delegation is bounded on every side:
   (an absolute path or `~`), `git push`, `git reset --hard`, `mkfs`, `dd`,
   `shutdown`/`reboot`, `chown`, `chmod 777`, `npm publish`, `cargo publish`,
   `kubectl`, `terraform apply`, `docker system prune`, and anything piping a
-  download into a shell;
+  download into a shell. The cmd.exe equivalents count too, since that is
+  what the bash tool runs on Windows: `runas`, `format`, `diskpart`,
+  `bcdedit`, `vssadmin`, `takeown`, `icacls`, `cipher`, `reg delete`,
+  `net user`/`net localgroup`, `sc delete`, `del`/`rd`/`rmdir` reaching
+  outside the project or recursing, `Remove-Item -Recurse`/`-Force`, and
+  `iwr … | iex`;
 - an error, a timeout (90s) or a reply naming neither verdict falls back to
   your confirmation — never to "allow";
 - a refusal is reported to the model as the tool result, so it adapts
@@ -342,5 +347,9 @@ each segment by **word-boundary prefix** (`cargo` matches `cargo build` but not
   auto-run, and an environment-variable prefix (`FOO=1 cargo …`) doesn't
   prefix-match, so it asks
 - anything else falls back to the normal y/n approval prompt
+- matching is case-sensitive on unix, where the case is part of the command's
+  identity, and case-insensitive on Windows, where cmd.exe treats `DEL` and
+  `del` as one command — a rule that only caught one spelling there would
+  not be a rule
 - tool names in `allow_tools` / `deny_tools` are validated at startup, so a
   typo is an error instead of a silently dead rule
