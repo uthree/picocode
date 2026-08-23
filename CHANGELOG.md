@@ -29,7 +29,8 @@ comes out of your machine, so there it is a ceiling and not a suggestion.
 - The rows are grouped into **Model**, **Tools** and **Interface**.
 - Large counts are abbreviated: `32k` rather than `32768`, `1M` rather
   than `1048576`. Covers the context window, the reply cap and the two
-  read_file limits.
+  read_file limits. The bash timeout reads as a clock instead — `1m30s`,
+  `30m` — since past its first step nobody counts it in seconds.
 - **The TUI remembers them.** Both front ends now write the same
   `$XDG_DATA_HOME/picocode/settings.json`, so a bash timeout set in one is
   the timeout in the other; the TUI used to forget on exit. The GUI's

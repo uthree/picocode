@@ -122,11 +122,11 @@ impl SettingId {
                 pct => format!("{pct}%"),
             },
             SettingId::Mode => cfg.mode.get().label().to_string(),
-            SettingId::BashTimeout => t!("val_seconds", n = cfg.bash_timeout.get()).to_string(),
+            SettingId::BashTimeout => human_seconds(cfg.bash_timeout.get()),
             SettingId::ReadLines => human_count(cfg.read_max_lines.get()),
             SettingId::LineBytes => human_count(cfg.read_max_line_bytes.get()),
             SettingId::SearchProvider => cfg.search.snapshot().provider.label().to_string(),
-            SettingId::SearchResults => cfg.search.snapshot().max_results.to_string(),
+            SettingId::SearchResults => human_count(cfg.search.snapshot().max_results as u64),
             SettingId::SendKey => cfg.submit_key.label().to_string(),
         }
     }
@@ -220,6 +220,20 @@ pub fn human_count(n: u64) -> String {
         .unwrap_or_else(|| n.to_string())
 }
 
+/// A `/config` duration the way people say it: `30` → `30s`, `120` → `2m`,
+/// `90` → `1m30s`, `1800` → `30m`. The bash timeout is the only one, and it
+/// steps in half-minutes up to half an hour — past the first step nobody
+/// counts it in seconds, and `1800s` next to a column of `32k` and `10k`
+/// reads as a count rather than a clock.
+pub fn human_seconds(n: u64) -> String {
+    match (n / 60, n % 60) {
+        (0, s) => t!("val_seconds", n = s),
+        (m, 0) => t!("val_minutes", n = m),
+        (m, s) => t!("val_minutes_seconds", m = m, s = s),
+    }
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +302,42 @@ mod tests {
         assert!(seen.contains(&"900".to_string()));
         assert!(seen.contains(&"1k".to_string()), "{seen:?}");
         assert!(seen.contains(&"1.1k".to_string()), "{seen:?}");
+    }
+
+    /// The timeout steps in half-minutes from 30s to half an hour, so the
+    /// row shows a clock rather than a three- or four-digit second count.
+    #[test]
+    fn every_timeout_the_stepper_reaches_reads_as_a_clock() {
+        let cfg = Config::for_tests();
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            cfg.step_bash_timeout(-1);
+        }
+        for _ in 0..60 {
+            seen.push(SettingId::BashTimeout.value(&cfg));
+            cfg.step_bash_timeout(1);
+        }
+        seen.dedup();
+        assert_eq!(seen.first().map(String::as_str), Some("30s"));
+        assert_eq!(seen.last().map(String::as_str), Some("30m"));
+        assert_eq!(&seen[1..5], ["1m", "1m30s", "2m", "2m30s"]);
+        assert!(seen.contains(&"10m".to_string()), "{seen:?}");
+    }
+
+    /// The result count tops out at 20, so it is already as readable as it
+    /// gets — it goes through the same formatter so that stays true if the
+    /// ceiling ever moves.
+    #[test]
+    fn the_result_count_is_left_as_it_is() {
+        let cfg = Config::for_tests();
+        for _ in 0..30 {
+            cfg.search.step_max_results(1);
+        }
+        assert_eq!(SettingId::SearchResults.value(&cfg), "20");
+        for _ in 0..30 {
+            cfg.search.step_max_results(-1);
+        }
+        assert_eq!(SettingId::SearchResults.value(&cfg), "1");
     }
 
     #[test]

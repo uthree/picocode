@@ -21,5 +21,7 @@ set_send_key: "send key"
 
 # Setting values that are not a plain number.
 val_seconds: "%{n}s"
+val_minutes: "%{n}m"
+val_minutes_seconds: "%{m}m%{s}s"
 val_off: "off"
 val_max_tokens_off: "no limit (provider default)"

@@ -17,5 +17,7 @@ set_results: "検索件数"
 set_send_key: "送信キー"
 
 val_seconds: "%{n}秒"
+val_minutes: "%{n}分"
+val_minutes_seconds: "%{m}分%{s}秒"
 val_off: "オフ"
 val_max_tokens_off: "無制限（プロバイダ既定）"

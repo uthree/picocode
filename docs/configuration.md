@@ -57,7 +57,8 @@ Two places to set it:
 
 With neither, the window is 32768 tokens. `/config` abbreviates its
 counts — `32k`, `128k`, `1M` — dividing by 1024 where that comes out
-even, since that is how the models themselves are named.
+even, since that is how the models themselves are named. The bash
+timeout is a clock rather than a count: `30s`, `1m30s`, `30m`.
 
 #### What the provider says
 
