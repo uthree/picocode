@@ -10,8 +10,22 @@
 
 use gpui::App;
 use gpui_component::{Theme, ThemeMode, ThemeRegistry};
+use serde::{Deserialize, Serialize};
 
-use crate::settings::ThemeSetting;
+/// Which appearance the window follows. Orthogonal to the color-theme
+/// family: this picks light or dark, the family picks the palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeSetting {
+    System,
+    Light,
+    Dark,
+}
+
+/// Keys the GUI keeps in the shared settings file's `ui` section.
+pub const THEME_KEY: &str = "theme";
+pub const FAMILY_KEY: &str = "theme_family";
+pub const SIDEBAR_KEY: &str = "sidebar";
 
 /// The bundled theme files, written to the themes directory at startup
 /// (overwriting, so upgrades refresh them; other files are left alone).
@@ -64,9 +78,9 @@ pub fn init(cx: &mut App) {
             let _ = std::fs::write(dir.join(name), content);
         }
     }
-    let saved = crate::settings::load();
-    let family = saved.theme_family.unwrap_or_default();
-    let pref = saved.theme.unwrap_or(ThemeSetting::System);
+    let saved = picocode_core::config::saved::load();
+    let family: String = saved.ui(FAMILY_KEY).unwrap_or_default();
+    let pref = saved.ui(THEME_KEY).unwrap_or(ThemeSetting::System);
     // watch_dir loads asynchronously; the callback runs once the themes
     // are in the registry (and file edits hot-reload via the registry's
     // own observer).

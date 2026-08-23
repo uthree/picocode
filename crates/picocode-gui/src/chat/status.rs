@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, SharedString, div, px};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
 use rust_i18n::t;
 
-use picocode_core::config::Mode;
+use picocode_core::config::{Mode, SettingId};
 use picocode_core::models;
 
 use super::ChatView;
@@ -15,7 +15,7 @@ use super::Menu;
 impl ChatView {
     /// Fraction of the model's context window used by the latest request.
     fn context_ratio(&self) -> f64 {
-        self.tokens_in as f64 / self.cfg.context_window.max(1) as f64
+        self.tokens_in as f64 / self.cfg.context_window.get().max(1) as f64
     }
 
     /// Output tokens for display: the last reported count, plus the live
@@ -436,19 +436,17 @@ impl ChatView {
                     (t!("ctx_model").to_string(), self.cfg.model_label()),
                     (
                         t!("ctx_window").to_string(),
-                        format!("{}", self.cfg.context_window),
+                        format!("{}", self.cfg.context_window.get()),
                     ),
                     (
                         t!("ctx_used").to_string(),
                         format!("{} ({pct}%)", self.tokens_in),
                     ),
                     (t!("ctx_output").to_string(), self.tokens_out_live()),
+                    // Same wording as the /config row it mirrors.
                     (
-                        t!("row_auto_compact").to_string(),
-                        match self.cfg.auto_compact.get() {
-                            0 => t!("auto_compact_off").to_string(),
-                            p => format!("{p}%"),
-                        },
+                        SettingId::AutoCompact.label(),
+                        SettingId::AutoCompact.value(&self.cfg),
                     ),
                 ];
                 panel = panel.child(

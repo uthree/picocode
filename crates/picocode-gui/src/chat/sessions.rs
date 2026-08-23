@@ -14,8 +14,6 @@ use picocode_core::event::WorkerCmd;
 use picocode_core::session;
 use picocode_core::transcript::EntryKind;
 
-use crate::settings;
-
 use super::ChatView;
 use super::dialogs::overlay;
 
@@ -74,8 +72,8 @@ impl ChatView {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar = !self.sidebar;
         self.refresh_sessions();
-        self.saved.sidebar = Some(self.sidebar);
-        settings::save(&self.saved);
+        self.saved.set_ui(crate::theme::SIDEBAR_KEY, self.sidebar);
+        picocode_core::config::saved::save(&self.saved);
         cx.notify();
     }
 

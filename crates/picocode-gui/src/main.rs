@@ -9,12 +9,12 @@ mod assets;
 mod chat;
 mod highlight;
 mod math;
-mod settings;
 mod tex;
 mod theme;
 
-// UI strings live in locales/{en,ja}.yml; the locale is picked from the
-// system at startup (rust-i18n's locale is process-global).
+// UI strings live in locales/{en,ja}.yml. The `/config` row labels come
+// from picocode-core's own catalog instead, so the TUI names them the same
+// way; rust-i18n keys a catalog per crate but the locale is process-global.
 rust_i18n::i18n!("locales", fallback = "en");
 
 use clap::Parser;
@@ -25,13 +25,9 @@ use gpui_component::Root;
 use picocode_core::{agent, config, models};
 
 fn main() -> anyhow::Result<()> {
-    // sys-locale reads the OS preference (works for Finder-launched apps
-    // too, where $LANG is unset). Only ja is translated so far.
-    if let Some(locale) = sys_locale::get_locale()
-        && locale.starts_with("ja")
-    {
-        rust_i18n::set_locale("ja");
-    }
+    // Sets the process-global locale both catalogs read: this crate's, and
+    // picocode-core's, which carries the shared `/config` row labels.
+    picocode_core::set_locale_from_system();
 
     let args = config::Args::parse();
     // In the GUI, --smoke auto-sends the prompt once the window opens

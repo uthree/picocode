@@ -40,7 +40,10 @@ use picocode_core::event::{AgentEvent, WorkerCmd};
 use picocode_core::transcript::{Entry, EntryKind, diff_lines};
 use picocode_core::{approval, config, session};
 
-use crate::settings::{self, GuiSettings, ThemeSetting};
+use dialogs::GuiSetting;
+use picocode_core::config::{SettingId, saved::Saved};
+
+use crate::theme::{FAMILY_KEY, SIDEBAR_KEY, THEME_KEY, ThemeSetting};
 
 const TOOL_OUTPUT_MAX_LINES: usize = 12;
 const DIFF_MAX_LINES: usize = 30;
@@ -149,7 +152,7 @@ pub struct ChatView {
     theme_family: String,
     /// Sparse overlay of `/config` values the user changed, persisted to
     /// disk and re-applied on the next start.
-    saved: GuiSettings,
+    saved: Saved,
     /// Completion prefix locked at the first Tab press, so cycling keeps
     /// the full candidate list even after the input holds a full match.
     comp_prefix: Option<String>,
@@ -223,7 +226,7 @@ impl ChatView {
         // Settings saved by earlier runs' /config changes are a sparse
         // overlay on the config file (untouched values keep following it);
         // the send key is needed before the input box is built.
-        let saved = settings::load();
+        let saved = config::saved::load();
         let mut cfg = cfg;
         Self::apply_saved(&saved, &mut cfg);
         // Wins over the bindings main.rs registered before the window opened.
@@ -278,10 +281,9 @@ impl ChatView {
         })
         .detach();
 
-        let theme_pref = saved.theme.unwrap_or(ThemeSetting::System);
+        let theme_pref = saved.ui(THEME_KEY).unwrap_or(ThemeSetting::System);
         let theme_family = saved
-            .theme_family
-            .clone()
+            .ui(FAMILY_KEY)
             .unwrap_or_else(|| crate::theme::FAMILIES[0].0.to_string());
         // The family itself is applied by theme::init once the registry
         // has loaded the bundled files; only the mode applies here.
@@ -311,7 +313,7 @@ impl ChatView {
             session_picker: None,
             // Open until the user closes it: the session list is only
             // useful if it is seen.
-            sidebar: saved.sidebar.unwrap_or(true),
+            sidebar: saved.ui(SIDEBAR_KEY).unwrap_or(true),
             sessions: Vec::new(),
             session_menu: None,
             session_delete: None,
@@ -369,7 +371,7 @@ impl ChatView {
 
     /// Apply the persisted /config overlay onto a config's shared handles
     /// (used at startup and when switching working directories).
-    fn apply_saved(saved: &GuiSettings, cfg: &mut Config) {
+    fn apply_saved(saved: &Saved, cfg: &mut Config) {
         if let Some(k) = saved.submit_key {
             cfg.submit_key = k;
         }
@@ -510,7 +512,7 @@ impl ChatView {
         } else {
             CYCLE[(i + 1) % CYCLE.len()]
         };
-        self.saved.theme = Some(self.theme_pref);
+        self.saved.set_ui(THEME_KEY, self.theme_pref);
         crate::theme::apply_mode(self.theme_pref, cx);
     }
 
@@ -518,73 +520,46 @@ impl ChatView {
     /// untouched: the family only swaps the light/dark palette pair).
     fn cycle_theme_family(&mut self, delta: i64, cx: &mut Context<Self>) {
         self.theme_family = crate::theme::cycled(&self.theme_family, delta).to_string();
-        self.saved.theme_family = Some(self.theme_family.clone());
+        self.saved.set_ui(FAMILY_KEY, &self.theme_family);
         crate::theme::apply_family(&self.theme_family, cx);
     }
 
-    /// A `/config` row change. Every change applies immediately. Mirrors
-    /// the TUI's `/config` dialog, plus the GUI-only theme row.
+    /// A `/config` row change. Every change applies immediately. The shared
+    /// rows come from core's table; the theme pair is the GUI's own.
     fn adjust_setting(
         &mut self,
-        row: usize,
+        setting: GuiSetting,
         delta: i64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match row {
-            0 => self.cycle_theme(delta, cx),
-            1 => self.cycle_theme_family(delta, cx),
-            // Same cycle as the TUI: bypass stays menu/command-only, and
-            // adjusting away from it lands on read-only.
-            2 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
-            3 => {
-                self.cfg.submit_key = self.cfg.submit_key.cycled(delta);
-                self.saved.submit_key = Some(self.cfg.submit_key);
-                // Swap the key bindings and the placeholder over right away.
-                input::bind_send_key(self.cfg.submit_key, cx);
-                let placeholder = input::placeholder(self.cfg.submit_key);
-                self.input.update(cx, |state, cx| {
-                    state.set_placeholder(placeholder, window, cx)
-                });
-            }
-            4 => {
-                self.cfg.step_bash_timeout(delta);
-                self.saved.bash_timeout = Some(self.cfg.bash_timeout.get());
-            }
-            5 => {
-                self.cfg.step_read_lines(delta);
-                self.saved.read_max_lines = Some(self.cfg.read_max_lines.get());
-            }
-            6 => {
-                self.cfg.step_line_bytes(delta);
-                self.saved.read_max_line_bytes = Some(self.cfg.read_max_line_bytes.get());
-            }
-            7 => {
-                self.cfg.search.cycle_provider(delta);
-                self.saved.search_provider = Some(self.cfg.search.snapshot().provider);
-            }
-            8 => {
-                self.cfg.search.step_max_results(delta);
-                self.saved.search_max_results = Some(self.cfg.search.snapshot().max_results);
-            }
-            9 => {
-                self.cfg.step_max_tokens(delta);
-                self.saved.max_tokens = Some(self.cfg.max_tokens.get());
-            }
-            10 => {
-                self.cfg.step_auto_compact(delta);
-                self.saved.auto_compact = Some(self.cfg.auto_compact.get());
-            }
-            // Model: close the dialog and open the model menu.
-            11 => {
+        match setting {
+            GuiSetting::Theme => self.cycle_theme(delta, cx),
+            GuiSetting::ThemeFamily => self.cycle_theme_family(delta, cx),
+            // The model row closes the dialog and opens the model menu.
+            GuiSetting::Shared(SettingId::Model) => {
                 self.settings_open = false;
                 self.toggle_menu(Menu::Model, window, cx);
             }
-            _ => {}
+            GuiSetting::Shared(id) => {
+                id.adjust(&mut self.cfg, delta);
+                id.save_into(&self.cfg, &mut self.saved);
+                if id.is_per_selection() {
+                    picocode_core::state::save_last_model(&self.cfg);
+                }
+                if id == SettingId::SendKey {
+                    // Swap the key bindings and the placeholder over right away.
+                    input::bind_send_key(self.cfg.submit_key, cx);
+                    let placeholder = input::placeholder(self.cfg.submit_key);
+                    self.input.update(cx, |state, cx| {
+                        state.set_placeholder(placeholder, window, cx)
+                    });
+                }
+            }
         }
         // Persist every touched value (the mode and model rows change
         // nothing in `saved`; rewriting the small file is harmless).
-        settings::save(&self.saved);
+        picocode_core::config::saved::save(&self.saved);
         cx.notify();
     }
 

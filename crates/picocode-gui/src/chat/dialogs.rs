@@ -10,11 +10,11 @@ use gpui_component::{ActiveTheme, StyledExt};
 use rust_i18n::t;
 
 use picocode_core::attachment::AttachmentKind;
-use picocode_core::config::{self};
+use picocode_core::config::{self, Group, SettingId};
 use picocode_core::transcript::diff_lines;
 use picocode_core::{approval, session};
 
-use crate::settings::ThemeSetting;
+use crate::theme::ThemeSetting;
 
 use super::ChatView;
 use super::status::{menu_row, mode_name};
@@ -31,7 +31,69 @@ impl ThemeSetting {
     }
 }
 
+/// One `/config` row the GUI shows: the shared table, plus the appearance
+/// and color-theme pickers, which only the GUI has.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum GuiSetting {
+    Shared(SettingId),
+    Theme,
+    ThemeFamily,
+}
+
+impl GuiSetting {
+    fn group(self) -> Group {
+        match self {
+            GuiSetting::Shared(id) => id.group(),
+            GuiSetting::Theme | GuiSetting::ThemeFamily => Group::Interface,
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            GuiSetting::Shared(id) => id.label(),
+            GuiSetting::Theme => t!("row_theme").to_string(),
+            GuiSetting::ThemeFamily => t!("row_color_theme").to_string(),
+        }
+    }
+
+    fn is_action(self) -> bool {
+        matches!(self, GuiSetting::Shared(id) if id.is_action())
+    }
+}
+
+/// Every `/config` row, in display order, grouped by section. The theme
+/// rows lead the Interface section: they are what most people come here
+/// for, and they are the two the GUI adds.
+fn settings_order() -> Vec<GuiSetting> {
+    let mut order = Vec::new();
+    for group in Group::ALL {
+        if group == Group::Interface {
+            order.push(GuiSetting::Theme);
+            order.push(GuiSetting::ThemeFamily);
+        }
+        order.extend(
+            SettingId::SHARED
+                .into_iter()
+                .filter(|id| id.group() == group)
+                .map(GuiSetting::Shared),
+        );
+    }
+    order
+}
+
 impl ChatView {
+    /// The displayed value of one `/config` row. The shared rows come from
+    /// core's table; the mode is the exception, since the GUI names the
+    /// modes itself.
+    fn setting_value(&self, setting: GuiSetting) -> String {
+        match setting {
+            GuiSetting::Theme => self.theme_pref.label(),
+            GuiSetting::ThemeFamily => self.theme_family.clone(),
+            GuiSetting::Shared(SettingId::Mode) => mode_name(self.cfg.mode.get()),
+            GuiSetting::Shared(id) => id.value(&self.cfg),
+        }
+    }
+
     pub(super) fn render_approval(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let a = self.approval.as_ref()?;
         let theme = cx.theme();
@@ -499,62 +561,29 @@ impl ChatView {
             return None;
         }
         let theme = cx.theme();
-        let search = self.cfg.search.snapshot();
-        let rows: [(String, String); 12] = [
-            (t!("row_theme").to_string(), self.theme_pref.label()),
-            (t!("row_color_theme").to_string(), self.theme_family.clone()),
-            (t!("row_mode").to_string(), mode_name(self.cfg.mode.get())),
-            (
-                t!("row_send_key").to_string(),
-                self.cfg.submit_key.label().to_string(),
-            ),
-            (
-                t!("row_bash_timeout").to_string(),
-                format!("{}s", self.cfg.bash_timeout.get()),
-            ),
-            (
-                t!("row_read_lines").to_string(),
-                self.cfg.read_max_lines.get().to_string(),
-            ),
-            (
-                t!("row_line_bytes").to_string(),
-                self.cfg.read_max_line_bytes.get().to_string(),
-            ),
-            (
-                t!("row_web_search").to_string(),
-                search.provider.label().to_string(),
-            ),
-            (
-                t!("row_results").to_string(),
-                search.max_results.to_string(),
-            ),
-            (
-                t!("row_max_tokens").to_string(),
-                match self.cfg.max_tokens.get() {
-                    0 => t!("max_tokens_off").to_string(),
-                    n => t!("max_tokens_value", n = n).to_string(),
-                },
-            ),
-            (
-                t!("row_auto_compact").to_string(),
-                match self.cfg.auto_compact.get() {
-                    0 => t!("auto_compact_off").to_string(),
-                    pct => format!("{pct}%"),
-                },
-            ),
-            (t!("row_model").to_string(), self.cfg.model_label()),
-        ];
 
         let mut panel = div().v_flex().gap_1();
-        let model_row = rows.len() - 1;
-        for (ix, (label, value)) in rows.into_iter().enumerate() {
+        let mut group = None;
+        for (ix, setting) in settings_order().into_iter().enumerate() {
+            if group != Some(setting.group()) {
+                group = Some(setting.group());
+                panel = panel.child(
+                    div()
+                        .px_2()
+                        .pt_2()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(setting.group().label()),
+                );
+            }
+            let value = self.setting_value(setting);
             // The model row is a single button opening the model menu; the
             // others adjust in place with −/+.
-            let controls: AnyElement = if ix == model_row {
+            let controls: AnyElement = if setting.is_action() {
                 Button::new("cfg-model")
                     .label(value)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.adjust_setting(model_row, 1, window, cx)
+                        this.adjust_setting(setting, 1, window, cx)
                     }))
                     .into_any_element()
             } else {
@@ -567,16 +596,16 @@ impl ChatView {
                             .ghost()
                             .label("−")
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.adjust_setting(ix, -1, window, cx)
+                                this.adjust_setting(setting, -1, window, cx)
                             })),
                     )
-                    .child(div().min_w(px(110.)).text_center().child(value))
+                    .child(div().min_w(px(130.)).text_center().child(value))
                     .child(
                         Button::new(SharedString::from(format!("cfg-inc-{ix}")))
                             .ghost()
                             .label("+")
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.adjust_setting(ix, 1, window, cx)
+                                this.adjust_setting(setting, 1, window, cx)
                             })),
                     )
                     .into_any_element()
@@ -588,7 +617,7 @@ impl ChatView {
                     .items_center()
                     .px_2()
                     .py_1()
-                    .child(label)
+                    .child(setting.label())
                     .child(controls),
             );
         }
@@ -598,7 +627,12 @@ impl ChatView {
                 .child(
                     div()
                         .v_flex()
+                        // The rows outgrew a short window once they were
+                        // sectioned, so the list scrolls inside the dialog
+                        // rather than the title and the close button
+                        // sliding off the screen with it.
                         .w(px(460.))
+                        .max_h(px(560.))
                         .gap_3()
                         .p_4()
                         .rounded_lg()
@@ -612,7 +646,13 @@ impl ChatView {
                                 .text_color(theme.muted_foreground)
                                 .child(t!("settings_note").to_string()),
                         )
-                        .child(panel)
+                        .child(
+                            div()
+                                .id("settings-rows")
+                                .flex_1()
+                                .overflow_y_scroll()
+                                .child(panel),
+                        )
                         .child(
                             div().h_flex().justify_end().child(
                                 Button::new("settings-close")
@@ -989,4 +1029,55 @@ fn approval_body(a: &Approval, mono: SharedString, muted: gpui::Hsla, cx: &App) 
         .text_color(muted)
         .child(clip(&pretty, 60))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dialog renders `settings_order` straight through, emitting a
+    /// heading when the section changes — so a row out of group order
+    /// would put a second heading with the same name further down.
+    #[test]
+    fn each_section_runs_once() {
+        let mut seen: Vec<Group> = Vec::new();
+        let mut last = None;
+        for setting in settings_order() {
+            if last != Some(setting.group()) {
+                assert!(
+                    !seen.contains(&setting.group()),
+                    "{:?} is split across the dialog",
+                    setting.group()
+                );
+                seen.push(setting.group());
+                last = Some(setting.group());
+            }
+        }
+        assert_eq!(seen, Group::ALL.to_vec());
+    }
+
+    /// The theme rows are the GUI's own; everything else comes from core,
+    /// and all of it is rendered.
+    #[test]
+    fn the_shared_table_is_rendered_whole() {
+        let order = settings_order();
+        for id in SettingId::SHARED {
+            assert!(order.contains(&GuiSetting::Shared(id)), "{id:?} is missing");
+        }
+        assert!(order.contains(&GuiSetting::Theme));
+        assert!(order.contains(&GuiSetting::ThemeFamily));
+    }
+
+    /// One `-`/`+` pair per row, keyed by position: a duplicate key would
+    /// make two rows' buttons collide in gpui's element tree.
+    #[test]
+    fn every_row_gets_a_distinct_button_key() {
+        let keys: Vec<String> = (0..settings_order().len())
+            .map(|ix| format!("cfg-dec-{ix}"))
+            .collect();
+        let mut unique = keys.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(keys.len(), unique.len());
+    }
 }

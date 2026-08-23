@@ -14,7 +14,6 @@ path = "src/main.rs"
 picocode-core.workspace = true
 
 rust-i18n.workspace = true
-sys-locale.workspace = true
 
 rig.workspace = true
 tokio.workspace = true

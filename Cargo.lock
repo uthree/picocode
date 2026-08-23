@@ -5040,7 +5040,6 @@ dependencies = [
  "rust-i18n",
  "serde",
  "serde_json",
- "sys-locale",
  "tokio",
  "unicodeit",
 ]
@@ -5058,7 +5057,6 @@ dependencies = [
  "rust-i18n",
  "serde_json",
  "syntect",
- "sys-locale",
  "textwrap",
  "tokio",
  "unicode-width",
