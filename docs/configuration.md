@@ -55,9 +55,9 @@ Two places to set it:
   the new model's own figure, since a window that fits one model is wrong
   for the next.
 
-With neither, the window is 32768 tokens. The `/config` row abbreviates —
-`32k`, `128k`, `1M` — dividing by 1024 where that comes out even, since
-that is how the models themselves are named.
+With neither, the window is 32768 tokens. `/config` abbreviates its
+counts — `32k`, `128k`, `1M` — dividing by 1024 where that comes out
+even, since that is how the models themselves are named.
 
 #### What the provider says
 

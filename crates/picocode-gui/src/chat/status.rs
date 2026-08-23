@@ -436,7 +436,7 @@ impl ChatView {
                     (t!("ctx_model").to_string(), self.cfg.model_label()),
                     (
                         t!("ctx_window").to_string(),
-                        config::human_tokens(self.cfg.context_window.get()),
+                        config::human_count(self.cfg.context_window.get()),
                     ),
                     (
                         t!("ctx_used").to_string(),

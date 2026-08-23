@@ -112,10 +112,10 @@ impl SettingId {
     pub fn value(self, cfg: &Config) -> String {
         match self {
             SettingId::Model => cfg.model_label(),
-            SettingId::ContextWindow => human_tokens(cfg.context_window.get()),
+            SettingId::ContextWindow => human_count(cfg.context_window.get()),
             SettingId::MaxTokens => match cfg.max_tokens.get() {
                 0 => t!("val_max_tokens_off").to_string(),
-                n => human_tokens(n),
+                n => human_count(n),
             },
             SettingId::AutoCompact => match cfg.auto_compact.get() {
                 0 => t!("val_off").to_string(),
@@ -123,8 +123,8 @@ impl SettingId {
             },
             SettingId::Mode => cfg.mode.get().label().to_string(),
             SettingId::BashTimeout => t!("val_seconds", n = cfg.bash_timeout.get()).to_string(),
-            SettingId::ReadLines => cfg.read_max_lines.get().to_string(),
-            SettingId::LineBytes => cfg.read_max_line_bytes.get().to_string(),
+            SettingId::ReadLines => human_count(cfg.read_max_lines.get()),
+            SettingId::LineBytes => human_count(cfg.read_max_line_bytes.get()),
             SettingId::SearchProvider => cfg.search.snapshot().provider.label().to_string(),
             SettingId::SearchResults => cfg.search.snapshot().max_results.to_string(),
             SettingId::SendKey => cfg.submit_key.label().to_string(),
@@ -191,16 +191,18 @@ impl SettingId {
     }
 }
 
-/// A token count the way people say them: `32768` → `32k`, `262144` →
-/// `256k`, `200000` → `200k`, `1048576` → `1M`. Six digits in a row are
-/// hard to compare at a glance, and a window is never discussed at that
-/// precision anyway.
+/// A `/config` count the way people say it: `32768` → `32k`, `262144` →
+/// `256k`, `200000` → `200k`, `1048576` → `1M`, `1500` → `1.5k`. Digits in
+/// a row are hard to compare at a glance, and none of these settings is
+/// discussed at single-unit precision.
 ///
-/// Model windows come in both flavours — Ollama's are powers of two, a
-/// hosted API's are round decimals — so the divisor follows the number:
-/// 1024 when it divides evenly (that is how those models are named), 1000
-/// otherwise. Under 1000 the figure is short enough to show as it is.
-pub fn human_tokens(n: u64) -> String {
+/// The divisor follows the number: 1024 when it divides evenly, 1000
+/// otherwise. That is for the context window, where model sizes come in
+/// both flavours — Ollama's are powers of two and named for them (262144
+/// is a 256k model), a hosted API's are round decimals. The line and byte
+/// limits step in hundreds, so they never meet the 1024 case and simply
+/// read as thousands. Under 1000 the figure is short enough as it is.
+pub fn human_count(n: u64) -> String {
     const K: u64 = 1024;
     const M: u64 = K * K;
     let exact = |unit: u64, suffix: &str| {
@@ -226,28 +228,66 @@ mod tests {
     fn token_counts_read_the_way_models_are_named() {
         // Powers of two divide by 1024, which is how these windows are
         // quoted: a 262144-token model is a 256k model, not a 262.1k one.
-        assert_eq!(human_tokens(2048), "2k");
-        assert_eq!(human_tokens(8192), "8k");
-        assert_eq!(human_tokens(32_768), "32k");
-        assert_eq!(human_tokens(40_960), "40k");
-        assert_eq!(human_tokens(131_072), "128k");
-        assert_eq!(human_tokens(262_144), "256k");
-        assert_eq!(human_tokens(1_048_576), "1M");
+        assert_eq!(human_count(2048), "2k");
+        assert_eq!(human_count(8192), "8k");
+        assert_eq!(human_count(32_768), "32k");
+        assert_eq!(human_count(40_960), "40k");
+        assert_eq!(human_count(131_072), "128k");
+        assert_eq!(human_count(262_144), "256k");
+        assert_eq!(human_count(1_048_576), "1M");
 
         // A hosted API's round decimals keep their own shape.
-        assert_eq!(human_tokens(200_000), "200k");
-        assert_eq!(human_tokens(500_000), "500k");
-        assert_eq!(human_tokens(1_000_000), "1M");
+        assert_eq!(human_count(200_000), "200k");
+        assert_eq!(human_count(500_000), "500k");
+        assert_eq!(human_count(1_000_000), "1M");
 
         // Anything else gets one decimal, with a bare .0 trimmed.
-        assert_eq!(human_tokens(1500), "1.5k");
-        assert_eq!(human_tokens(45_000), "45k");
-        assert_eq!(human_tokens(33_000), "33k");
+        assert_eq!(human_count(1500), "1.5k");
+        assert_eq!(human_count(45_000), "45k");
+        assert_eq!(human_count(33_000), "33k");
 
         // Small enough to read as it is.
-        assert_eq!(human_tokens(0), "0");
-        assert_eq!(human_tokens(512), "512");
-        assert_eq!(human_tokens(999), "999");
+        assert_eq!(human_count(0), "0");
+        assert_eq!(human_count(512), "512");
+        assert_eq!(human_count(999), "999");
+    }
+
+    /// The line and byte limits step in hundreds, so the 1024 rule never
+    /// fires for them and every reachable value reads as thousands.
+    #[test]
+    fn every_read_limit_the_stepper_reaches_abbreviates_cleanly() {
+        let cfg = Config::for_tests();
+        let mut seen = Vec::new();
+        for _ in 0..40 {
+            cfg.step_read_lines(-1);
+        }
+        for _ in 0..40 {
+            seen.push(SettingId::ReadLines.value(&cfg));
+            cfg.step_read_lines(1);
+        }
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [
+                "500", "1k", "1.5k", "2k", "2.5k", "3k", "3.5k", "4k", "4.5k", "5k", "5.5k", "6k",
+                "6.5k", "7k", "7.5k", "8k", "8.5k", "9k", "9.5k", "10k"
+            ]
+        );
+
+        let mut seen = Vec::new();
+        for _ in 0..60 {
+            cfg.step_line_bytes(-1);
+        }
+        for _ in 0..60 {
+            seen.push(SettingId::LineBytes.value(&cfg));
+            cfg.step_line_bytes(1);
+        }
+        seen.dedup();
+        assert_eq!(seen.first().map(String::as_str), Some("100"));
+        assert_eq!(seen.last().map(String::as_str), Some("5k"));
+        assert!(seen.contains(&"900".to_string()));
+        assert!(seen.contains(&"1k".to_string()), "{seen:?}");
+        assert!(seen.contains(&"1.1k".to_string()), "{seen:?}");
     }
 
     #[test]

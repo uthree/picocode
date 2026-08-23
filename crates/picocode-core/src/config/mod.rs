@@ -1203,7 +1203,7 @@ pub mod trust;
 
 pub use rules::*;
 pub use search::*;
-pub use settings::{Group, SettingId, human_tokens};
+pub use settings::{Group, SettingId, human_count};
 
 use rules::validate_tool_lists;
 use search::{SearchFileConfig, resolve_search};
