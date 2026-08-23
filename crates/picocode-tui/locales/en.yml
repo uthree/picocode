@@ -1,0 +1,12 @@
+_version: 1
+
+# The /config dialog. Row labels and section headings come from
+# picocode-core's catalog, so the TUI and the GUI name them the same way;
+# only what is TUI-specific lives here.
+settings_title: "Settings"
+settings_hint: " ↑↓ select · ←→ change · Enter pick model · Esc close"
+settings_saved_note: "changes apply now and are remembered (mode excepted)"
+set_reasoning: "reasoning"
+reasoning_shown: "shown"
+reasoning_collapsed: "collapsed"
+send_key_no_report: "%{key} (terminal sends on Enter)"

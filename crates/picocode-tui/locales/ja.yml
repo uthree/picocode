@@ -1,0 +1,9 @@
+_version: 1
+
+settings_title: "設定"
+settings_hint: " ↑↓ 選択 · ←→ 変更 · Enter モデル選択 · Esc 閉じる"
+settings_saved_note: "変更は即時反映され、次回以降も保持されます（モードを除く）"
+set_reasoning: "推論表示"
+reasoning_shown: "表示"
+reasoning_collapsed: "折りたたみ"
+send_key_no_report: "%{key}（この端末では Enter で送信）"

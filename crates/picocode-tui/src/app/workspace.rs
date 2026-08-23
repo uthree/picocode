@@ -193,7 +193,7 @@ impl App {
             new_cfg.model = self.cfg.model.clone();
             new_cfg.base_url = self.cfg.base_url.clone();
             new_cfg.active_model = None;
-            new_cfg.context_window = self.cfg.context_window;
+            new_cfg.context_window = self.cfg.context_window.clone();
         }
         new_cfg.mode.set(self.cfg.mode.get());
         // The goal belonged to the conversation being left behind, and the

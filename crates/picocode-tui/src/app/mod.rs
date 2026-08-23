@@ -19,7 +19,7 @@ mod workspace;
 
 pub use dialogs::{
     AddModelForm, AddRemoteForm, AlwaysAllow, ModelPicker, PendingApproval, PendingQuestion,
-    RemotePicker, SETTINGS_ROWS, SessionPicker, SettingsMenu,
+    RemotePicker, SessionPicker, SettingsMenu, SettingsRow,
 };
 
 use std::path::PathBuf;
@@ -78,6 +78,9 @@ pub struct App {
     pub last_view_height: usize,
     /// Show full model reasoning instead of a collapsed one-liner.
     pub show_reasoning: bool,
+    /// Settings remembered across runs, shared with the GUI; /config
+    /// writes to it and saves.
+    pub(super) saved: picocode_core::config::saved::Saved,
     /// Selected index in the command-completion popup.
     pub comp_selected: usize,
     /// Filter prefix locked at the first Tab / arrow press, so cycling keeps
@@ -202,6 +205,7 @@ impl App {
         mcp: picocode_core::mcp::McpConnections,
         backend: picocode_core::backend::Backend,
         enhanced_keys: bool,
+        saved: picocode_core::config::saved::Saved,
     ) -> Self {
         let (open_tx, open_rx) = mpsc::channel(1);
         let mut app = Self {
@@ -215,7 +219,8 @@ impl App {
             top_line: 0,
             last_total_lines: 0,
             last_view_height: 0,
-            show_reasoning: false,
+            show_reasoning: saved.ui(dialogs::REASONING_KEY).unwrap_or(false),
+            saved,
             comp_selected: 0,
             comp_prefix: None,
             input_history: InputHistory::default(),
@@ -465,16 +470,18 @@ impl App {
             return;
         }
 
-        // The /config dialog captures navigation keys while open.
+        // The /config dialog captures navigation keys while open. Section
+        // headings are not in this count, so the cursor never lands on one.
         if self.settings.is_some() {
+            let rows = self.settings_order().len();
             match key.code {
                 KeyCode::Up => {
                     let menu = self.settings.as_mut().unwrap();
-                    menu.selected = (menu.selected + SETTINGS_ROWS - 1) % SETTINGS_ROWS;
+                    menu.selected = (menu.selected + rows - 1) % rows;
                 }
                 KeyCode::Down => {
                     let menu = self.settings.as_mut().unwrap();
-                    menu.selected = (menu.selected + 1) % SETTINGS_ROWS;
+                    menu.selected = (menu.selected + 1) % rows;
                 }
                 KeyCode::Left => self.adjust_setting(-1),
                 KeyCode::Right => self.adjust_setting(1),
@@ -1027,7 +1034,7 @@ impl App {
 
     /// Fraction of the model's context window used by the latest request.
     pub fn context_ratio(&self) -> f64 {
-        self.ctx_tokens as f64 / self.cfg.context_window.max(1) as f64
+        self.ctx_tokens as f64 / self.cfg.context_window.get().max(1) as f64
     }
 
     /// Scroll the transcript. The view is anchored to a fixed top line while

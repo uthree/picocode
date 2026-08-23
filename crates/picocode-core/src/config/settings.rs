@@ -160,11 +160,11 @@ impl SettingId {
         }
     }
 
-    /// Whether the worker has to rebuild its agents for the change to take
-    /// effect: these two travel with the request rather than being read per
-    /// use, so the running agents hold the old value.
-    pub fn needs_worker_rebuild(self) -> bool {
-        matches!(self, SettingId::MaxTokens | SettingId::ContextWindow)
+    /// Whether the change belongs to the model selection rather than to the
+    /// user, and so is remembered by [`crate::state`] for this project
+    /// instead of in the shared [`Saved`] overlay.
+    pub fn is_per_selection(self) -> bool {
+        self == SettingId::ContextWindow
     }
 
     /// Copy the new value into the persisted overlay, for the settings that

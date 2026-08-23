@@ -1,8 +1,10 @@
 //! Dialog state (approval, question, pickers, forms) and the small
 //! informational commands: `/config`, `/status`, `/permissions`, `/jobs`.
 
+use rust_i18n::t;
 use tokio::sync::oneshot;
 
+use picocode_core::config::{Group, SettingId};
 use picocode_core::models::ModelChoice;
 use picocode_core::session;
 
@@ -140,12 +142,97 @@ impl AddModelForm {
 /// are read live from the app so external changes (Shift+Tab, Ctrl+T) show
 /// up while the dialog is open.
 pub struct SettingsMenu {
+    /// Index into [`App::settings_order`] — the selectable rows only, so
+    /// the section headings never take the cursor.
     pub selected: usize,
 }
 
-/// Number of rows in the `/config` dialog (mode, send key, reasoning, bash
-/// timeout, read limits, web search provider/results, auto-compact, model).
-pub const SETTINGS_ROWS: usize = 11;
+/// One `/config` row the TUI can put the cursor on: the shared table, plus
+/// the reasoning toggle, which only the TUI has (the GUI collapses
+/// reasoning per entry instead).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Setting {
+    Shared(SettingId),
+    Reasoning,
+}
+
+/// Where the reasoning toggle is remembered between runs.
+pub(super) const REASONING_KEY: &str = "tui_reasoning";
+
+impl Setting {
+    pub fn group(self) -> Group {
+        match self {
+            Setting::Shared(id) => id.group(),
+            Setting::Reasoning => Group::Interface,
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Setting::Shared(id) => id.label(),
+            Setting::Reasoning => t!("set_reasoning").to_string(),
+        }
+    }
+
+    pub fn is_action(self) -> bool {
+        matches!(self, Setting::Shared(id) if id.is_action())
+    }
+}
+
+/// A line of the `/config` dialog as rendered: a section heading, or a
+/// setting with its current value.
+pub enum SettingsRow {
+    Header(String),
+    Setting {
+        name: String,
+        value: String,
+        hint: &'static str,
+    },
+}
+
+/// Every selectable `/config` row, in display order: the shared table plus
+/// the TUI's own reasoning toggle, grouped by section.
+fn settings_order() -> Vec<Setting> {
+    let mut order = Vec::new();
+    for group in Group::ALL {
+        order.extend(
+            SettingId::SHARED
+                .into_iter()
+                .filter(|id| id.group() == group)
+                .map(Setting::Shared),
+        );
+        if group == Setting::Reasoning.group() {
+            order.push(Setting::Reasoning);
+        }
+    }
+    order
+}
+
+/// [`settings_order`] with a heading in front of each section. Headings are
+/// not selectable, so the cursor index counts settings only — the renderer
+/// relies on the settings appearing here in exactly `settings_order`'s
+/// order.
+fn settings_rows(value: impl Fn(Setting) -> String) -> Vec<SettingsRow> {
+    let mut rows = Vec::new();
+    let mut group = None;
+    for setting in settings_order() {
+        if group != Some(setting.group()) {
+            group = Some(setting.group());
+            rows.push(SettingsRow::Header(setting.group().label()));
+        }
+        rows.push(SettingsRow::Setting {
+            name: setting.label(),
+            value: value(setting),
+            // The model row opens the picker instead of cycling.
+            hint: if setting.is_action() {
+                "Enter"
+            } else {
+                "← →"
+            },
+        });
+    }
+    rows
+}
 
 /// State of the `submit_plan` approval (question) dialog.
 pub struct PendingQuestion {
@@ -237,58 +324,35 @@ impl App {
         self.push(EntryKind::Notice, text);
     }
 
-    /// Rows of the `/config` dialog: (name, current value, key hint). Values
-    /// are rebuilt every frame so concurrent changes (Shift+Tab, Ctrl+T)
-    /// stay in sync while the dialog is open.
-    pub fn settings_rows(&self) -> [(&'static str, String, &'static str); SETTINGS_ROWS] {
-        [
-            ("mode", self.cfg.mode.get().label().to_string(), "← →"),
-            ("send key", self.send_key_label(), "← →"),
-            (
-                "reasoning",
-                if self.show_reasoning {
-                    "shown".to_string()
-                } else {
-                    "collapsed".to_string()
-                },
-                "← →",
-            ),
-            (
-                "bash timeout",
-                format!("{}s", self.cfg.bash_timeout.get()),
-                "← →",
-            ),
-            (
-                "read lines",
-                self.cfg.read_max_lines.get().to_string(),
-                "← →",
-            ),
-            (
-                "line bytes",
-                self.cfg.read_max_line_bytes.get().to_string(),
-                "← →",
-            ),
-            (
-                "web search",
-                self.cfg.search.snapshot().provider.label().to_string(),
-                "← →",
-            ),
-            (
-                "results",
-                self.cfg.search.snapshot().max_results.to_string(),
-                "← →",
-            ),
-            ("max tokens", self.cfg.max_tokens_label(), "← →"),
-            (
-                "auto-compact",
-                match self.cfg.auto_compact.get() {
-                    0 => "off".to_string(),
-                    pct => format!("{pct}%"),
-                },
-                "← →",
-            ),
-            ("model", self.model_label.clone(), "Enter"),
-        ]
+    /// Every selectable `/config` row, in display order.
+    pub fn settings_order(&self) -> Vec<Setting> {
+        settings_order()
+    }
+
+    /// Rows of the `/config` dialog, section headings included. Values are
+    /// rebuilt every frame so concurrent changes (Shift+Tab, Ctrl+T) show
+    /// up while the dialog is open.
+    pub fn settings_rows(&self) -> Vec<SettingsRow> {
+        settings_rows(|setting| self.setting_value(setting))
+    }
+
+    /// The displayed value of one row. Everything shared comes from the
+    /// core table; the two exceptions are the model (the TUI tracks the
+    /// resolved label, which can differ from the config while a switch is
+    /// in flight) and the send key, where a terminal that cannot report the
+    /// chosen combination has to say so.
+    fn setting_value(&self, setting: Setting) -> String {
+        match setting {
+            Setting::Shared(SettingId::Model) => self.model_label.clone(),
+            Setting::Shared(SettingId::SendKey) => self.send_key_label(),
+            Setting::Shared(id) => id.value(&self.cfg),
+            Setting::Reasoning => if self.show_reasoning {
+                t!("reasoning_shown")
+            } else {
+                t!("reasoning_collapsed")
+            }
+            .to_string(),
+        }
     }
 
     /// The `/config` send-key value: the key itself, plus what the terminal
@@ -296,40 +360,45 @@ impl App {
     fn send_key_label(&self) -> String {
         let key = self.cfg.submit_key;
         if !self.enhanced_keys && super::needs_enhanced_keys(key) {
-            format!("{} (terminal sends on Enter)", key.label())
+            t!("send_key_no_report", key = key.label()).to_string()
         } else {
             key.label().to_string()
         }
     }
 
+    /// The row the cursor is on, or `None` if the dialog is closed.
+    fn selected_setting(&self) -> Option<Setting> {
+        let menu = self.settings.as_ref()?;
+        self.settings_order().get(menu.selected).copied()
+    }
+
     /// ←/→ on a `/config` row: change the value in place. Every change
-    /// applies immediately.
+    /// applies immediately, and is remembered for future runs unless the
+    /// core table says otherwise (the mode is deliberately session-only).
     pub(super) fn adjust_setting(&mut self, delta: i64) {
-        let Some(menu) = &self.settings else { return };
-        match menu.selected {
-            // Same cycle as Shift+Tab; bypass stays /bypass-only, and
-            // adjusting away from it lands on read-only.
-            0 => self.cfg.mode.set(self.cfg.mode.get().cycled(delta)),
-            // Session-only, like every other row here; `submit_key` in
-            // picocode.toml makes it stick.
-            1 => self.cfg.submit_key = self.cfg.submit_key.cycled(delta),
-            2 => self.show_reasoning = !self.show_reasoning,
-            3 => self.cfg.step_bash_timeout(delta),
-            4 => self.cfg.step_read_lines(delta),
-            5 => self.cfg.step_line_bytes(delta),
-            6 => self.cfg.search.cycle_provider(delta),
-            7 => self.cfg.search.step_max_results(delta),
-            8 => self.cfg.step_max_tokens(delta),
-            9 => self.cfg.step_auto_compact(delta),
-            _ => {}
+        let Some(setting) = self.selected_setting() else {
+            return;
+        };
+        match setting {
+            Setting::Shared(id) => {
+                id.adjust(&mut self.cfg, delta);
+                id.save_into(&self.cfg, &mut self.saved);
+                if id.is_per_selection() {
+                    picocode_core::state::save_last_model(&self.cfg);
+                }
+            }
+            Setting::Reasoning => {
+                self.show_reasoning = !self.show_reasoning;
+                self.saved.set_ui(REASONING_KEY, self.show_reasoning);
+            }
         }
+        picocode_core::config::saved::save(&self.saved);
     }
 
     /// Enter/Space on a `/config` row: toggles act like →; the model row
     /// closes the dialog and opens the `/model` picker.
     pub(super) fn activate_setting(&mut self) {
-        let Some(menu) = &self.settings else { return };
-        if menu.selected == SETTINGS_ROWS - 1 {
+        if self.selected_setting().is_some_and(Setting::is_action) {
             self.settings = None;
             self.open_model_picker();
         } else {
@@ -410,5 +479,58 @@ impl App {
             );
             let _ = p.respond.send(true);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The renderer walks `settings_rows` and advances the cursor index
+    /// only on `Setting` rows, so the settings it yields have to be exactly
+    /// `settings_order`, in order — otherwise ←/→ lands on the wrong row.
+    #[test]
+    fn headings_do_not_disturb_the_cursor_index() {
+        let rows = settings_rows(|s| format!("{s:?}"));
+        let rendered: Vec<String> = rows
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Setting { value, .. } => Some(value.clone()),
+                SettingsRow::Header(_) => None,
+            })
+            .collect();
+        let expected: Vec<String> = settings_order().iter().map(|s| format!("{s:?}")).collect();
+        assert_eq!(rendered, expected);
+        assert!(
+            rows.len() > expected.len(),
+            "no section headings were emitted"
+        );
+    }
+
+    /// Every section runs once: a stray row would put a second heading with
+    /// the same name further down the dialog.
+    #[test]
+    fn each_section_heading_appears_once() {
+        let headings: Vec<String> = settings_rows(|_| String::new())
+            .iter()
+            .filter_map(|row| match row {
+                SettingsRow::Header(title) => Some(title.clone()),
+                SettingsRow::Setting { .. } => None,
+            })
+            .collect();
+        let mut unique = headings.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(headings.len(), unique.len(), "{headings:?}");
+    }
+
+    /// The reasoning toggle is the TUI's own row; the rest come from core.
+    #[test]
+    fn the_shared_table_is_rendered_whole() {
+        let order = settings_order();
+        for id in SettingId::SHARED {
+            assert!(order.contains(&Setting::Shared(id)), "{id:?} is missing");
+        }
+        assert!(order.contains(&Setting::Reasoning));
     }
 }

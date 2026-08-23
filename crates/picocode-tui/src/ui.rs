@@ -5,15 +5,16 @@ use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
+use rust_i18n::t;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{
     AddModelForm, AddRemoteForm, App, EntryKind, ModelPicker, PendingApproval, PendingQuestion,
-    RemotePicker, SessionPicker,
+    RemotePicker, SessionPicker, SettingsRow,
 };
 
 /// Column width of the setting names in the `/config` dialog.
-const SETTING_NAME_COL: usize = 12;
+const SETTING_NAME_COL: usize = 14;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -902,36 +903,48 @@ fn draw_settings(f: &mut Frame, app: &App) {
     let Some(menu) = &app.settings else { return };
     let rows = app.settings_rows();
     let screen = f.area();
-    // rows + borders + hint line.
-    let area = dialog_area(screen, (30, 60), rows.len() as u16 + 3);
+    // rows (settings and section headings) + borders + hint lines.
+    let area = dialog_area(screen, (34, 62), rows.len() as u16 + 4);
     let inner_width = area.width.saturating_sub(2) as usize;
 
     let mut lines: Vec<Line> = Vec::new();
-    for (i, (name, value, hint)) in rows.iter().enumerate() {
+    // Headings are not selectable, so the cursor counts settings only.
+    let mut ix = 0;
+    for row in &rows {
+        let (name, value, hint) = match row {
+            SettingsRow::Header(title) => {
+                lines.push(Line::from(Span::styled(
+                    format!(" {title}"),
+                    Style::new().fg(Color::Cyan).bold(),
+                )));
+                continue;
+            }
+            SettingsRow::Setting { name, value, hint } => (name, value, hint),
+        };
         let value = if *hint == "← →" {
             format!("‹ {value} ›")
         } else {
             value.clone()
         };
-        let text = format!(" {name:<SETTING_NAME_COL$} {value}");
-        lines.push(if i == menu.selected {
+        let text = format!("   {name:<SETTING_NAME_COL$} {value}");
+        lines.push(if ix == menu.selected {
             list_line(text, true, inner_width, Style::new())
         } else {
             // Unselected rows dim the name column.
             let text: String = text.chars().take(inner_width).collect();
             Line::from(vec![
                 Span::styled(
-                    format!(" {name:<SETTING_NAME_COL$} "),
+                    format!("   {name:<SETTING_NAME_COL$} "),
                     Style::new().fg(Color::DarkGray),
                 ),
-                Span::raw(text.chars().skip(SETTING_NAME_COL + 2).collect::<String>()),
+                Span::raw(text.chars().skip(SETTING_NAME_COL + 4).collect::<String>()),
             ])
         });
+        ix += 1;
     }
-    lines.push(hint_line(
-        " ↑↓ select · ←→ change · Enter pick model · Esc close",
-    ));
-    render_dialog(f, "Settings (this session)", Color::Cyan, area, lines);
+    lines.push(hint_line(&format!(" {}", t!("settings_saved_note"))));
+    lines.push(hint_line(&t!("settings_hint")));
+    render_dialog(f, &t!("settings_title"), Color::Cyan, area, lines);
 }
 
 // ----- question dialog -----------------------------------------------------

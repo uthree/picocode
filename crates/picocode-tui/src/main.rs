@@ -5,6 +5,11 @@ mod input;
 mod markdown;
 mod ui;
 
+// The `/config` dialog's own strings; its row labels and section headings
+// come from picocode-core's catalog so both front ends name them alike.
+// The rest of the TUI is still English only.
+rust_i18n::i18n!("locales", fallback = "en");
+
 use clap::Parser;
 
 use picocode_core::event::{AgentEvent, WorkerCmd};
@@ -12,6 +17,7 @@ use picocode_core::{agent, config, models};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    picocode_core::set_locale_from_system();
     let args = config::Args::parse();
     let smoke = args.smoke.clone();
     let smoke_attach = args.smoke_attach.clone();
@@ -20,6 +26,11 @@ async fn main() -> anyhow::Result<()> {
     let print = args.print.clone();
     let print_attach = args.attach.clone();
     let mut cfg = config::Config::from_args(args)?;
+    // Settings changed in an earlier run's `/config` are a sparse overlay
+    // on the config file (untouched values keep following it), shared with
+    // the GUI.
+    let saved = config::saved::load();
+    saved.apply(&mut cfg);
     if smoke.is_some() {
         cfg.mode.set(config::Mode::Bypass);
     }
@@ -134,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         mcp,
         backend,
         enhanced_keys,
+        saved,
     )
     .run(terminal, event_rx)
     .await;

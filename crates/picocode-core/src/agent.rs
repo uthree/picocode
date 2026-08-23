@@ -387,14 +387,17 @@ async fn worker<M, F>(
     let mut last_ctx: u64 = 0;
     // The `/goal` condition, when one is set.
     let mut goal: Option<String> = None;
-    // The reply-length cap the current agents were built with; a `/config`
-    // change rebuilds them before the next turn.
-    let mut built_max_tokens = cfg.max_tokens.get();
+    // The two settings the built agents hold rather than read per use: the
+    // reply-length cap, and — on Ollama, where it travels as `num_ctx` —
+    // the context window. A `/config` change to either rebuilds the agents
+    // before the next turn, so the front ends only have to set the handle.
+    let mut built = (cfg.max_tokens.get(), cfg.context_window.get());
 
     while let Some(cmd) = cmd_rx.recv().await {
-        if cfg.max_tokens.get() != built_max_tokens {
-            built_max_tokens = cfg.max_tokens.get();
-            agents = make_agents(built_max_tokens);
+        let current = (cfg.max_tokens.get(), cfg.context_window.get());
+        if current != built {
+            built = current;
+            agents = make_agents(built.0);
         }
         match cmd {
             WorkerCmd::Clear => {
