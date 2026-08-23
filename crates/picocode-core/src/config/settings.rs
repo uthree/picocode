@@ -112,15 +112,10 @@ impl SettingId {
     pub fn value(self, cfg: &Config) -> String {
         match self {
             SettingId::Model => cfg.model_label(),
-            // Naming the model's own ceiling next to the value answers the
-            // question the row otherwise raises: how far can I take this?
-            SettingId::ContextWindow => match cfg.context_window_max.get() {
-                0 => tokens(cfg.context_window.get()),
-                max => t!("val_tokens_of_max", n = cfg.context_window.get(), max = max).to_string(),
-            },
+            SettingId::ContextWindow => human_tokens(cfg.context_window.get()),
             SettingId::MaxTokens => match cfg.max_tokens.get() {
                 0 => t!("val_max_tokens_off").to_string(),
-                n => tokens(n),
+                n => human_tokens(n),
             },
             SettingId::AutoCompact => match cfg.auto_compact.get() {
                 0 => t!("val_off").to_string(),
@@ -196,13 +191,74 @@ impl SettingId {
     }
 }
 
-fn tokens(n: u64) -> String {
-    t!("val_tokens", n = n).to_string()
+/// A token count the way people say them: `32768` → `32k`, `262144` →
+/// `256k`, `200000` → `200k`, `1048576` → `1M`. Six digits in a row are
+/// hard to compare at a glance, and a window is never discussed at that
+/// precision anyway.
+///
+/// Model windows come in both flavours — Ollama's are powers of two, a
+/// hosted API's are round decimals — so the divisor follows the number:
+/// 1024 when it divides evenly (that is how those models are named), 1000
+/// otherwise. Under 1000 the figure is short enough to show as it is.
+pub fn human_tokens(n: u64) -> String {
+    const K: u64 = 1024;
+    const M: u64 = K * K;
+    let exact = |unit: u64, suffix: &str| {
+        (n >= unit && n.is_multiple_of(unit)).then(|| format!("{}{suffix}", n / unit))
+    };
+    exact(M, "M")
+        .or_else(|| exact(1_000_000, "M"))
+        .or_else(|| exact(K, "k"))
+        .or_else(|| {
+            (n >= 1000).then(|| {
+                let k = format!("{:.1}", n as f64 / 1000.0);
+                format!("{}k", k.trim_end_matches(".0"))
+            })
+        })
+        .unwrap_or_else(|| n.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_counts_read_the_way_models_are_named() {
+        // Powers of two divide by 1024, which is how these windows are
+        // quoted: a 262144-token model is a 256k model, not a 262.1k one.
+        assert_eq!(human_tokens(2048), "2k");
+        assert_eq!(human_tokens(8192), "8k");
+        assert_eq!(human_tokens(32_768), "32k");
+        assert_eq!(human_tokens(40_960), "40k");
+        assert_eq!(human_tokens(131_072), "128k");
+        assert_eq!(human_tokens(262_144), "256k");
+        assert_eq!(human_tokens(1_048_576), "1M");
+
+        // A hosted API's round decimals keep their own shape.
+        assert_eq!(human_tokens(200_000), "200k");
+        assert_eq!(human_tokens(500_000), "500k");
+        assert_eq!(human_tokens(1_000_000), "1M");
+
+        // Anything else gets one decimal, with a bare .0 trimmed.
+        assert_eq!(human_tokens(1500), "1.5k");
+        assert_eq!(human_tokens(45_000), "45k");
+        assert_eq!(human_tokens(33_000), "33k");
+
+        // Small enough to read as it is.
+        assert_eq!(human_tokens(0), "0");
+        assert_eq!(human_tokens(512), "512");
+        assert_eq!(human_tokens(999), "999");
+    }
+
+    #[test]
+    fn the_window_row_shows_the_value_alone() {
+        // The provider's ceiling bounds the stepper; it is not spelled out
+        // in the row, which would double the width of the longest value.
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(Some(32_768));
+        cfg.apply_context_limit(crate::config::Provider::Ollama, 262_144);
+        assert_eq!(SettingId::ContextWindow.value(&cfg), "32k");
+    }
 
     #[test]
     fn every_shared_setting_is_grouped_and_labelled() {

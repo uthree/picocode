@@ -16,17 +16,19 @@ gives an ad-hoc `--model` selection somewhere to keep one — that case
 used to be pinned at 32768 whatever the model could do. Switching models
 adopts the new model's own figure.
 
-The row also asks the provider what the model actually takes and shows it
-alongside — `32768 of 262144 tokens` — capping the stepper there. Ollama
-answers from `/api/show`, Anthropic with `max_input_tokens`, vLLM and
-llama.cpp on their model listings; api.openai.com says nothing and the
-row looks as it did. Only Anthropic's figure is adopted as the value:
-Ollama's is the model's built-in maximum, and the KV cache for it comes
-out of your machine, so there it is a ceiling and not a suggestion.
+The row also asks the provider what the model actually takes, and stops
+the stepper there instead of at an arbitrary constant. Ollama answers
+from `/api/show`, Anthropic with `max_input_tokens`, vLLM and llama.cpp
+on their model listings; api.openai.com says nothing and the stepper
+keeps its flat 1M ceiling. Only Anthropic's figure is adopted as the
+value: Ollama's is the model's built-in maximum, and the KV cache for it
+comes out of your machine, so there it is a ceiling and not a suggestion.
 
 ### `/config`
 
 - The rows are grouped into **Model**, **Tools** and **Interface**.
+- Token counts are abbreviated: `32k` rather than `32768`, `1M` rather
+  than `1048576`.
 - **The TUI remembers them.** Both front ends now write the same
   `$XDG_DATA_HOME/picocode/settings.json`, so a bash timeout set in one is
   the timeout in the other; the TUI used to forget on exit. The GUI's

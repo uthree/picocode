@@ -20,8 +20,6 @@ set_results: "results"
 set_send_key: "send key"
 
 # Setting values that are not a plain number.
-val_tokens: "%{n} tokens"
 val_seconds: "%{n}s"
 val_off: "off"
 val_max_tokens_off: "no limit (provider default)"
-val_tokens_of_max: "%{n} of %{max} tokens"

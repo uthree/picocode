@@ -55,19 +55,19 @@ Two places to set it:
   the new model's own figure, since a window that fits one model is wrong
   for the next.
 
-With neither, the window is 32768 tokens.
+With neither, the window is 32768 tokens. The `/config` row abbreviates —
+`32k`, `128k`, `1M` — dividing by 1024 where that comes out even, since
+that is how the models themselves are named.
 
 #### What the provider says
 
 picocode asks the provider how large a context the active model takes, and
-shows it next to the value — `32768 of 262144 tokens` — so the row answers
-"how far can I take this?" without a trip to the model card. The `/config`
-stepper stops there.
+the `/config` stepper stops there rather than at an arbitrary constant.
 
 Not every provider answers. Ollama does, from `/api/show`; Anthropic does,
 as `max_input_tokens`; among OpenAI-compatible servers, vLLM and llama.cpp
 do, while api.openai.com's model listing carries only ids. When nothing
-comes back the row simply shows no ceiling, as before.
+comes back the stepper keeps its own flat ceiling of 1M.
 
 The figure is **adopted as the value only on Anthropic**, where the
 provider owns the memory behind the window as well as the number. Ollama's

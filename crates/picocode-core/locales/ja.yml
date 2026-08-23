@@ -16,8 +16,6 @@ set_web_search: "web 検索"
 set_results: "検索件数"
 set_send_key: "送信キー"
 
-val_tokens: "%{n} トークン"
 val_seconds: "%{n}秒"
 val_off: "オフ"
 val_max_tokens_off: "無制限（プロバイダ既定）"
-val_tokens_of_max: "%{n} / %{max} トークン"

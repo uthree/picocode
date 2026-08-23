@@ -6,7 +6,7 @@ use gpui::{AnyElement, Context, SharedString, div, px};
 use gpui_component::{ActiveTheme, Sizable, StyledExt};
 use rust_i18n::t;
 
-use picocode_core::config::{Mode, SettingId};
+use picocode_core::config::{self, Mode, SettingId};
 use picocode_core::models;
 
 use super::ChatView;
@@ -436,7 +436,7 @@ impl ChatView {
                     (t!("ctx_model").to_string(), self.cfg.model_label()),
                     (
                         t!("ctx_window").to_string(),
-                        format!("{}", self.cfg.context_window.get()),
+                        config::human_tokens(self.cfg.context_window.get()),
                     ),
                     (
                         t!("ctx_used").to_string(),
