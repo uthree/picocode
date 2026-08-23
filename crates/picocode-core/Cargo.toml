@@ -29,6 +29,8 @@ similar.workspace = true
 arboard.workspace = true
 png.workspace = true
 tempfile.workspace = true
+rust-i18n.workspace = true
+sys-locale.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock.workspace = true

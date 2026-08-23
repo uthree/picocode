@@ -373,40 +373,68 @@ fn pick_entry<'a>(models: &'a [ModelEntry], default: Option<&str>) -> Option<&'a
     }
 }
 
-/// One resolved startup selection:
-/// (provider, model, base_url, active entry name, context window).
-type Selection = (Provider, String, Option<String>, Option<String>, u64);
+/// One resolved startup selection.
+struct Selection {
+    provider: Provider,
+    model: String,
+    base_url: Option<String>,
+    /// `[[models]]` entry the selection came from, if any.
+    entry: Option<String>,
+    /// The window the selection itself declares — the baseline a runtime
+    /// change is measured against.
+    window: u64,
+    /// A window set in `/config` on an earlier run, if it outlived the
+    /// selection's own figure.
+    window_override: Option<u64>,
+}
+
+impl Selection {
+    fn adhoc(provider: Provider, model: String) -> Self {
+        Self {
+            provider,
+            model,
+            base_url: None,
+            entry: None,
+            window: DEFAULT_CONTEXT_WINDOW,
+            window_override: None,
+        }
+    }
+}
 
 fn entry_selection(entry: &ModelEntry) -> Selection {
-    (
-        entry.provider,
-        entry.model.clone(),
-        entry.base_url.clone(),
-        Some(entry.name.clone()),
-        entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
-    )
+    Selection {
+        provider: entry.provider,
+        model: entry.model.clone(),
+        base_url: entry.base_url.clone(),
+        entry: Some(entry.name.clone()),
+        window: entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+        window_override: None,
+    }
 }
 
 /// Startup selection from the saved last-used model: a still-existing
 /// `[[models]]` entry wins (its current definition applies); otherwise the
 /// saved ad-hoc provider/model is used directly.
 fn restore_selection(state: &crate::state::LastModel, models: &[ModelEntry]) -> Option<Selection> {
-    if let Some(name) = &state.entry
+    let mut selection = if let Some(name) = &state.entry
         && let Some(entry) = models.iter().find(|m| m.name == *name)
     {
-        return Some(entry_selection(entry));
-    }
-    let provider = provider_from_name(&state.provider)?;
-    if state.model.is_empty() {
-        return None;
-    }
-    Some((
-        provider,
-        state.model.clone(),
-        state.base_url.clone(),
-        None,
-        DEFAULT_CONTEXT_WINDOW,
-    ))
+        entry_selection(entry)
+    } else {
+        let provider = provider_from_name(&state.provider)?;
+        if state.model.is_empty() {
+            return None;
+        }
+        Selection {
+            base_url: state.base_url.clone(),
+            ..Selection::adhoc(provider, state.model.clone())
+        }
+    };
+    // A window set in `/config` last time belongs to this selection, so it
+    // is restored over the entry's declared one — and it gives an ad-hoc
+    // `--model` selection, which declares nothing, somewhere to keep it.
+    selection.window_override = state.context_window;
+    Some(selection)
 }
 
 /// CLI default model when only `--provider` is given. Ollama has no
@@ -752,8 +780,18 @@ pub struct Config {
     /// file is not trusted yet. Empty in the ordinary case; when it is not,
     /// the front ends say so at startup and `/trust` allows them.
     pub gated_settings: Vec<&'static str>,
-    /// Context-window size of the active model (for the usage gauge).
-    pub context_window: u64,
+    /// Context-window size of the active model, adjustable at runtime
+    /// (`/config`). It drives the usage gauge and the auto-compact
+    /// threshold, and on Ollama it is also sent as `num_ctx` — the window
+    /// the server actually allocates — so the worker rebuilds its agents
+    /// when it changes.
+    pub context_window: NumHandle,
+    /// What `context_window` would be for the current selection with no
+    /// runtime override: the active `[[models]]` entry's declared value, or
+    /// [`DEFAULT_CONTEXT_WINDOW`]. Kept so the per-project state records
+    /// only a window the user actually changed, and so switching models
+    /// starts from the new model's own figure.
+    pub context_window_default: u64,
 }
 
 impl Config {
@@ -793,12 +831,39 @@ impl Config {
         self.max_tokens.set(next);
     }
 
-    /// The reply-length cap as a `/config` row value.
-    pub fn max_tokens_label(&self) -> String {
-        match self.max_tokens.get() {
-            0 => "no limit (provider default)".to_string(),
-            n => format!("{n} tokens"),
-        }
+    /// Context window: doubles and halves between 2048 and 1048576. A
+    /// window declared in `picocode.toml` need not be a power of two, so
+    /// stepping scales it rather than snapping to one.
+    ///
+    /// On Ollama this is what the server allocates (`num_ctx`), so stepping
+    /// it up costs memory on the host; elsewhere it only sizes the usage
+    /// gauge and the auto-compact threshold.
+    pub fn step_context_window(&self, delta: i64) {
+        const MIN: u64 = 2048;
+        const MAX: u64 = 1_048_576;
+        let cur = self.context_window.get().clamp(MIN, MAX);
+        let next = if delta < 0 {
+            (cur / 2).max(MIN)
+        } else {
+            cur.saturating_mul(2).min(MAX)
+        };
+        self.context_window.set(next);
+    }
+
+    /// Adopt a model selection's context window, dropping any runtime
+    /// override: the window that fits the model being left is the wrong
+    /// answer for the one being switched to.
+    pub fn set_context_window(&mut self, n: u64) {
+        self.context_window_default = n;
+        self.context_window.set(n);
+    }
+
+    /// The runtime override to remember for this model selection, if the
+    /// window was changed away from what the selection itself declares.
+    /// `None` keeps following `picocode.toml`.
+    pub fn context_window_override(&self) -> Option<u64> {
+        let cur = self.context_window.get();
+        (cur != self.context_window_default).then_some(cur)
     }
 
     /// Auto-compact threshold: ±5% between 50 and 95; stepping below 50
@@ -877,24 +942,26 @@ impl Config {
             crate::state::state_path(&local_root).and_then(|p| crate::state::load(&p))
         };
         let mut model_note = None;
-        let (provider, model, base_url, active_model, context_window) = if cli_selection {
+        let selection = if cli_selection {
             let provider = args.provider.unwrap_or(Provider::Ollama);
             let model = args.model.unwrap_or_else(|| default_model_for(provider));
-            (provider, model, None, None, DEFAULT_CONTEXT_WINDOW)
+            Selection::adhoc(provider, model)
         } else if let Some(sel) = state.as_ref().and_then(|s| restore_selection(s, &models)) {
             model_note = Some("last used".to_string());
             sel
         } else if let Some(entry) = pick_entry(&models, file.default_model.as_deref()) {
             entry_selection(entry)
         } else {
-            (
-                Provider::Ollama,
-                String::new(),
-                None,
-                None,
-                DEFAULT_CONTEXT_WINDOW,
-            )
+            Selection::adhoc(Provider::Ollama, String::new())
         };
+        let Selection {
+            provider,
+            model,
+            base_url,
+            entry: active_model,
+            window: context_window,
+            window_override,
+        } = selection;
         let base_url = args.base_url.or(base_url);
 
         // Remote workspace: the root becomes the host path and the tools
@@ -960,7 +1027,8 @@ impl Config {
             config_files,
             project_config: project_path,
             gated_settings,
-            context_window,
+            context_window: NumHandle::new(window_override.unwrap_or(context_window)),
+            context_window_default: context_window,
             local_file: file,
         })
     }
@@ -1062,18 +1130,22 @@ impl Config {
             config_files: Vec::new(),
             project_config: std::path::PathBuf::from("/tmp/proj/picocode.toml"),
             gated_settings: Vec::new(),
-            context_window: DEFAULT_CONTEXT_WINDOW,
+            context_window: NumHandle::new(DEFAULT_CONTEXT_WINDOW),
+            context_window_default: DEFAULT_CONTEXT_WINDOW,
             local_file: Default::default(),
         }
     }
 }
 
 mod rules;
+pub mod saved;
 mod search;
+mod settings;
 pub mod trust;
 
 pub use rules::*;
 pub use search::*;
+pub use settings::{Group, SettingId};
 
 use rules::validate_tool_lists;
 use search::{SearchFileConfig, resolve_search};
@@ -1097,7 +1169,7 @@ mod tests {
             cfg.step_max_tokens(-1);
         }
         assert_eq!(cfg.max_tokens.get(), 0);
-        assert!(cfg.max_tokens_label().contains("no limit"));
+        assert!(SettingId::MaxTokens.value(&cfg).contains("no limit"));
         cfg.step_max_tokens(-1);
         assert_eq!(cfg.max_tokens.get(), 0, "off is the floor");
         cfg.step_max_tokens(1);
@@ -1292,6 +1364,39 @@ mod tests {
     }
 
     #[test]
+    fn the_context_window_steps_by_doubling_and_reports_an_override() {
+        let mut cfg = Config::for_tests();
+        cfg.set_context_window(40960);
+        assert_eq!(
+            cfg.context_window_override(),
+            None,
+            "unchanged is no override"
+        );
+
+        cfg.step_context_window(1);
+        assert_eq!(cfg.context_window.get(), 81_920);
+        assert_eq!(cfg.context_window_override(), Some(81_920));
+        cfg.step_context_window(-1);
+        assert_eq!(cfg.context_window_override(), None, "back to the baseline");
+
+        // Switching models adopts the new window and drops the override.
+        cfg.step_context_window(1);
+        cfg.set_context_window(8192);
+        assert_eq!(cfg.context_window.get(), 8192);
+        assert_eq!(cfg.context_window_override(), None);
+
+        // And it stays inside the range at both ends.
+        for _ in 0..40 {
+            cfg.step_context_window(-1);
+        }
+        assert_eq!(cfg.context_window.get(), 2048);
+        for _ in 0..40 {
+            cfg.step_context_window(1);
+        }
+        assert_eq!(cfg.context_window.get(), 1_048_576);
+    }
+
+    #[test]
     fn saved_state_restores_entry_or_ad_hoc_selection() {
         use crate::state::LastModel;
         let models: Vec<ModelEntry> = toml::from_str::<FileConfig>(
@@ -1311,19 +1416,35 @@ mod tests {
             provider: provider.into(),
             model: model.into(),
             base_url: None,
+            context_window: None,
         };
 
         // A still-existing entry wins and applies its current definition.
         let sel = restore_selection(&state(Some("local"), "ollama", "old-model"), &models).unwrap();
-        assert_eq!(sel.1, "qwen3:4b");
-        assert_eq!(sel.3.as_deref(), Some("local"));
-        assert_eq!(sel.4, 40960);
+        assert_eq!(sel.model, "qwen3:4b");
+        assert_eq!(sel.entry.as_deref(), Some("local"));
+        assert_eq!(sel.window, 40960);
+        assert_eq!(sel.window_override, None);
 
         // A removed entry falls back to the saved ad-hoc selection.
         let sel = restore_selection(&state(Some("gone"), "ollama", "qwen3:0.6b"), &models).unwrap();
-        assert_eq!(sel.0, Provider::Ollama);
-        assert_eq!(sel.1, "qwen3:0.6b");
-        assert_eq!(sel.3, None);
+        assert_eq!(sel.provider, Provider::Ollama);
+        assert_eq!(sel.model, "qwen3:0.6b");
+        assert_eq!(sel.entry, None);
+
+        // A window set in /config last time is restored over the entry's,
+        // but the entry's stays the baseline, so it comes back when the
+        // override is cleared and it is not re-saved as one.
+        let sel = restore_selection(
+            &LastModel {
+                context_window: Some(8192),
+                ..state(Some("local"), "ollama", "qwen3:4b")
+            },
+            &models,
+        )
+        .unwrap();
+        assert_eq!(sel.window, 40960);
+        assert_eq!(sel.window_override, Some(8192));
 
         // Broken state is ignored.
         assert!(restore_selection(&state(None, "nope", "m"), &models).is_none());

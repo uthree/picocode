@@ -252,9 +252,11 @@ pub fn plan_switch(
                 new_cfg.model = entry.model.clone();
                 new_cfg.base_url = entry.base_url.clone();
                 new_cfg.active_model = Some(entry.name.clone());
-                new_cfg.context_window = entry
-                    .context_window
-                    .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW);
+                new_cfg.set_context_window(
+                    entry
+                        .context_window
+                        .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
+                );
                 SwitchPlan::Switch {
                     name,
                     cfg: Box::new(new_cfg),
@@ -271,7 +273,7 @@ pub fn plan_switch(
             } else {
                 new_cfg.model = name.clone();
                 new_cfg.active_model = None;
-                new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+                new_cfg.set_context_window(crate::config::DEFAULT_CONTEXT_WINDOW);
                 SwitchPlan::Switch {
                     name,
                     cfg: Box::new(new_cfg),
@@ -297,7 +299,7 @@ pub fn custom_config(
     new_cfg.model = model;
     new_cfg.base_url = base_url;
     new_cfg.active_model = None;
-    new_cfg.context_window = crate::config::DEFAULT_CONTEXT_WINDOW;
+    new_cfg.set_context_window(crate::config::DEFAULT_CONTEXT_WINDOW);
     new_cfg
 }
 
@@ -388,7 +390,7 @@ mod tests {
                 assert_eq!(name, "local");
                 assert_eq!(cfg.model, "qwen3:8b");
                 assert_eq!(cfg.active_model.as_deref(), Some("local"));
-                assert_eq!(cfg.context_window, 64_000);
+                assert_eq!(cfg.context_window.get(), 64_000);
             }
             _ => panic!("expected a switch"),
         }
@@ -400,7 +402,10 @@ mod tests {
             SwitchPlan::Switch { name, cfg } => {
                 assert_eq!(name, "gemma4:e2b");
                 assert_eq!(cfg.active_model, None);
-                assert_eq!(cfg.context_window, crate::config::DEFAULT_CONTEXT_WINDOW);
+                assert_eq!(
+                    cfg.context_window.get(),
+                    crate::config::DEFAULT_CONTEXT_WINDOW
+                );
             }
             _ => panic!("expected a switch"),
         }
@@ -433,7 +438,7 @@ mod tests {
     fn custom_config_is_an_adhoc_selection() {
         let mut base = Config::for_tests();
         base.active_model = Some("local".into());
-        base.context_window = 64_000;
+        base.set_context_window(64_000);
         let cfg = custom_config(
             &base,
             Provider::Openai,
@@ -444,7 +449,10 @@ mod tests {
         assert_eq!(cfg.provider, Provider::Openai);
         assert_eq!(cfg.base_url.as_deref(), Some("http://host:8000/v1"));
         assert_eq!(cfg.active_model, None);
-        assert_eq!(cfg.context_window, crate::config::DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(
+            cfg.context_window.get(),
+            crate::config::DEFAULT_CONTEXT_WINDOW
+        );
     }
 
     #[test]

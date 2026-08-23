@@ -18,6 +18,12 @@ pub struct LastModel {
     pub model: String,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Context window set in `/config` for this selection, when it differs
+    /// from what the selection itself declares. It lives here rather than
+    /// in the shared settings file because a window that fits one model is
+    /// wrong for the next; switching models drops it.
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 /// Where this project's state lives:
@@ -59,6 +65,7 @@ pub fn save_last_model(cfg: &crate::config::Config) {
             provider: crate::config::provider_name(cfg.provider).to_string(),
             model: cfg.model.clone(),
             base_url: cfg.base_url.clone(),
+            context_window: cfg.context_window_override(),
         },
     );
 }
@@ -79,6 +86,7 @@ mod tests {
             provider: "ollama".into(),
             model: "qwen3:4b".into(),
             base_url: None,
+            context_window: Some(65_536),
         };
         save(&path, &state).unwrap();
         assert_eq!(load(&path), Some(state));

@@ -44,7 +44,8 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
         None => String::new(),
     };
     let endpoint = crate::models::base_url(cfg.provider, cfg.base_url.as_deref());
-    let pct = (info.ctx_tokens as f64 / cfg.context_window.max(1) as f64 * 100.0).round() as u64;
+    let pct =
+        (info.ctx_tokens as f64 / cfg.context_window.get().max(1) as f64 * 100.0).round() as u64;
     let saved = match info.sessions_dir {
         Some(dir) => format!("autosaved under {}", dir.display()),
         None => "not saved (no home directory)".to_string(),
@@ -82,7 +83,7 @@ pub fn status_text(cfg: &Config, info: &StatusInfo) -> String {
         info.model_label,
         cfg.mode.get().label(),
         info.ctx_tokens,
-        cfg.context_window,
+        cfg.context_window.get(),
         info.output,
         info.session_id,
         info.prompts,

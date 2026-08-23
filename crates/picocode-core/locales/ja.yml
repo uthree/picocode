@@ -1,0 +1,22 @@
+_version: 1
+
+group_model: "モデル"
+group_tools: "ツール"
+group_interface: "表示"
+
+set_model: "モデル"
+set_context_window: "コンテキスト長"
+set_max_tokens: "最大トークン数"
+set_auto_compact: "自動コンパクト"
+set_mode: "モード"
+set_bash_timeout: "bash タイムアウト"
+set_read_lines: "read 行数上限"
+set_line_bytes: "行バイト上限"
+set_web_search: "web 検索"
+set_results: "検索件数"
+set_send_key: "送信キー"
+
+val_tokens: "%{n} トークン"
+val_seconds: "%{n}秒"
+val_off: "オフ"
+val_max_tokens_off: "無制限（プロバイダ既定）"

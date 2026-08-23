@@ -169,7 +169,7 @@ fn provider_params(cfg: &Config, max_tokens: u64) -> Option<serde_json::Value> {
     match cfg.provider {
         Provider::Ollama => Some(serde_json::json!({
             "num_predict": if max_tokens == 0 { -1 } else { max_tokens as i64 },
-            "num_ctx": cfg.context_window,
+            "num_ctx": cfg.context_window.get(),
         })),
         // Anthropic and OpenAI take the cap as the request's `max_tokens`
         // (rig fills in a per-model default for Anthropic when it is unset).
@@ -551,7 +551,7 @@ async fn maybe_prune(
     event_tx: &mpsc::Sender<AgentEvent>,
 ) {
     let pct = cfg.auto_compact.get();
-    if pct == 0 || last_ctx < cfg.context_window.saturating_mul(pct * 2 / 3) / 100 {
+    if pct == 0 || last_ctx < cfg.context_window.get().saturating_mul(pct * 2 / 3) / 100 {
         return;
     }
     let outputs = crate::history::prune_tool_outputs(history, crate::history::KEEP_RECENT_TURNS);
@@ -1077,8 +1077,8 @@ mod tests {
         // Ollama ignores the request's `max_tokens`, so the cap has to
         // travel as num_predict — and num_ctx with it, since its default
         // window (4096) is what actually cuts a long reply short.
-        let mut cfg = test_cfg();
-        cfg.context_window = 32_768;
+        let cfg = test_cfg();
+        cfg.context_window.set(32_768);
         let params = provider_params(&cfg, 8192).expect("ollama needs options");
         assert_eq!(params["num_predict"], 8192);
         assert_eq!(params["num_ctx"], 32_768);

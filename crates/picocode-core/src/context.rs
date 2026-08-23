@@ -147,7 +147,13 @@ fn est(chars: usize) -> u64 {
 /// conversation history.
 pub fn breakdown(cfg: &Config, history: &[Message], reported: u64) -> Breakdown {
     let (base, instructions) = crate::agent::system_prompt_parts(cfg);
-    breakdown_from(&base, &instructions, history, reported, cfg.context_window)
+    breakdown_from(
+        &base,
+        &instructions,
+        history,
+        reported,
+        cfg.context_window.get(),
+    )
 }
 
 /// The low-level variant of [`breakdown`], taking the system-prompt parts
