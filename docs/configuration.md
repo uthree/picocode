@@ -55,8 +55,27 @@ Two places to set it:
   the new model's own figure, since a window that fits one model is wrong
   for the next.
 
-With neither, the window is 32768 tokens. A larger window costs memory on
-the host, so declare what the model really has rather than the maximum.
+With neither, the window is 32768 tokens.
+
+#### What the provider says
+
+picocode asks the provider how large a context the active model takes, and
+shows it next to the value — `32768 of 262144 tokens` — so the row answers
+"how far can I take this?" without a trip to the model card. The `/config`
+stepper stops there.
+
+Not every provider answers. Ollama does, from `/api/show`; Anthropic does,
+as `max_input_tokens`; among OpenAI-compatible servers, vLLM and llama.cpp
+do, while api.openai.com's model listing carries only ids. When nothing
+comes back the row simply shows no ceiling, as before.
+
+The figure is **adopted as the value only on Anthropic**, where the
+provider owns the memory behind the window as well as the number. Ollama's
+is the model's built-in maximum, and the KV cache for it comes out of your
+own machine — a 9B with a 262144 window will happily try to allocate tens
+of gigabytes. There it bounds the setting rather than choosing it. Either
+way a window you set yourself, in `picocode.toml` or in `/config`, is left
+alone.
 
 ## Permissions
 

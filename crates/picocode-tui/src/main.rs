@@ -266,7 +266,8 @@ async fn run_smoke(
             AgentEvent::Usage { input, output } => println!("\n[usage] ctx={input} out={output}"),
             AgentEvent::ContextBreakdown(_)
             | AgentEvent::ModelList { .. }
-            | AgentEvent::FormModelList { .. } => {}
+            | AgentEvent::FormModelList { .. }
+            | AgentEvent::ContextLimit { .. } => {}
             AgentEvent::Compacted { messages, summary } => {
                 println!("\n[compacted] {messages} messages\n{summary}");
             }

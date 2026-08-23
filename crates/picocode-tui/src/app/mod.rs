@@ -358,6 +358,7 @@ impl App {
         // Fetch the provider's model list in the background so `/model` can
         // offer and validate provider models right away.
         app.refresh_models();
+        app.probe_context_limit();
         // Whatever model this run starts with is the one to restore next time.
         picocode_core::state::save_last_model(&app.cfg);
         app

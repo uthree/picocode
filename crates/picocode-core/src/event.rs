@@ -60,6 +60,12 @@ pub enum AgentEvent {
         label: String,
         result: Result<Vec<String>, String>,
     },
+    /// How large a context the provider says the active model takes, asked
+    /// alongside the model list. `model` echoes what was probed, so a reply
+    /// arriving after a model switch is dropped rather than capping the new
+    /// model by the old one's figure. Providers that don't say produce no
+    /// event at all.
+    ContextLimit { model: String, limit: u64 },
     /// Result of the add-model form's model-list probe. Separate from
     /// [`ModelList`](Self::ModelList), which caches the *current* endpoint's
     /// models; the echoed provider/base identify which probe answered (a

@@ -257,6 +257,7 @@ impl App {
             self.push(EntryKind::Notice, format!("Loaded {}", names.join(", ")));
         }
         self.refresh_models();
+        self.probe_context_limit();
         // A connection made from the add-remote form is worth keeping.
         if let Some(snippet) = snippet {
             self.push(EntryKind::Notice, snippet);

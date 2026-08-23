@@ -163,6 +163,12 @@ impl App {
                     }
                 }
             },
+            // A reply for the model that is still active; one for a model
+            // switched away from would cap the new model by the old one's.
+            AgentEvent::ContextLimit { model, limit } if model == self.cfg.model => {
+                self.cfg.apply_context_limit(self.cfg.provider, limit);
+            }
+            AgentEvent::ContextLimit { .. } => {}
             AgentEvent::FormModelList {
                 provider,
                 base_url,

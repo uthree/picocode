@@ -112,7 +112,12 @@ impl SettingId {
     pub fn value(self, cfg: &Config) -> String {
         match self {
             SettingId::Model => cfg.model_label(),
-            SettingId::ContextWindow => tokens(cfg.context_window.get()),
+            // Naming the model's own ceiling next to the value answers the
+            // question the row otherwise raises: how far can I take this?
+            SettingId::ContextWindow => match cfg.context_window_max.get() {
+                0 => tokens(cfg.context_window.get()),
+                max => t!("val_tokens_of_max", n = cfg.context_window.get(), max = max).to_string(),
+            },
             SettingId::MaxTokens => match cfg.max_tokens.get() {
                 0 => t!("val_max_tokens_off").to_string(),
                 n => tokens(n),

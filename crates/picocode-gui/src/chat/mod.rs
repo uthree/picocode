@@ -353,6 +353,8 @@ impl ChatView {
         };
         picocode_core::state::save_last_model(&view.cfg);
         view.refresh_sessions();
+        // Bounds the /config context-window row once the provider answers.
+        view.probe_context_limit();
         // Settings this project's picocode.toml asked for and did not get:
         // it has to be trusted first (`/trust`).
         if !view.cfg.gated_settings.is_empty() {

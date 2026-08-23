@@ -63,6 +63,32 @@ impl ChatView {
         });
     }
 
+    /// Ask the provider how large a context the active model takes; the
+    /// answer arrives as `ContextLimit` and bounds the `/config` window
+    /// row. Per model rather than per endpoint, so it runs again after
+    /// every switch — unlike the model list, which the endpoint decides.
+    ///
+    /// Best effort, and quiet: a provider that reports no window is the
+    /// common case, not something to tell anyone about.
+    pub(super) fn probe_context_limit(&self) {
+        let provider = self.cfg.provider;
+        let base = self.cfg.base_url.clone();
+        let model = self.cfg.model.clone();
+        if model.is_empty() {
+            return;
+        }
+        let event_tx = self.event_tx.clone();
+        self.rt.spawn(async move {
+            if let Ok(Some(limit)) =
+                models::fetch_context_limit(provider, base.as_deref(), &model).await
+            {
+                let _ = event_tx
+                    .send(AgentEvent::ContextLimit { model, limit })
+                    .await;
+            }
+        });
+    }
+
     /// Switch to a named `[[models]]` entry — or to a model the provider
     /// reported serving — and carry the conversation history over to the
     /// new worker (same flow as the TUI's `/model <name>`).
@@ -195,6 +221,7 @@ impl ChatView {
             self.available_models.clear();
             self.refresh_models();
         }
+        self.probe_context_limit();
         picocode_core::state::save_last_model(&self.cfg);
         cx.notify();
         true

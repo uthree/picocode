@@ -326,6 +326,7 @@ impl ChatView {
         self.est_out = 0;
         self.available_models.clear();
         self.refresh_models();
+        self.probe_context_limit();
         // A remote workspace names the host; a local one reads as the
         // familiar directory change.
         let notice = if self.backend.is_remote() {

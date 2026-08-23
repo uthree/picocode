@@ -16,6 +16,14 @@ gives an ad-hoc `--model` selection somewhere to keep one — that case
 used to be pinned at 32768 whatever the model could do. Switching models
 adopts the new model's own figure.
 
+The row also asks the provider what the model actually takes and shows it
+alongside — `32768 of 262144 tokens` — capping the stepper there. Ollama
+answers from `/api/show`, Anthropic with `max_input_tokens`, vLLM and
+llama.cpp on their model listings; api.openai.com says nothing and the
+row looks as it did. Only Anthropic's figure is adopted as the value:
+Ollama's is the model's built-in maximum, and the KV cache for it comes
+out of your machine, so there it is a ceiling and not a suggestion.
+
 ### `/config`
 
 - The rows are grouped into **Model**, **Tools** and **Interface**.

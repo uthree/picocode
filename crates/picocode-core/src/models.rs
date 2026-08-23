@@ -149,6 +149,92 @@ pub async fn fetch(
     Ok(parse_names(&body, provider))
 }
 
+/// Ask the provider how large a context the model can actually take, so
+/// the `/config` window row knows its ceiling instead of stopping at an
+/// arbitrary constant. `None` means the provider does not say — which is
+/// the normal answer from api.openai.com, whose model listing carries only
+/// ids and ownership.
+///
+/// Where it does come from:
+///
+/// - Ollama: `/api/show`'s `model_info`, under an architecture-prefixed
+///   `…​.context_length` (`qwen35.context_length`, `llama.context_length`).
+/// - Anthropic: `max_input_tokens` on the model's `/v1/models` row.
+/// - OpenAI-compatible servers, by convention rather than by spec: vLLM
+///   reports `max_model_len` on the row, llama.cpp `meta.n_ctx_train`.
+///
+/// This is what the model was *built* for, not what fits in the machine
+/// serving it — a 9B with a 256k window still needs the memory for a
+/// 256k KV cache. It bounds the setting; it does not choose it.
+pub async fn fetch_context_limit(
+    provider: Provider,
+    configured_base: Option<&str>,
+    model: &str,
+) -> anyhow::Result<Option<u64>> {
+    let base = base_url(provider, configured_base);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let request = match provider {
+        Provider::Ollama => client
+            .post(format!("{base}/api/show"))
+            .json(&serde_json::json!({ "model": model })),
+        Provider::Openai => {
+            let key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "unused".into());
+            client.get(format!("{base}/models")).bearer_auth(key)
+        }
+        Provider::Anthropic => {
+            let key = std::env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY is not set")?;
+            client
+                .get(format!("{base}/v1/models"))
+                .query(&[("limit", "100")])
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01")
+        }
+    };
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("request to {base} failed"))?;
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("{base} returned {status}");
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .with_context(|| format!("invalid JSON from {base}"))?;
+    Ok(parse_context_limit(&body, provider, model))
+}
+
+fn parse_context_limit(body: &serde_json::Value, provider: Provider, model: &str) -> Option<u64> {
+    // A zero is "the server has no figure for this", not a window of none.
+    let positive = |v: &serde_json::Value| v.as_u64().filter(|n| *n > 0);
+    match provider {
+        Provider::Ollama => body
+            .get("model_info")?
+            .as_object()?
+            .iter()
+            .find(|(key, _)| key.ends_with(".context_length"))
+            .and_then(|(_, value)| positive(value)),
+        Provider::Openai | Provider::Anthropic => {
+            let row = body
+                .get("data")?
+                .as_array()?
+                .iter()
+                .find(|m| m.get("id").and_then(|id| id.as_str()) == Some(model))?;
+            let field = match provider {
+                Provider::Anthropic => "max_input_tokens",
+                // vLLM's spelling; llama.cpp's is checked below.
+                _ => "max_model_len",
+            };
+            row.get(field)
+                .and_then(positive)
+                .or_else(|| row.get("meta")?.get("n_ctx_train").and_then(positive))
+        }
+    }
+}
+
 /// Pull the model ids out of a listing response: Ollama nests them under
 /// `models[].name`, the OpenAI and Anthropic APIs under `data[].id`.
 fn parse_names(body: &serde_json::Value, provider: Provider) -> Vec<String> {
@@ -252,11 +338,7 @@ pub fn plan_switch(
                 new_cfg.model = entry.model.clone();
                 new_cfg.base_url = entry.base_url.clone();
                 new_cfg.active_model = Some(entry.name.clone());
-                new_cfg.set_context_window(
-                    entry
-                        .context_window
-                        .unwrap_or(crate::config::DEFAULT_CONTEXT_WINDOW),
-                );
+                new_cfg.adopt_model_window(entry.context_window);
                 SwitchPlan::Switch {
                     name,
                     cfg: Box::new(new_cfg),
@@ -273,7 +355,7 @@ pub fn plan_switch(
             } else {
                 new_cfg.model = name.clone();
                 new_cfg.active_model = None;
-                new_cfg.set_context_window(crate::config::DEFAULT_CONTEXT_WINDOW);
+                new_cfg.adopt_model_window(None);
                 SwitchPlan::Switch {
                     name,
                     cfg: Box::new(new_cfg),
@@ -299,7 +381,7 @@ pub fn custom_config(
     new_cfg.model = model;
     new_cfg.base_url = base_url;
     new_cfg.active_model = None;
-    new_cfg.set_context_window(crate::config::DEFAULT_CONTEXT_WINDOW);
+    new_cfg.adopt_model_window(None);
     new_cfg
 }
 
@@ -324,6 +406,86 @@ pub fn toml_snippet(provider: Provider, model: &str, base_url: Option<&str>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_reports_the_window_under_an_architecture_prefix() {
+        // The prefix is the model's architecture, so the key can only be
+        // found by its suffix. Trimmed from a real /api/show reply.
+        let body = serde_json::json!({
+            "details": { "family": "qwen35" },
+            "model_info": {
+                "general.architecture": "qwen35",
+                "qwen35.embedding_length": 4096,
+                "qwen35.context_length": 262_144u64,
+            },
+        });
+        assert_eq!(
+            parse_context_limit(&body, Provider::Ollama, "ornith-1.5:9b"),
+            Some(262_144)
+        );
+        // A reply without model_info is "don't know", not an error.
+        assert_eq!(
+            parse_context_limit(&serde_json::json!({}), Provider::Ollama, "m"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_listing_row_is_matched_by_model_id() {
+        let body = serde_json::json!({
+            "data": [
+                { "id": "claude-haiku-4-5-20251001", "max_input_tokens": 200_000u64 },
+                { "id": "claude-opus-5", "max_input_tokens": 500_000u64 },
+            ],
+        });
+        assert_eq!(
+            parse_context_limit(&body, Provider::Anthropic, "claude-opus-5"),
+            Some(500_000)
+        );
+        // A model the endpoint didn't list says nothing about its window.
+        assert_eq!(
+            parse_context_limit(&body, Provider::Anthropic, "claude-fable-5"),
+            None
+        );
+    }
+
+    #[test]
+    fn openai_compatible_servers_are_read_by_convention() {
+        // vLLM puts it on the row …
+        let vllm = serde_json::json!({
+            "data": [{ "id": "qwen3:8b", "max_model_len": 40_960u64 }],
+        });
+        assert_eq!(
+            parse_context_limit(&vllm, Provider::Openai, "qwen3:8b"),
+            Some(40_960)
+        );
+        // … llama.cpp under `meta`.
+        let llama = serde_json::json!({
+            "data": [{ "id": "local", "meta": { "n_ctx_train": 131_072u64 } }],
+        });
+        assert_eq!(
+            parse_context_limit(&llama, Provider::Openai, "local"),
+            Some(131_072)
+        );
+        // api.openai.com says neither, which is not a failure.
+        let plain = serde_json::json!({
+            "data": [{ "id": "gpt-4o", "object": "model", "owned_by": "openai" }],
+        });
+        assert_eq!(
+            parse_context_limit(&plain, Provider::Openai, "gpt-4o"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_zero_window_reads_as_unknown() {
+        // Anthropic's schema makes the field nullable and some rows carry
+        // a placeholder 0; a window of none is not a thing.
+        let body = serde_json::json!({
+            "data": [{ "id": "m", "max_input_tokens": 0 }],
+        });
+        assert_eq!(parse_context_limit(&body, Provider::Anthropic, "m"), None);
+    }
 
     #[test]
     fn resolve_partial_matches_uniquely() {
@@ -438,7 +600,7 @@ mod tests {
     fn custom_config_is_an_adhoc_selection() {
         let mut base = Config::for_tests();
         base.active_model = Some("local".into());
-        base.set_context_window(64_000);
+        base.adopt_model_window(Some(64_000));
         let cfg = custom_config(
             &base,
             Provider::Openai,

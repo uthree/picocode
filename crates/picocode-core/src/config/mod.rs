@@ -380,9 +380,9 @@ struct Selection {
     base_url: Option<String>,
     /// `[[models]]` entry the selection came from, if any.
     entry: Option<String>,
-    /// The window the selection itself declares — the baseline a runtime
-    /// change is measured against.
-    window: u64,
+    /// The window the selection itself declares, if it declares one — the
+    /// baseline a runtime change is measured against.
+    window: Option<u64>,
     /// A window set in `/config` on an earlier run, if it outlived the
     /// selection's own figure.
     window_override: Option<u64>,
@@ -395,7 +395,7 @@ impl Selection {
             model,
             base_url: None,
             entry: None,
-            window: DEFAULT_CONTEXT_WINDOW,
+            window: None,
             window_override: None,
         }
     }
@@ -407,7 +407,7 @@ fn entry_selection(entry: &ModelEntry) -> Selection {
         model: entry.model.clone(),
         base_url: entry.base_url.clone(),
         entry: Some(entry.name.clone()),
-        window: entry.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+        window: entry.context_window,
         window_override: None,
     }
 }
@@ -792,6 +792,17 @@ pub struct Config {
     /// only a window the user actually changed, and so switching models
     /// starts from the new model's own figure.
     pub context_window_default: u64,
+    /// Whether that default came from the config file rather than from
+    /// [`DEFAULT_CONTEXT_WINDOW`]. A declared window is the user's answer
+    /// and is never overwritten by what the provider reports.
+    pub context_window_declared: bool,
+    /// The largest window the provider says the active model takes, once
+    /// asked (0 until then, and for providers that don't say). It caps the
+    /// `/config` stepper; it is not adopted on its own, since it is the
+    /// model's built-in figure rather than what the serving machine can
+    /// hold. Shared like the other handles: the answer arrives from a
+    /// background probe. See [`crate::models::fetch_context_limit`].
+    pub context_window_max: NumHandle,
 }
 
 impl Config {
@@ -840,22 +851,61 @@ impl Config {
     /// gauge and the auto-compact threshold.
     pub fn step_context_window(&self, delta: i64) {
         const MIN: u64 = 2048;
-        const MAX: u64 = 1_048_576;
-        let cur = self.context_window.get().clamp(MIN, MAX);
+        let max = self.context_window_ceiling();
+        let cur = self.context_window.get().clamp(MIN, max);
         let next = if delta < 0 {
             (cur / 2).max(MIN)
         } else {
-            cur.saturating_mul(2).min(MAX)
+            cur.saturating_mul(2).min(max)
         };
         self.context_window.set(next);
     }
 
-    /// Adopt a model selection's context window, dropping any runtime
-    /// override: the window that fits the model being left is the wrong
-    /// answer for the one being switched to.
-    pub fn set_context_window(&mut self, n: u64) {
-        self.context_window_default = n;
-        self.context_window.set(n);
+    /// The largest window the stepper will reach: what the provider says the
+    /// model takes, when it says, else a flat ceiling — a number too large
+    /// to be a mistake nobody meant, but still bounded.
+    pub fn context_window_ceiling(&self) -> u64 {
+        const MAX: u64 = 1_048_576;
+        match self.context_window_max.get() {
+            0 => MAX,
+            limit => limit,
+        }
+    }
+
+    /// Adopt a model selection's context window — `declared` being what its
+    /// `[[models]]` entry says, or `None` for an ad-hoc selection. Any
+    /// runtime override goes with it: the window that fits the model being
+    /// left is the wrong answer for the one being switched to, and so is
+    /// the ceiling the old model's provider reported.
+    pub fn adopt_model_window(&mut self, declared: Option<u64>) {
+        self.context_window_default = declared.unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        self.context_window_declared = declared.is_some();
+        self.context_window.set(self.context_window_default);
+        self.context_window_max.set(0);
+    }
+
+    /// Record what the provider reports the active model's window to be.
+    /// It caps the `/config` stepper and is shown next to the value there.
+    ///
+    /// It is *adopted* as the value only where the provider is the
+    /// authority on both the window and the memory behind it — true of a
+    /// hosted API, not of Ollama, where the figure is the model's built-in
+    /// maximum while the KV cache for it comes out of the machine you are
+    /// sitting at. Even there it yields to a window you chose yourself,
+    /// in `picocode.toml` or in `/config`.
+    pub fn apply_context_limit(&mut self, provider: Provider, limit: u64) {
+        if limit == 0 {
+            return;
+        }
+        let chosen = self.context_window_declared || self.context_window_override().is_some();
+        if matches!(provider, Provider::Anthropic) && !chosen {
+            self.context_window_default = limit;
+            self.context_window.set(limit);
+        } else if self.context_window.get() > limit {
+            // Whatever it is, it cannot exceed what the model takes.
+            self.context_window.set(limit);
+        }
+        self.context_window_max.set(limit);
     }
 
     /// The runtime override to remember for this model selection, if the
@@ -1027,8 +1077,14 @@ impl Config {
             config_files,
             project_config: project_path,
             gated_settings,
-            context_window: NumHandle::new(window_override.unwrap_or(context_window)),
-            context_window_default: context_window,
+            context_window: NumHandle::new(
+                window_override
+                    .or(context_window)
+                    .unwrap_or(DEFAULT_CONTEXT_WINDOW),
+            ),
+            context_window_default: context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+            context_window_declared: context_window.is_some(),
+            context_window_max: NumHandle::new(0),
             local_file: file,
         })
     }
@@ -1132,6 +1188,8 @@ impl Config {
             gated_settings: Vec::new(),
             context_window: NumHandle::new(DEFAULT_CONTEXT_WINDOW),
             context_window_default: DEFAULT_CONTEXT_WINDOW,
+            context_window_declared: false,
+            context_window_max: NumHandle::new(0),
             local_file: Default::default(),
         }
     }
@@ -1364,9 +1422,90 @@ mod tests {
     }
 
     #[test]
+    fn a_reported_limit_caps_the_stepper_without_taking_it_over() {
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(None);
+        // Ollama's figure is the model's built-in maximum; the memory for
+        // a window that size is the user's problem, so it bounds but
+        // does not choose.
+        cfg.apply_context_limit(Provider::Ollama, 262_144);
+        assert_eq!(cfg.context_window.get(), DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(cfg.context_window_ceiling(), 262_144);
+
+        for _ in 0..20 {
+            cfg.step_context_window(1);
+        }
+        assert_eq!(
+            cfg.context_window.get(),
+            262_144,
+            "stops at the model's own limit"
+        );
+    }
+
+    #[test]
+    fn a_hosted_provider_window_is_adopted_unless_it_was_chosen() {
+        // Nothing declared, nothing changed: the provider knows best, and
+        // its window costs us no memory.
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(None);
+        cfg.apply_context_limit(Provider::Anthropic, 500_000);
+        assert_eq!(cfg.context_window.get(), 500_000);
+        assert_eq!(cfg.context_window_override(), None, "not a user override");
+
+        // Declared in picocode.toml: left alone.
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(Some(100_000));
+        cfg.apply_context_limit(Provider::Anthropic, 500_000);
+        assert_eq!(cfg.context_window.get(), 100_000);
+
+        // Chosen in /config this session: also left alone.
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(None);
+        cfg.step_context_window(1);
+        let chosen = cfg.context_window.get();
+        cfg.apply_context_limit(Provider::Anthropic, 500_000);
+        assert_eq!(cfg.context_window.get(), chosen);
+    }
+
+    #[test]
+    fn a_window_larger_than_the_model_takes_is_pulled_back() {
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(Some(131_072));
+        cfg.apply_context_limit(Provider::Ollama, 32_768);
+        assert_eq!(
+            cfg.context_window.get(),
+            32_768,
+            "the model cannot take more"
+        );
+    }
+
+    #[test]
+    fn switching_models_forgets_the_previous_ceiling() {
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(None);
+        cfg.apply_context_limit(Provider::Ollama, 262_144);
+        cfg.adopt_model_window(Some(8192));
+        assert_eq!(
+            cfg.context_window_max.get(),
+            0,
+            "unknown until probed again"
+        );
+        assert_eq!(cfg.context_window_ceiling(), 1_048_576);
+    }
+
+    #[test]
+    fn an_unknown_limit_changes_nothing() {
+        let mut cfg = Config::for_tests();
+        cfg.adopt_model_window(None);
+        cfg.apply_context_limit(Provider::Anthropic, 0);
+        assert_eq!(cfg.context_window.get(), DEFAULT_CONTEXT_WINDOW);
+        assert_eq!(cfg.context_window_max.get(), 0);
+    }
+
+    #[test]
     fn the_context_window_steps_by_doubling_and_reports_an_override() {
         let mut cfg = Config::for_tests();
-        cfg.set_context_window(40960);
+        cfg.adopt_model_window(Some(40960));
         assert_eq!(
             cfg.context_window_override(),
             None,
@@ -1381,7 +1520,7 @@ mod tests {
 
         // Switching models adopts the new window and drops the override.
         cfg.step_context_window(1);
-        cfg.set_context_window(8192);
+        cfg.adopt_model_window(Some(8192));
         assert_eq!(cfg.context_window.get(), 8192);
         assert_eq!(cfg.context_window_override(), None);
 
@@ -1423,7 +1562,7 @@ mod tests {
         let sel = restore_selection(&state(Some("local"), "ollama", "old-model"), &models).unwrap();
         assert_eq!(sel.model, "qwen3:4b");
         assert_eq!(sel.entry.as_deref(), Some("local"));
-        assert_eq!(sel.window, 40960);
+        assert_eq!(sel.window, Some(40960));
         assert_eq!(sel.window_override, None);
 
         // A removed entry falls back to the saved ad-hoc selection.
@@ -1443,7 +1582,7 @@ mod tests {
             &models,
         )
         .unwrap();
-        assert_eq!(sel.window, 40960);
+        assert_eq!(sel.window, Some(40960));
         assert_eq!(sel.window_override, Some(8192));
 
         // Broken state is ignored.
