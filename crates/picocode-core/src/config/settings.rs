@@ -54,12 +54,13 @@ pub enum SettingId {
     SearchProvider,
     SearchResults,
     SendKey,
+    Language,
 }
 
 impl SettingId {
     /// Every shared row, in display order (grouped, so a front end can
     /// render [`Group::ALL`] and filter by [`SettingId::group`]).
-    pub const SHARED: [SettingId; 11] = [
+    pub const SHARED: [SettingId; 12] = [
         SettingId::Model,
         SettingId::ContextWindow,
         SettingId::MaxTokens,
@@ -71,6 +72,7 @@ impl SettingId {
         SettingId::SearchProvider,
         SettingId::SearchResults,
         SettingId::SendKey,
+        SettingId::Language,
     ];
 
     pub fn group(self) -> Group {
@@ -85,7 +87,7 @@ impl SettingId {
             | SettingId::LineBytes
             | SettingId::SearchProvider
             | SettingId::SearchResults => Group::Tools,
-            SettingId::SendKey => Group::Interface,
+            SettingId::SendKey | SettingId::Language => Group::Interface,
         }
     }
 
@@ -102,6 +104,7 @@ impl SettingId {
             SettingId::SearchProvider => t!("set_web_search"),
             SettingId::SearchResults => t!("set_results"),
             SettingId::SendKey => t!("set_send_key"),
+            SettingId::Language => t!("set_language"),
         }
         .to_string()
     }
@@ -128,6 +131,7 @@ impl SettingId {
             SettingId::SearchProvider => cfg.search.snapshot().provider.label().to_string(),
             SettingId::SearchResults => human_count(cfg.search.snapshot().max_results as u64),
             SettingId::SendKey => cfg.submit_key.label().to_string(),
+            SettingId::Language => cfg.language.label(),
         }
     }
 
@@ -157,6 +161,13 @@ impl SettingId {
             SettingId::SearchProvider => cfg.search.cycle_provider(delta),
             SettingId::SearchResults => cfg.search.step_max_results(delta),
             SettingId::SendKey => cfg.submit_key = cfg.submit_key.cycled(delta),
+            // Applied here rather than left to the front end: the locale is
+            // process-global, and one that forgot would leave the row
+            // disagreeing with every label beside it.
+            SettingId::Language => {
+                cfg.language = cfg.language.cycled(delta);
+                cfg.language.apply();
+            }
         }
     }
 
@@ -186,6 +197,7 @@ impl SettingId {
                 saved.search_max_results = Some(cfg.search.snapshot().max_results)
             }
             SettingId::SendKey => saved.submit_key = Some(cfg.submit_key),
+            SettingId::Language => saved.language = Some(cfg.language),
             SettingId::Model | SettingId::Mode | SettingId::ContextWindow => {}
         }
     }
@@ -394,8 +406,11 @@ mod tests {
         for id in SettingId::SHARED {
             // The model row opens a picker rather than holding a value,
             // and the search provider has nowhere to step in a bare config
-            // (searxng needs a base_url, brave a BRAVE_API_KEY).
-            if id.is_action() || id == SettingId::SearchProvider {
+            // (searxng needs a base_url, brave a BRAVE_API_KEY). The
+            // language row retunes the process-global locale, which every
+            // other test in this binary reads — it is stepped in
+            // tests/settings_locale.rs, which owns the locale.
+            if id.is_action() || id == SettingId::SearchProvider || id == SettingId::Language {
                 continue;
             }
             let before = id.value(&cfg);

@@ -18,10 +18,12 @@ set_line_bytes: "line bytes"
 set_web_search: "web search"
 set_results: "results"
 set_send_key: "send key"
+set_language: "language"
 
 # Setting values that are not a plain number.
 val_seconds: "%{n}s"
 val_minutes: "%{n}m"
 val_minutes_seconds: "%{m}m%{s}s"
 val_off: "off"
+val_language_system: "system"
 val_max_tokens_off: "no limit (provider default)"

@@ -31,14 +31,20 @@ comes out of your machine, so there it is a ceiling and not a suggestion.
   than `1048576`. Covers the context window, the reply cap and the two
   read_file limits. The bash timeout reads as a clock instead — `1m30s`,
   `30m` — since past its first step nobody counts it in seconds.
+- **A language row.** The interface followed the OS and nothing else, so
+  a machine set to English could not be shown the Japanese translation at
+  all. `system` / `English` / `日本語`, applied immediately and remembered
+  with the rest. Text already in the transcript keeps its wording.
 - **The TUI remembers them.** Both front ends now write the same
   `$XDG_DATA_HOME/picocode/settings.json`, so a bash timeout set in one is
   the timeout in the other; the TUI used to forget on exit. The GUI's
   `gui-settings.json` is read once and carried over. The permission mode
   still resets each run.
-- The TUI's dialog is localized (Japanese, following the system language),
-  and both front ends take the row labels from one catalog, so they name
-  the settings identically.
+- The TUI's dialog is localized, and both front ends take the row labels
+  from one catalog, so they name the settings identically. The TUI's name
+  column now sizes itself to the labels on show — Japanese ones are wider
+  than the fixed width English needed, and wider in columns than in
+  characters, which left the values ragged.
 
 ### Internal
 
@@ -46,6 +52,8 @@ comes out of your machine, so there it is a ceiling and not a suggestion.
   rather than by position. Adding a setting was an edit to a row array, a
   `match` on hard-coded indices and a row count in each front end, with
   nothing checking that a label and its arm still lined up.
+- The GUI had its own copy of `Saved::apply`, field for field. It calls
+  the shared one, which is how the language row reached it for free.
 
 ## 0.8.0
 

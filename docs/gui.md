@@ -178,7 +178,10 @@ signing/notarization) may come later.
 - **i18n**: UI strings localize to the system language (English and
   Japanese so far — `crates/picocode-gui/locales/*.yml`, via rust-i18n).
   The `/config` row labels come from `crates/picocode-core/locales/`, so
-  both front ends name the settings the same way.
+  both front ends name the settings the same way. `/config`'s **language**
+  row overrides the system choice and is saved with the rest; it takes
+  effect immediately, though text already in the transcript keeps the
+  wording it was written with.
 
 ## Build notes
 

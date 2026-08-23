@@ -199,6 +199,12 @@ entirely. Two settings are deliberately not in it: the permission mode
 resets each run, and the context window is remembered per project next to
 the model it was set on.
 
+The **language** row is in there like any other, so an interface language
+can be chosen without changing the system one — useful when the machine is
+set to a language picocode does not have a catalog for. Left alone it
+follows the OS. Only English and Japanese are translated; anything else
+falls back to English.
+
 ### Trusting a project config
 
 A project config is not only preferences: `after_edit` runs a shell command

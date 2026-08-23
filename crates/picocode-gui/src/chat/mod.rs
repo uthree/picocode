@@ -228,7 +228,7 @@ impl ChatView {
         // the send key is needed before the input box is built.
         let saved = config::saved::load();
         let mut cfg = cfg;
-        Self::apply_saved(&saved, &mut cfg);
+        saved.apply(&mut cfg);
         // Wins over the bindings main.rs registered before the window opened.
         input::bind_send_key(cfg.submit_key, cx);
 
@@ -371,35 +371,6 @@ impl ChatView {
         view
     }
 
-    /// Apply the persisted /config overlay onto a config's shared handles
-    /// (used at startup and when switching working directories).
-    fn apply_saved(saved: &Saved, cfg: &mut Config) {
-        if let Some(k) = saved.submit_key {
-            cfg.submit_key = k;
-        }
-        if let Some(v) = saved.bash_timeout {
-            cfg.bash_timeout.set(v);
-        }
-        if let Some(v) = saved.read_max_lines {
-            cfg.read_max_lines.set(v);
-        }
-        if let Some(v) = saved.read_max_line_bytes {
-            cfg.read_max_line_bytes.set(v);
-        }
-        if let Some(v) = saved.auto_compact {
-            cfg.auto_compact.set(v);
-        }
-        if let Some(v) = saved.max_tokens {
-            cfg.max_tokens.set(v);
-        }
-        if let Some(p) = saved.search_provider {
-            cfg.search.set_provider(p);
-        }
-        if let Some(n) = saved.search_max_results {
-            cfg.search.set_max_results(n);
-        }
-    }
-
     /// Jump the transcript to the bottom and resume following the stream.
     /// (Scrolling to the very end normalizes to the bottom-aligned list's
     /// "sticking" state on the next layout.)
@@ -526,6 +497,17 @@ impl ChatView {
         crate::theme::apply_family(&self.theme_family, cx);
     }
 
+    /// Re-word the placeholders of the two long-lived input boxes, which
+    /// were given their text when the view was built.
+    fn refresh_placeholders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = input::placeholder(self.cfg.submit_key);
+        self.input
+            .update(cx, |state, cx| state.set_placeholder(text, window, cx));
+        let filter = t!("filter_models").to_string();
+        self.model_filter
+            .update(cx, |state, cx| state.set_placeholder(filter, window, cx));
+    }
+
     /// A `/config` row change. Every change applies immediately. The shared
     /// rows come from core's table; the theme pair is the GUI's own.
     fn adjust_setting(
@@ -550,12 +532,15 @@ impl ChatView {
                     picocode_core::state::save_last_model(&self.cfg);
                 }
                 if id == SettingId::SendKey {
-                    // Swap the key bindings and the placeholder over right away.
+                    // Swap the key bindings over right away.
                     input::bind_send_key(self.cfg.submit_key, cx);
-                    let placeholder = input::placeholder(self.cfg.submit_key);
-                    self.input.update(cx, |state, cx| {
-                        state.set_placeholder(placeholder, window, cx)
-                    });
+                }
+                // Placeholders are set on the input entities instead of
+                // being rendered each frame, so the two rows that reword
+                // them have to say it again: the send key names itself in
+                // the input's, the language rewrites both.
+                if matches!(id, SettingId::SendKey | SettingId::Language) {
+                    self.refresh_placeholders(window, cx);
                 }
             }
         }

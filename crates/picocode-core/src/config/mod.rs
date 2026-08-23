@@ -749,6 +749,11 @@ pub struct Config {
     /// combinations insert a newline); a local preference, so a remote
     /// workspace's config never changes it.
     pub submit_key: crate::keys::SubmitKey,
+    /// Language the interface renders in; a local preference like the
+    /// submit key. Holding it here is what lets `/config` show the row —
+    /// rust-i18n's own locale is a bare string with no notion of
+    /// "following the system".
+    pub language: Language,
     /// Base system prompt override from the config file (None = built-in).
     pub system_prompt: Option<String>,
     /// Named system-prompt presets (`[[prompts]]`), switchable with
@@ -1062,6 +1067,7 @@ impl Config {
             disable_tools: settings.disable_tools,
             after_edit: file.after_edit.clone().filter(|c| !c.trim().is_empty()),
             submit_key: file.submit_key.unwrap_or_default(),
+            language: Language::default(),
             system_prompt: file.system_prompt.clone(),
             prompts: file.prompts.clone().unwrap_or_default(),
             mcp_servers: file.mcp_servers.clone().unwrap_or_default(),
@@ -1164,6 +1170,7 @@ impl Config {
             max_tokens: NumHandle::new(DEFAULT_MAX_TOKENS),
             root: std::path::PathBuf::from("/tmp/proj"),
             submit_key: crate::keys::SubmitKey::default(),
+            language: Language::default(),
             approval: RulesHandle::new(ApprovalRules::default()),
             mode: ModeHandle::new(Mode::ReadOnly),
             search: SearchHandle::new(SearchConfig {
@@ -1195,12 +1202,14 @@ impl Config {
     }
 }
 
+mod language;
 mod rules;
 pub mod saved;
 mod search;
 mod settings;
 pub mod trust;
 
+pub use language::Language;
 pub use rules::*;
 pub use search::*;
 pub use settings::{Group, SettingId, human_count, human_seconds};

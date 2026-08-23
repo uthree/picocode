@@ -14,16 +14,12 @@
 // against its own locales/ — see `set_locale_from_system`.
 rust_i18n::i18n!("locales", fallback = "en");
 
-/// Follow the OS language preference, once, at startup. Only `ja` is
-/// translated so far; anything else keeps the `en` fallback. Called by both
-/// front ends before the first string is rendered — sys-locale reads the OS
-/// preference rather than `$LANG`, so it works for Finder-launched apps too.
+/// Follow the OS language preference, before anything is rendered. Called
+/// by both front ends at startup, ahead of reading the saved settings —
+/// `/config`'s language row may pin a different one, which
+/// [`config::saved::Saved::apply`] then does.
 pub fn set_locale_from_system() {
-    if let Some(locale) = sys_locale::get_locale()
-        && locale.starts_with("ja")
-    {
-        rust_i18n::set_locale("ja");
-    }
+    config::Language::System.apply();
 }
 
 pub mod agent;

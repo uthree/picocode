@@ -5,11 +5,11 @@
 //! the kind of gap a formatted value hides — `1m30s` in a Japanese dialog
 //! looks deliberate.
 
-use picocode_core::config::{human_count, human_seconds};
+use picocode_core::config::{Language, SettingId, human_count, human_seconds};
 
 #[test]
 fn durations_and_counts_speak_japanese() {
-    rust_i18n::set_locale("ja");
+    Language::Ja.apply();
 
     assert_eq!(human_seconds(30), "30秒");
     assert_eq!(human_seconds(120), "2分");
@@ -19,4 +19,16 @@ fn durations_and_counts_speak_japanese() {
     // Counts carry no words, so they read the same in either language.
     assert_eq!(human_count(32_768), "32k");
     assert_eq!(human_count(20), "20");
+
+    // The row that got us here, and the one value on it that is a word.
+    assert_eq!(SettingId::Language.label(), "言語");
+    assert_eq!(Language::System.label(), "システム");
+
+    // Language names stay in their own language: picking Japanese from an
+    // English dialog means finding 日本語, not "Japanese".
+    Language::En.apply();
+    assert_eq!(SettingId::Language.label(), "language");
+    assert_eq!(Language::Ja.label(), "日本語");
+    assert_eq!(Language::En.label(), "English");
+    assert_eq!(human_seconds(90), "1m30s");
 }

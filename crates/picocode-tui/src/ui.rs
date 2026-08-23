@@ -13,7 +13,8 @@ use crate::app::{
     RemotePicker, SessionPicker, SettingsRow,
 };
 
-/// Column width of the setting names in the `/config` dialog.
+/// Narrowest the setting-name column of the `/config` dialog gets; it
+/// widens for a locale whose labels need more room.
 const SETTING_NAME_COL: usize = 14;
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -907,6 +908,19 @@ fn draw_settings(f: &mut Frame, app: &App) {
     let area = dialog_area(screen, (34, 62), rows.len() as u16 + 4);
     let inner_width = area.width.saturating_sub(2) as usize;
 
+    // Pad to the widest label actually on show. `{:<n}` counts chars, and
+    // a Japanese label is both longer than the English one it replaces and
+    // two columns per char — either alone leaves the values ragged.
+    let name_col = rows
+        .iter()
+        .filter_map(|row| match row {
+            SettingsRow::Setting { name, .. } => Some(name.width()),
+            SettingsRow::Header(_) => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .max(SETTING_NAME_COL);
+
     let mut lines: Vec<Line> = Vec::new();
     // Headings are not selectable, so the cursor counts settings only.
     let mut ix = 0;
@@ -926,18 +940,15 @@ fn draw_settings(f: &mut Frame, app: &App) {
         } else {
             value.clone()
         };
-        let text = format!("   {name:<SETTING_NAME_COL$} {value}");
+        let name = format!("   {name}{:pad$} ", "", pad = name_col - name.width());
         lines.push(if ix == menu.selected {
-            list_line(text, true, inner_width, Style::new())
+            list_line(format!("{name}{value}"), true, inner_width, Style::new())
         } else {
             // Unselected rows dim the name column.
-            let text: String = text.chars().take(inner_width).collect();
+            let room = inner_width.saturating_sub(name.width());
             Line::from(vec![
-                Span::styled(
-                    format!("   {name:<SETTING_NAME_COL$} "),
-                    Style::new().fg(Color::DarkGray),
-                ),
-                Span::raw(text.chars().skip(SETTING_NAME_COL + 4).collect::<String>()),
+                Span::styled(name, Style::new().fg(Color::DarkGray)),
+                Span::raw(value.chars().take(room).collect::<String>()),
             ])
         });
         ix += 1;

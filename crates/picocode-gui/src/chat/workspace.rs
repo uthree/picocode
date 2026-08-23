@@ -285,7 +285,7 @@ impl ChatView {
         // The send key belongs to the person at the keyboard, not to the
         // project — keep it across the switch (no rebinding needed).
         new_cfg.submit_key = self.cfg.submit_key;
-        Self::apply_saved(&self.saved, &mut new_cfg);
+        self.saved.apply(&mut new_cfg);
 
         let (new_tx, new_steer) = {
             let _guard = self.rt.enter();

@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{NumHandle, SearchProvider};
+use crate::config::{Language, NumHandle, SearchProvider};
 use crate::keys::SubmitKey;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -42,6 +42,9 @@ pub struct Saved {
     /// insert a newline).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_key: Option<SubmitKey>,
+    /// Interface language; absent means follow the OS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
     /// Front-end preferences, stored verbatim under a key of the front
     /// end's choosing (the GUI's theme and sidebar, the TUI's reasoning
     /// toggle). Core never interprets them; they live here so one file
@@ -81,6 +84,10 @@ impl Saved {
         if let Some(key) = self.submit_key {
             cfg.submit_key = key;
         }
+        // Unconditional: `System` still has to be applied, since the front
+        // end may have been started with the locale left at the fallback.
+        cfg.language = self.language.unwrap_or_default();
+        cfg.language.apply();
         // A provider whose requirements are no longer met (a dropped
         // BRAVE_API_KEY) is ignored rather than restored into a dead state.
         if let Some(p) = self.search_provider {
@@ -219,6 +226,10 @@ mod tests {
         let before_lines = cfg.read_max_lines.get();
         Saved {
             bash_timeout: Some(600),
+            // Pinned so this doesn't retune the process-global locale to
+            // whatever the machine running the tests is set to; the rest
+            // of this binary reads it.
+            language: Some(Language::En),
             ..Default::default()
         }
         .apply(&mut cfg);
