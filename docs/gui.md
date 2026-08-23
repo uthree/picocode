@@ -126,9 +126,10 @@ signing/notarization) may come later.
   [configuration.md](configuration.md#auto-mode-letting-a-model-answer-the-prompts)),
   `/goal <condition>` (keep working until a reviewer model judges the
   condition met — `goal n/m` appears in the status bar, `/goal off`
-  clears it, Stop ends the run in progress), `/config` (settings dialog with the same rows as the TUI,
-  minus its reasoning-display row — reasoning folds per entry in the
-  transcript — plus the GUI-only theme row),
+  clears it, Stop ends the run in progress), `/config` (settings dialog, grouped
+  into Model / Tools / Interface — the same rows as the TUI, minus its
+  reasoning-display row, since reasoning folds per entry in the
+  transcript, plus the GUI-only theme rows),
   `/status` (with a color-coded context breakdown — a segmented bar plus
   legend showing how much of the window the system prompt, instructions,
   messages, tool activity and attachments take), `/permissions`,
@@ -165,13 +166,19 @@ signing/notarization) may come later.
   blocks and their syntax highlighting — come from the selected theme's
   palette.
 - **Persistence**: `/config` changes are saved to
-  `$XDG_DATA_HOME/picocode/gui-settings.json` and re-applied on the next
+  `$XDG_DATA_HOME/picocode/settings.json` and re-applied on the next
   start, as a sparse overlay — untouched values keep following
   `picocode.toml`, a saved value wins over later config-file edits. The
-  permission mode is deliberately not persisted; the model is already
-  remembered per project.
+  file is shared with the TUI, so a bash timeout set in one is the timeout
+  in the other; the GUI's own preferences (theme, color theme, sidebar)
+  sit under its `ui` key. The permission mode is deliberately not
+  persisted, and the model — with the context window set alongside it — is
+  remembered per project instead. An older `gui-settings.json` is read
+  once and carried over.
 - **i18n**: UI strings localize to the system language (English and
   Japanese so far — `crates/picocode-gui/locales/*.yml`, via rust-i18n).
+  The `/config` row labels come from `crates/picocode-core/locales/`, so
+  both front ends name the settings the same way.
 
 ## Build notes
 

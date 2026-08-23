@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### The context window is a setting now
+
+It was readable in `/status` but settable only as `context_window` on a
+`[[models]]` entry — and on Ollama that is the `num_ctx` picocode sends
+with every request, which overrides the Modelfile, `/set parameter
+num_ctx` and `OLLAMA_CONTEXT_LENGTH`. So a window set on the Ollama side
+never applied, with nowhere in the app to correct it.
+
+`/config` has a "context window" row in both front ends. A change there
+is remembered per project next to the model it was set on, which also
+gives an ad-hoc `--model` selection somewhere to keep one — that case
+used to be pinned at 32768 whatever the model could do. Switching models
+adopts the new model's own figure.
+
+### `/config`
+
+- The rows are grouped into **Model**, **Tools** and **Interface**.
+- **The TUI remembers them.** Both front ends now write the same
+  `$XDG_DATA_HOME/picocode/settings.json`, so a bash timeout set in one is
+  the timeout in the other; the TUI used to forget on exit. The GUI's
+  `gui-settings.json` is read once and carried over. The permission mode
+  still resets each run.
+- The TUI's dialog is localized (Japanese, following the system language),
+  and both front ends take the row labels from one catalog, so they name
+  the settings identically.
+
+### Internal
+
+- The rows are one table in `picocode-core`, keyed by a `SettingId`
+  rather than by position. Adding a setting was an edit to a row array, a
+  `match` on hard-coded indices and a row count in each front end, with
+  nothing checking that a label and its arm still lined up.
+
 ## 0.8.0
 
 An adversarial review of the whole workspace, and the fixes it turned up.

@@ -9,7 +9,10 @@ through the `AgentEvent` / `WorkerCmd` channels and the plain data types in
 crates/
   picocode-core/src/     — the agent engine (library)
     config/      — CLI args and config file (mod), permission modes and
-                   approval rules (rules), web-search settings (search)
+                   approval rules (rules), web-search settings (search),
+                   the project-config trust gate (trust), the `/config`
+                   row table both front ends render (settings) and the
+                   overlay of those rows they persist (saved)
     agent.rs     — rig agent construction and the streaming worker, plus
                    the `/goal` loop (a tool-less judge decides after each
                    turn whether to run another one)

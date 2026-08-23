@@ -32,6 +32,32 @@ entries, picocode asks the local Ollama server for its model list and uses
 the first one — if Ollama is unreachable or empty, it exits with instructions
 for setting up a provider instead.
 
+### The context window
+
+The active model's window sizes the status-bar usage gauge and the
+auto-compact threshold — and on Ollama it is also what the server
+allocates, because picocode sends it as `num_ctx` on every request.
+
+That last part is worth knowing if you run Ollama: **a `num_ctx` set on
+the Ollama side does not apply.** A per-request option wins over the
+Modelfile, so `PARAMETER num_ctx`, `/set parameter num_ctx` and
+`OLLAMA_CONTEXT_LENGTH` are all overridden. This is deliberate — Ollama's
+own default is 4096, which cuts long replies off mid-sentence — but it
+means the window has to be set here.
+
+Two places to set it:
+
+- `context_window` on a `[[models]]` entry, for the durable answer.
+- The `/config` "context window" row, which doubles and halves it live.
+  A change there is remembered next to the model in the project state, so
+  it survives a restart — including for an ad-hoc `--model` selection,
+  which has no entry to declare one. Switching models drops it and adopts
+  the new model's own figure, since a window that fits one model is wrong
+  for the next.
+
+With neither, the window is 32768 tokens. A larger window costs memory on
+the host, so declare what the model really has rather than the maximum.
+
 ## Permissions
 
 Tools fall into two classes. **Local reads** (`read_file`, `list_files`,
@@ -141,6 +167,18 @@ finds the same config, sessions and saved state — merged over the global
 concatenated; `[[models]]` and `default_model` travel together (a project
 that defines its own `[[models]]` starts from a clean slate).
 
+Settings marked below as adjustable in `/config` can also be changed while
+picocode runs. Those changes are saved to
+`$XDG_DATA_HOME/picocode/settings.json` and re-applied on the next start,
+by either front end — the TUI and the GUI share the file, since they share
+the dialog. It is a sparse overlay: only what you actually changed is
+stored, so everything else keeps following `picocode.toml`, and a stored
+value wins over a later edit to the config file (it was chosen more
+recently). Delete the file to go back to following `picocode.toml`
+entirely. Two settings are deliberately not in it: the permission mode
+resets each run, and the context window is remembered per project next to
+the model it was set on.
+
 ### Trusting a project config
 
 A project config is not only preferences: `after_edit` runs a shell command
@@ -183,9 +221,8 @@ read_max_line_bytes = 500    # bytes per line before truncation
 # Which key sends the message in the input box: "enter" (default),
 # "shift-enter", "ctrl-enter" or "cmd-enter" (Super+Enter off macOS).
 # Whichever is chosen, the other Enter combinations insert a newline. Also
-# switchable at runtime in /config — the GUI remembers that choice, the TUI
-# applies it for the session. A remote workspace's config never overrides
-# it: it belongs to the machine you type on.
+# switchable at runtime in /config. A remote workspace's config never
+# overrides it: it belongs to the machine you type on.
 # In the TUI, Shift+Enter and Cmd+Enter need a terminal implementing the
 # kitty keyboard protocol (kitty, Ghostty, WezTerm, foot); elsewhere Enter
 # keeps sending and picocode says so at startup. Ctrl+Enter works
@@ -271,11 +308,10 @@ allow_write = ["~/.cargo"]  # extra write-allowed paths (~ expands)
 # conversation is kept).
 #
 # For Ollama this also decides what actually reaches the server: picocode
-# sends it as `num_predict`, together with `num_ctx` taken from the
-# active model's `context_window` below. That matters — Ollama's default
-# window is 4096 tokens, and a long reply is cut off mid-sentence when
-# prompt + reply reach it, no matter what max_tokens says. Declare the
-# window your model really has (a larger window costs memory).
+# sends it as `num_predict`, next to the `num_ctx` from the active model's
+# context window. Both matter — a reply is cut off mid-sentence when
+# prompt + reply fill the window, no matter what max_tokens says. See
+# "The context window" above.
 max_tokens = 8192
 
 # How many follow-up turns a `/goal` may run before it stops and hands
@@ -313,10 +349,10 @@ args = ["mcp-server-time"]
 name = "local"
 provider = "ollama"
 model = "qwen3:4b"
-context_window = 32768       # tokens; drives the status-bar usage gauge,
-                             # the auto-compact threshold, and — on Ollama —
-                             # the `num_ctx` picocode sends, i.e. the window
-                             # the server actually allocates (default 32768)
+context_window = 32768       # tokens (default 32768); also adjustable in
+                             # /config. On Ollama this is the `num_ctx`
+                             # picocode sends, overriding the server's own
+                             # setting — see "The context window" above.
 
 [[models]]
 name = "vllm"
