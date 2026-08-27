@@ -6,7 +6,8 @@ group_tools: "Tools"
 group_interface: "Interface"
 
 # Setting names. Front-end-only rows (theme, reasoning) keep their labels
-# in the front end's own catalog.
+# in the front end's own catalog; the raw-transcript row is here because
+# both front ends have it.
 set_model: "model"
 set_context_window: "context window"
 set_max_tokens: "max tokens"
@@ -19,11 +20,13 @@ set_web_search: "web search"
 set_results: "results"
 set_send_key: "send key"
 set_language: "language"
+set_raw_view: "raw transcript"
 
 # Setting values that are not a plain number.
 val_seconds: "%{n}s"
 val_minutes: "%{n}m"
 val_minutes_seconds: "%{m}m%{s}s"
 val_off: "off"
+val_on: "on"
 val_language_system: "system"
 val_max_tokens_off: "no limit (provider default)"

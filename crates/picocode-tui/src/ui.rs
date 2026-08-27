@@ -157,6 +157,9 @@ fn draw_transcript(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    if app.raw_view {
+        return raw_lines(app, width);
+    }
     let mut lines: Vec<Line<'static>> = Vec::new();
     for entry in &app.entries {
         match entry.kind {
@@ -300,6 +303,35 @@ fn transcript_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 lines.push(Line::default());
             }
         }
+    }
+    lines
+}
+
+/// The transcript as plain text (Ctrl+R): every entry gets a dim `[kind]`
+/// label and then its text exactly as it was produced — no markdown, no
+/// syntax highlighting, no diff colors, no prefixes on the body. Long
+/// lines are still folded to the terminal width, which is the only way to
+/// see all of them; nothing else is touched.
+fn raw_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let dim = Style::new().fg(Color::DarkGray);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for entry in &app.entries {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
+        lines.push(Line::from(Span::styled(
+            format!("[{}]", entry.kind.raw_label()),
+            dim,
+        )));
+        if !entry.attachments.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("[attachments] {}", entry.attachments.join(", ")),
+                dim,
+            )));
+        }
+        push_wrapped(&mut lines, &entry.text, width, |_, s| {
+            Line::from(Span::raw(s))
+        });
     }
     lines
 }
@@ -554,6 +586,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             format!("  goal {}/{}", app.goal_round, app.goal_max_rounds()),
             Style::new().fg(Color::Magenta),
         ));
+    }
+    if app.raw_view {
+        left.push(Span::styled("  raw", Style::new().fg(Color::Cyan)));
     }
     if !app.follow {
         left.push(Span::styled(

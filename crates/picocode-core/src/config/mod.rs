@@ -1212,7 +1212,7 @@ pub mod trust;
 pub use language::Language;
 pub use rules::*;
 pub use search::*;
-pub use settings::{Group, SettingId, human_count, human_seconds};
+pub use settings::{Group, SettingId, human_count, human_seconds, on_off, raw_view_label};
 
 use rules::validate_tool_lists;
 use search::{SearchFileConfig, resolve_search};

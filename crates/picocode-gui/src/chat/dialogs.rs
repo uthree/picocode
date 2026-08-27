@@ -32,19 +32,22 @@ impl ThemeSetting {
 }
 
 /// One `/config` row the GUI shows: the shared table, plus the appearance
-/// and color-theme pickers, which only the GUI has.
+/// and color-theme pickers, which only the GUI has, and the raw-transcript
+/// toggle, which both front ends have but neither keeps in
+/// [`picocode_core::config::Config`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum GuiSetting {
     Shared(SettingId),
     Theme,
     ThemeFamily,
+    RawView,
 }
 
 impl GuiSetting {
     fn group(self) -> Group {
         match self {
             GuiSetting::Shared(id) => id.group(),
-            GuiSetting::Theme | GuiSetting::ThemeFamily => Group::Interface,
+            GuiSetting::Theme | GuiSetting::ThemeFamily | GuiSetting::RawView => Group::Interface,
         }
     }
 
@@ -53,6 +56,7 @@ impl GuiSetting {
             GuiSetting::Shared(id) => id.label(),
             GuiSetting::Theme => t!("row_theme").to_string(),
             GuiSetting::ThemeFamily => t!("row_color_theme").to_string(),
+            GuiSetting::RawView => picocode_core::config::raw_view_label(),
         }
     }
 
@@ -70,6 +74,7 @@ fn settings_order() -> Vec<GuiSetting> {
         if group == Group::Interface {
             order.push(GuiSetting::Theme);
             order.push(GuiSetting::ThemeFamily);
+            order.push(GuiSetting::RawView);
         }
         order.extend(
             SettingId::SHARED
@@ -89,6 +94,7 @@ impl ChatView {
         match setting {
             GuiSetting::Theme => self.theme_pref.label(),
             GuiSetting::ThemeFamily => self.theme_family.clone(),
+            GuiSetting::RawView => picocode_core::config::on_off(self.raw_view),
             GuiSetting::Shared(SettingId::Mode) => mode_name(self.cfg.mode.get()),
             GuiSetting::Shared(id) => id.value(&self.cfg),
         }
@@ -1066,6 +1072,7 @@ mod tests {
         }
         assert!(order.contains(&GuiSetting::Theme));
         assert!(order.contains(&GuiSetting::ThemeFamily));
+        assert!(order.contains(&GuiSetting::RawView));
     }
 
     /// One `-`/`+` pair per row, keyed by position: a duplicate key would

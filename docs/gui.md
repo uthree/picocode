@@ -32,6 +32,15 @@ signing/notarization) may come later.
 - **TeX math**: display equations (`$$…$$`, `\[…\]`) are typeset by
   [RaTeX](https://github.com/erweixin/RaTeX) as images in the theme color;
   inline math falls back to Unicode (`$x^2$` → `x²`, via unicodeit).
+- **Raw transcript**: the `raw` chip in the status bar (or the "raw
+  transcript" row of `/config`) drops all of the above and shows the log as
+  plain monospaced text — no markdown, no math, no syntax highlighting, no
+  diff colors. Each entry gets a dim `[user]` / `[assistant]` / `[tool]` …
+  label and then its text exactly as it arrived. Text is not selectable in
+  this view (the selectable element is the markdown one, and parsing is
+  what is being avoided) — right-click an entry to copy it whole. The chip
+  stays lit while raw is on, and the setting is remembered (the TUI reads
+  the same one).
 - **Scrolling**: the transcript is a virtualized list — only the entries
   in (or near) the viewport are rendered each frame, so long conversations
   scroll and stream as fast as short ones. The view follows streaming

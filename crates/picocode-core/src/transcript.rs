@@ -30,6 +30,28 @@ pub enum EntryKind {
     Logo,
 }
 
+impl EntryKind {
+    /// Short name of the kind, shown as the `[label]` in front of an entry
+    /// in the raw transcript view. Untranslated on purpose: it names the
+    /// transcript's own structure, the way a field name does.
+    pub fn raw_label(self) -> &'static str {
+        match self {
+            EntryKind::User => "user",
+            EntryKind::Assistant => "assistant",
+            EntryKind::Reasoning => "reasoning",
+            EntryKind::Tool => "tool",
+            EntryKind::ToolOut => "tool-output",
+            EntryKind::Diff => "diff",
+            EntryKind::Notice => "notice",
+            EntryKind::Warning => "warning",
+            EntryKind::Summary => "summary",
+            EntryKind::Context => "context",
+            EntryKind::Error => "error",
+            EntryKind::Logo => "logo",
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Entry {
     pub kind: EntryKind,
@@ -121,6 +143,31 @@ mod tests {
         assert!(matches!(rows[3], DiffRow::Other(_)));
         assert_eq!(old, "let x = 1;\nlet y = 2;");
         assert_eq!(new, "let x = 1;\nlet y = 3;");
+    }
+
+    /// The raw view labels entries by kind, so two kinds sharing a label
+    /// would make the log ambiguous exactly where it is meant to be plain.
+    #[test]
+    fn every_kind_has_its_own_raw_label() {
+        let kinds = [
+            EntryKind::User,
+            EntryKind::Assistant,
+            EntryKind::Reasoning,
+            EntryKind::Tool,
+            EntryKind::ToolOut,
+            EntryKind::Diff,
+            EntryKind::Notice,
+            EntryKind::Warning,
+            EntryKind::Summary,
+            EntryKind::Context,
+            EntryKind::Error,
+            EntryKind::Logo,
+        ];
+        let mut labels: Vec<&str> = kinds.iter().map(|k| k.raw_label()).collect();
+        labels.sort_unstable();
+        let mut unique = labels.clone();
+        unique.dedup();
+        assert_eq!(labels, unique);
     }
 
     #[test]

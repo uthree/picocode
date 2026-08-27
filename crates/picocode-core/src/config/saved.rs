@@ -53,6 +53,12 @@ pub struct Saved {
     pub ui: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Where both front ends remember the raw-transcript view. The flag is
+/// view state rather than configuration, so it lives in [`Saved::ui`]
+/// rather than in [`crate::config::Config`] — but both front ends have the
+/// toggle, so the key is spelled once, here.
+pub const RAW_VIEW_KEY: &str = "raw_view";
+
 impl Saved {
     /// Read a front-end preference, or `None` if it was never stored (or
     /// was stored by an older version as a different shape).

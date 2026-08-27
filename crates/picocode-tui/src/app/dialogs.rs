@@ -149,11 +149,13 @@ pub struct SettingsMenu {
 
 /// One `/config` row the TUI can put the cursor on: the shared table, plus
 /// the reasoning toggle, which only the TUI has (the GUI collapses
-/// reasoning per entry instead).
+/// reasoning per entry instead), and the raw-transcript toggle, which both
+/// front ends have but neither keeps in [`picocode_core::config::Config`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Setting {
     Shared(SettingId),
     Reasoning,
+    RawView,
 }
 
 /// Where the reasoning toggle is remembered between runs.
@@ -163,7 +165,7 @@ impl Setting {
     pub fn group(self) -> Group {
         match self {
             Setting::Shared(id) => id.group(),
-            Setting::Reasoning => Group::Interface,
+            Setting::Reasoning | Setting::RawView => Group::Interface,
         }
     }
 
@@ -171,6 +173,7 @@ impl Setting {
         match self {
             Setting::Shared(id) => id.label(),
             Setting::Reasoning => t!("set_reasoning").to_string(),
+            Setting::RawView => picocode_core::config::raw_view_label(),
         }
     }
 
@@ -191,7 +194,7 @@ pub enum SettingsRow {
 }
 
 /// Every selectable `/config` row, in display order: the shared table plus
-/// the TUI's own reasoning toggle, grouped by section.
+/// the TUI's own view toggles, grouped by section.
 fn settings_order() -> Vec<Setting> {
     let mut order = Vec::new();
     for group in Group::ALL {
@@ -203,6 +206,7 @@ fn settings_order() -> Vec<Setting> {
         );
         if group == Setting::Reasoning.group() {
             order.push(Setting::Reasoning);
+            order.push(Setting::RawView);
         }
     }
     order
@@ -352,6 +356,7 @@ impl App {
                 t!("reasoning_collapsed")
             }
             .to_string(),
+            Setting::RawView => picocode_core::config::on_off(self.raw_view),
         }
     }
 
@@ -391,8 +396,25 @@ impl App {
                 self.show_reasoning = !self.show_reasoning;
                 self.saved.set_ui(REASONING_KEY, self.show_reasoning);
             }
+            Setting::RawView => {
+                self.raw_view = !self.raw_view;
+                self.remember_raw_view();
+            }
         }
         picocode_core::config::saved::save(&self.saved);
+    }
+
+    /// Ctrl+R: plain text instead of the rendered transcript, and back.
+    /// Remembered like the `/config` rows, since it is one of them.
+    pub(super) fn toggle_raw_view(&mut self) {
+        self.raw_view = !self.raw_view;
+        self.remember_raw_view();
+        picocode_core::config::saved::save(&self.saved);
+    }
+
+    fn remember_raw_view(&mut self) {
+        self.saved
+            .set_ui(picocode_core::config::saved::RAW_VIEW_KEY, self.raw_view);
     }
 
     /// Enter/Space on a `/config` row: toggles act like →; the model row
@@ -524,7 +546,7 @@ mod tests {
         assert_eq!(headings.len(), unique.len(), "{headings:?}");
     }
 
-    /// The reasoning toggle is the TUI's own row; the rest come from core.
+    /// The view toggles are the TUI's own rows; the rest come from core.
     #[test]
     fn the_shared_table_is_rendered_whole() {
         let order = settings_order();
@@ -532,5 +554,6 @@ mod tests {
             assert!(order.contains(&Setting::Shared(id)), "{id:?} is missing");
         }
         assert!(order.contains(&Setting::Reasoning));
+        assert!(order.contains(&Setting::RawView));
     }
 }

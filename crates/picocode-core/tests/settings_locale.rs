@@ -5,7 +5,9 @@
 //! the kind of gap a formatted value hides — `1m30s` in a Japanese dialog
 //! looks deliberate.
 
-use picocode_core::config::{Language, SettingId, human_count, human_seconds};
+use picocode_core::config::{
+    Language, SettingId, human_count, human_seconds, on_off, raw_view_label,
+};
 
 #[test]
 fn durations_and_counts_speak_japanese() {
@@ -24,6 +26,13 @@ fn durations_and_counts_speak_japanese() {
     assert_eq!(SettingId::Language.label(), "言語");
     assert_eq!(Language::System.label(), "システム");
 
+    // The raw-transcript row lives in the front ends but is named here:
+    // `t!` only ever reads its own crate's catalog, so a front end asking
+    // for the key directly would get the key back.
+    assert_eq!(raw_view_label(), "生ログ表示");
+    assert_eq!(on_off(true), "オン");
+    assert_eq!(on_off(false), "オフ");
+
     // Language names stay in their own language: picking Japanese from an
     // English dialog means finding 日本語, not "Japanese".
     Language::En.apply();
@@ -31,4 +40,6 @@ fn durations_and_counts_speak_japanese() {
     assert_eq!(Language::Ja.label(), "日本語");
     assert_eq!(Language::En.label(), "English");
     assert_eq!(human_seconds(90), "1m30s");
+    assert_eq!(raw_view_label(), "raw transcript");
+    assert_eq!(on_off(true), "on");
 }

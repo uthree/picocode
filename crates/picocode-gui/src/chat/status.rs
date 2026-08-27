@@ -138,6 +138,18 @@ impl ChatView {
             .hover(|s| s.opacity(0.85))
             .child(mode_name(mode))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Mode, window, cx)));
+        // Plain text instead of the rendered transcript. Always shown, so
+        // the way back is where the way in was; lit while it is on, since
+        // an unrendered transcript should never look like a broken one.
+        let raw_chip = div()
+            .id("raw-chip")
+            .cursor_pointer()
+            .rounded_md()
+            .px_2()
+            .when(self.raw_view, |d| d.bg(theme.muted).text_color(theme.cyan))
+            .hover(|s| s.bg(theme.muted))
+            .child(t!("raw_chip").to_string())
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_raw_view(cx)));
         let model_chip = div()
             .id("model-chip")
             .cursor_pointer()
@@ -194,6 +206,7 @@ impl ChatView {
                     .h_flex()
                     .gap_3()
                     .items_center()
+                    .child(raw_chip)
                     .child(gauge)
                     .child(model_chip),
             )

@@ -78,6 +78,10 @@ pub struct App {
     pub last_view_height: usize,
     /// Show full model reasoning instead of a collapsed one-liner.
     pub show_reasoning: bool,
+    /// Render the transcript as plain text — no markdown, no syntax
+    /// highlighting, no diff colors — so the text behind the rendering can
+    /// be read as it arrived (Ctrl+R, or the `/config` row).
+    pub raw_view: bool,
     /// Settings remembered across runs, shared with the GUI; /config
     /// writes to it and saves.
     pub(super) saved: picocode_core::config::saved::Saved,
@@ -220,6 +224,9 @@ impl App {
             last_total_lines: 0,
             last_view_height: 0,
             show_reasoning: saved.ui(dialogs::REASONING_KEY).unwrap_or(false),
+            raw_view: saved
+                .ui(picocode_core::config::saved::RAW_VIEW_KEY)
+                .unwrap_or(false),
             saved,
             comp_selected: 0,
             comp_prefix: None,
@@ -440,6 +447,10 @@ impl App {
         }
         if ctrl && key.code == KeyCode::Char('t') {
             self.show_reasoning = !self.show_reasoning;
+            return;
+        }
+        if ctrl && key.code == KeyCode::Char('r') {
+            self.toggle_raw_view();
             return;
         }
 

@@ -66,6 +66,7 @@ picocode -p "Summarize what this project does" > summary.txt
 | `PgUp` / `PgDn` / mouse wheel | Scroll (follow resumes at the bottom) |
 | `Ctrl+V` | Paste from the system clipboard: copied files (Finder/Explorer) and images (screenshots) are staged as attachments — images are saved to a temp PNG first — plain text pastes normally. The terminal's own paste shortcut keeps working for text |
 | `Ctrl+T` | Expand / collapse model reasoning |
+| `Ctrl+R` | Raw transcript on / off (plain text, nothing rendered) |
 | `Ctrl+C` / `Ctrl+D` | Quit |
 
 Mouse capture is enabled for wheel scrolling, so terminal-native text selection
@@ -128,6 +129,13 @@ as the same key.
   syntax highlighting, picked from the file extension.
 - **Reasoning**: model reasoning is collapsed to a one-liner by default;
   `Ctrl+T` expands it.
+- **Raw transcript**: `Ctrl+R` (or the "raw transcript" row of `/config`)
+  drops all of the above and prints the log as plain text — no markdown,
+  no syntax highlighting, no diff colors, no math. Each entry gets a dim
+  `[user]` / `[assistant]` / `[tool]` … label and then its text exactly as
+  it arrived; the only thing still done to it is folding long lines to the
+  terminal width. The status bar says `raw` while it is on, and the
+  setting is remembered (the GUI reads the same one).
 - **Scrolling**: while scrolled up, the view is anchored so streaming output
   doesn't drag it along; scrolling past the bottom resumes following.
 

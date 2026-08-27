@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### A raw view of the transcript
+
+Both front ends can now show the conversation as plain text: `Ctrl+R` in
+the TUI, the `raw` chip in the GUI's status bar, or the "raw transcript"
+row of `/config` in either. Nothing is rendered in that view — no
+markdown, no TeX, no syntax highlighting, no diff colors — each entry is
+labelled with its kind (`[assistant]`, `[tool]`, …) and then printed as it
+arrived. The TUI still folds long lines to the terminal width; that is the
+only thing done to the text.
+
+What it is for is checking what the model actually wrote when the
+rendering is what is in question — a table that came out mangled, a code
+fence that swallowed the rest of a reply, math that typeset into something
+unexpected. The state is remembered across runs, and shared by both front
+ends. The TUI says `raw` in the status bar while it is on and the GUI
+lights the chip, so an unrendered transcript never has to be mistaken for
+a broken one.
+
 ### The context window is a setting now
 
 It was readable in `/status` but settable only as `context_window` on a

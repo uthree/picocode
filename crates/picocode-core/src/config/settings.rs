@@ -214,6 +214,19 @@ impl SettingId {
 /// is a 256k model), a hosted API's are round decimals. The line and byte
 /// limits step in hundreds, so they never meet the 1024 case and simply
 /// read as thousands. Under 1000 the figure is short enough as it is.
+/// Label of the raw-transcript `/config` row. The row itself belongs to
+/// each front end (the flag is view state, not configuration), but the
+/// word is shared, and `t!` only ever reads its own crate's catalog — so
+/// the front ends ask for it here rather than keeping two copies.
+pub fn raw_view_label() -> String {
+    t!("set_raw_view").to_string()
+}
+
+/// A toggle row's value, in the interface language.
+pub fn on_off(on: bool) -> String {
+    if on { t!("val_on") } else { t!("val_off") }.to_string()
+}
+
 pub fn human_count(n: u64) -> String {
     const K: u64 = 1024;
     const M: u64 = K * K;

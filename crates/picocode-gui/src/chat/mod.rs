@@ -146,6 +146,11 @@ pub struct ChatView {
     /// Reasoning entries the user expanded (indices into `entries`);
     /// everything else renders collapsed to a one-line preview.
     expanded_reasoning: std::collections::HashSet<usize>,
+    /// Render the transcript as plain text — no markdown, no math, no
+    /// syntax highlighting, no diff colors — so the text behind the
+    /// rendering can be read as it arrived (the status-bar chip, or the
+    /// `/config` row).
+    raw_view: bool,
     /// Color theme: follow the system (default), or forced light/dark.
     theme_pref: ThemeSetting,
     /// Color-theme family (`theme::FAMILIES` label).
@@ -326,6 +331,9 @@ impl ChatView {
             backend,
             model_filter,
             expanded_reasoning: std::collections::HashSet::new(),
+            raw_view: saved
+                .ui(picocode_core::config::saved::RAW_VIEW_KEY)
+                .unwrap_or(false),
             theme_pref,
             theme_family,
             saved,
@@ -469,6 +477,17 @@ impl ChatView {
         self.push(kind, text);
     }
 
+    /// Raw transcript on and off (the status-bar chip, and the `/config`
+    /// row). Every row changes height, so the whole list is re-measured.
+    pub(super) fn toggle_raw_view(&mut self, cx: &mut Context<Self>) {
+        self.raw_view = !self.raw_view;
+        self.saved
+            .set_ui(picocode_core::config::saved::RAW_VIEW_KEY, self.raw_view);
+        picocode_core::config::saved::save(&self.saved);
+        self.reset_list();
+        cx.notify();
+    }
+
     /// Cycle the theme preference and apply it.
     fn cycle_theme(&mut self, delta: i64, cx: &mut Context<Self>) {
         const CYCLE: [ThemeSetting; 3] = [
@@ -520,6 +539,7 @@ impl ChatView {
         match setting {
             GuiSetting::Theme => self.cycle_theme(delta, cx),
             GuiSetting::ThemeFamily => self.cycle_theme_family(delta, cx),
+            GuiSetting::RawView => self.toggle_raw_view(cx),
             // The model row closes the dialog and opens the model menu.
             GuiSetting::Shared(SettingId::Model) => {
                 self.settings_open = false;

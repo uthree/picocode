@@ -32,15 +32,19 @@ impl ChatView {
         };
         // Only the entry currently receiving deltas is "streaming".
         let streaming = self.running && ix == last_ix;
-        let rendered = Self::render_entry(
-            entry,
-            ix,
-            self.expanded_reasoning.contains(&ix),
-            streaming,
-            &mut self.math_cache,
-            window,
-            cx,
-        );
+        let rendered = if self.raw_view {
+            Self::render_raw_entry(entry, cx)
+        } else {
+            Self::render_entry(
+                entry,
+                ix,
+                self.expanded_reasoning.contains(&ix),
+                streaming,
+                &mut self.math_cache,
+                window,
+                cx,
+            )
+        };
         div()
             .when(ix > 0, |d| d.pt_2())
             .on_mouse_down(
@@ -54,6 +58,35 @@ impl ChatView {
                 }),
             )
             .child(rendered)
+            .into_any_element()
+    }
+
+    /// One entry in the raw view: a dim `[kind]` label and then the text
+    /// exactly as it was produced. Nothing here parses the text — no
+    /// markdown, no math, no syntax highlighting, no diff colors — so what
+    /// is on screen is what the model wrote. The right-click menu still
+    /// copies the entry, which is how text gets out of this view (the
+    /// selectable element is the markdown one, and parsing is the thing
+    /// being avoided).
+    fn render_raw_entry(entry: &Entry, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let mut col = div()
+            .v_flex()
+            .font_family(theme.mono_font_family.clone())
+            .text_sm()
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("[{}]", entry.kind.raw_label())),
+            );
+        if !entry.attachments.is_empty() {
+            col = col.child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("[attachments] {}", entry.attachments.join(", "))),
+            );
+        }
+        col.child(div().text_color(theme.foreground).child(entry.text.clone()))
             .into_any_element()
     }
 
