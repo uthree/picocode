@@ -35,6 +35,7 @@ pub mod git;
 pub mod history;
 pub mod keys;
 pub mod mcp;
+pub mod media;
 pub mod models;
 pub mod report;
 pub mod sandbox;

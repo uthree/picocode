@@ -39,6 +39,9 @@ crates/
                    combination sends and which ones insert a newline
     mcp.rs       — opt-in MCP client: [[mcp_servers]] connect once at
                    startup, their tools join every spawned agent
+    media.rs     — what the attached media costs in tokens: measured by
+                   the provider where one will answer, computed from the
+                   image's pixels where none will
     models.rs    — provider model-list queries and the /model switch
                    resolution shared by both front ends
     report.rs    — /status and /permissions text shared by both front ends

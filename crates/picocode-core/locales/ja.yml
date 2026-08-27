@@ -24,4 +24,8 @@ val_minutes_seconds: "%{m}分%{s}秒"
 val_off: "オフ"
 val_on: "オン"
 val_language_system: "システム"
+
+media_measured: "実測"
+media_computed: "計算値"
+media_estimated: "概算"
 val_max_tokens_off: "無制限（プロバイダ既定）"

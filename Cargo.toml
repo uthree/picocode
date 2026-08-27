@@ -45,6 +45,10 @@ similar = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 png = "0.18"
+# Image dimensions from the header alone, for the media token figures in
+# context.rs: no decode, no dependencies, and only the formats the
+# providers accept are compiled in.
+imagesize = { version = "0.15", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tempfile = "3"
 # Linux sandbox for model-initiated bash commands (kernel LSM, no helper binary)
 landlock = "0.4"

@@ -387,6 +387,9 @@ async fn worker<M, F>(
     let mut last_ctx: u64 = 0;
     // The `/goal` condition, when one is set.
     let mut goal: Option<String> = None;
+    // What the attached media costs, kept across turns: each attachment is
+    // measured (or computed) once, not on every breakdown.
+    let mut media = crate::media::MediaCounter::default();
     // The two settings the built agents hold rather than read per use: the
     // reply-length cap, and — on Ollama, where it travels as `num_ctx` —
     // the context window. A `/config` change to either rebuilds the agents
@@ -521,9 +524,10 @@ async fn worker<M, F>(
                             .await;
                     }
                 }
+                let tally = media.tally(&cfg, &history).await;
                 let _ = event_tx
                     .send(AgentEvent::ContextBreakdown(crate::context::breakdown(
-                        &cfg, &history, last_ctx,
+                        &cfg, &history, last_ctx, tally,
                     )))
                     .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;
@@ -532,9 +536,10 @@ async fn worker<M, F>(
                 compact(&agents.compactor, &mut history, &event_tx, &mut cancel_rx).await;
                 // The provider hasn't measured the compacted history yet, so
                 // report estimates only (reported = 0).
+                let tally = media.tally(&cfg, &history).await;
                 let _ = event_tx
                     .send(AgentEvent::ContextBreakdown(crate::context::breakdown(
-                        &cfg, &history, 0,
+                        &cfg, &history, 0, tally,
                     )))
                     .await;
                 let _ = event_tx.send(AgentEvent::TurnComplete).await;

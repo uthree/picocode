@@ -29,4 +29,9 @@ val_minutes_seconds: "%{m}m%{s}s"
 val_off: "off"
 val_on: "on"
 val_language_system: "system"
+
+# How the /status media figure was arrived at (see the media module).
+media_measured: "measured"
+media_computed: "computed"
+media_estimated: "estimated"
 val_max_tokens_off: "no limit (provider default)"

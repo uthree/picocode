@@ -410,9 +410,18 @@ fn context_lines(
         if *tokens == 0 {
             continue;
         }
+        // The media row says where its figure came from: measured by the
+        // provider, computed from the image, or a flat estimate. The other
+        // rows are all character estimates and say so once, in the title.
+        let label = match (kind, breakdown.media_source) {
+            (picocode_core::context::ContextKind::Media, Some(source)) => {
+                format!("{} ({})", kind.label(), source.label())
+            }
+            _ => kind.label().to_string(),
+        };
         lines.push(Line::from(vec![
             Span::styled("  ■ ", Style::new().fg(context_color(*kind))),
-            Span::raw(format!("{:<24}", kind.label())),
+            Span::raw(format!("{label:<24}")),
             Span::raw(format!("{:>8} tokens ({}%)", tokens, pct(*tokens))),
         ]));
     }

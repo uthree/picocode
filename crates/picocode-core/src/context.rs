@@ -3,8 +3,11 @@
 //! front ends.
 //!
 //! Per-category tokens are estimated from character counts (≈4 chars per
-//! token, the same heuristic as the live output counter); media parts get
-//! a flat estimate since providers tokenize them specially. The gap
+//! token, the same heuristic as the live output counter). Media is the
+//! exception: character counts say nothing about what an image costs, so
+//! [`crate::media`] works it out separately — by asking the provider where
+//! one will answer, and from the image's own pixels where none will — and
+//! the figure arrives here as a [`crate::media::MediaTally`]. The gap
 //! between the provider-reported context size and the sum of estimates is
 //! reported as [`ContextKind::Overhead`] (tool schemas, message framing),
 //! so the total always matches what the provider actually measured.
@@ -12,10 +15,7 @@
 use rig::message::{AssistantContent, Message, ToolResultContent, UserContent};
 
 use crate::config::Config;
-
-/// Flat token estimate for one media part (image/audio/PDF): providers
-/// tokenize media specially, so character counts would be meaningless.
-const MEDIA_TOKENS: u64 = 1_000;
+use crate::media::{MediaSource, MediaTally};
 
 /// One slice of the context window. Order here is the display order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +30,8 @@ pub enum ContextKind {
     Assistant,
     /// Tool calls and their outputs.
     Tools,
-    /// Attached media (flat per-part estimate).
+    /// Attached media. Counted by [`crate::media`] rather than estimated
+    /// from characters; [`Breakdown::media_source`] says how.
     Media,
     /// Whatever the provider counted beyond the estimates above — tool
     /// schemas, message framing. Present only when a reported context
@@ -87,6 +88,11 @@ pub struct Breakdown {
     pub reported: u64,
     /// The configured context window.
     pub window: u64,
+    /// How the media figure was arrived at — measured by the provider,
+    /// computed from the image, or a flat estimate. `None` when there is
+    /// no media in the conversation (or the breakdown came from a version
+    /// that did not record it).
+    pub media_source: Option<MediaSource>,
 }
 
 impl Breakdown {
@@ -108,6 +114,9 @@ impl Breakdown {
         for (kind, tokens) in &self.segments {
             out.push_str(&format!("\n{} {tokens}", kind.key()));
         }
+        if let Some(source) = self.media_source {
+            out.push_str(&format!("\nmedia_source {}", source.key()));
+        }
         out
     }
 
@@ -116,10 +125,17 @@ impl Breakdown {
     pub fn decode(text: &str) -> Option<Self> {
         let mut window = None;
         let mut reported = 0;
+        let mut media_source = None;
         let mut tokens = [0u64; KINDS.len()];
         for line in text.lines() {
             let (key, value) = line.split_once(' ')?;
-            let value: u64 = value.trim().parse().ok()?;
+            let value = value.trim();
+            // The one line whose value is a word rather than a count.
+            if key == "media_source" {
+                media_source = MediaSource::from_key(value);
+                continue;
+            }
+            let value: u64 = value.parse().ok()?;
             match key {
                 "window" => window = Some(value),
                 "reported" => reported = value,
@@ -134,6 +150,7 @@ impl Breakdown {
             segments: KINDS.iter().copied().zip(tokens).collect(),
             reported,
             window: window?,
+            media_source,
         })
     }
 }
@@ -144,8 +161,10 @@ fn est(chars: usize) -> u64 {
 }
 
 /// Estimate the context composition for the current configuration and
-/// conversation history.
-pub fn breakdown(cfg: &Config, history: &[Message], reported: u64) -> Breakdown {
+/// conversation history. `media` is the media tally from
+/// [`crate::media::MediaCounter::tally`] — the one part of the breakdown
+/// that cannot be worked out from the text.
+pub fn breakdown(cfg: &Config, history: &[Message], reported: u64, media: MediaTally) -> Breakdown {
     let (base, instructions) = crate::agent::system_prompt_parts(cfg);
     breakdown_from(
         &base,
@@ -153,6 +172,7 @@ pub fn breakdown(cfg: &Config, history: &[Message], reported: u64) -> Breakdown 
         history,
         reported,
         cfg.context_window.get(),
+        media,
     )
 }
 
@@ -164,6 +184,7 @@ pub fn breakdown_from(
     history: &[Message],
     reported: u64,
     window: u64,
+    media: MediaTally,
 ) -> Breakdown {
     use ContextKind::*;
     let mut tokens = [0u64; KINDS.len()];
@@ -186,14 +207,15 @@ pub fn breakdown_from(
                             for c in r.content.iter() {
                                 match c {
                                     ToolResultContent::Text(t) => add(Tools, est(t.text.len())),
-                                    ToolResultContent::Image(_) => add(Media, MEDIA_TOKENS),
+                                    // Media is tallied whole, below.
+                                    ToolResultContent::Image(_) => {}
                                 }
                             }
                         }
                         UserContent::Image(_)
                         | UserContent::Audio(_)
                         | UserContent::Video(_)
-                        | UserContent::Document(_) => add(Media, MEDIA_TOKENS),
+                        | UserContent::Document(_) => {}
                     }
                 }
             }
@@ -218,12 +240,15 @@ pub fn breakdown_from(
                                 add(Assistant, est(len));
                             }
                         }
-                        AssistantContent::Image(_) => add(Media, MEDIA_TOKENS),
+                        AssistantContent::Image(_) => {}
                     }
                 }
             }
         }
     }
+    // Media arrives already counted, per part, by whichever source could
+    // answer for it.
+    add(Media, media.tokens);
     let sum: u64 = tokens.iter().sum();
     if reported > sum {
         let i = KINDS.iter().position(|k| *k == Overhead).expect("listed");
@@ -233,6 +258,7 @@ pub fn breakdown_from(
         segments: KINDS.iter().copied().zip(tokens).collect(),
         reported,
         window,
+        media_source: media.source,
     }
 }
 
@@ -272,7 +298,14 @@ mod tests {
                 )),
             },
         ];
-        let b = breakdown_from("s".repeat(100).as_str(), "", &history, 500, 4096);
+        let media = MediaTally {
+            tokens: 64,
+            source: Some(MediaSource::Computed),
+        };
+        let b = breakdown_from("s".repeat(100).as_str(), "", &history, 500, 4096, media);
+        // The tally lands in its own segment, whole.
+        assert_eq!(get(&b, ContextKind::Media), 64);
+        assert_eq!(b.media_source, Some(MediaSource::Computed));
         assert_eq!(get(&b, ContextKind::System), 25);
         assert_eq!(get(&b, ContextKind::Instructions), 0);
         assert_eq!(get(&b, ContextKind::User), 100);
@@ -288,8 +321,35 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip() {
-        let b = breakdown_from("system", "instr", &[Message::user("hi")], 0, 8192);
+        let b = breakdown_from(
+            "system",
+            "instr",
+            &[Message::user("hi")],
+            0,
+            8192,
+            MediaTally::default(),
+        );
         assert_eq!(Breakdown::decode(&b.encode()), Some(b.clone()));
+        // The media source survives the round trip when there is one, and
+        // a breakdown written before the field existed still loads.
+        let measured = Breakdown {
+            media_source: Some(MediaSource::Measured),
+            ..b.clone()
+        };
+        assert_eq!(Breakdown::decode(&measured.encode()), Some(measured));
+        assert_eq!(
+            Breakdown::decode("window 10\nmedia 5"),
+            Some(Breakdown {
+                segments: KINDS
+                    .iter()
+                    .copied()
+                    .map(|k| (k, if k == ContextKind::Media { 5 } else { 0 }))
+                    .collect(),
+                reported: 0,
+                window: 10,
+                media_source: None,
+            })
+        );
         // Reported below the estimate sum leaves overhead at zero.
         assert_eq!(get(&b, ContextKind::Overhead), 0);
         assert_eq!(Breakdown::decode("not a breakdown"), None);

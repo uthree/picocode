@@ -99,7 +99,7 @@ as the same key.
 | `/permissions` | Show the current mode and the effective allow/deny rules |
 | `/trust` | Allow this project's `picocode.toml` to use the settings the trust gate holds back (`after_edit`, `[[mcp_servers]]`, `[approval] allow_*`, `[sandbox]`, `base_url`) — they apply from the next start. `/trust revoke` takes it back. See [configuration.md](configuration.md#trusting-a-project-config) |
 | `/config` (or `/settings`) | Settings dialog, grouped into **Model** (model picker on `Enter`, context window, reply-length cap — "max tokens", where stepping below 1024 turns it off and leaves the limit to the provider — and the auto-compact threshold), **Tools** (permission mode, bash timeout, read_file limits, web search provider / result count) and **Interface** (send key, language, reasoning display). `←`/`→` change a row and apply immediately; the change is also remembered for future runs, in the same `settings.json` the GUI uses. Large counts are abbreviated (`32k` rather than `32768`), and the bash timeout reads as a clock (`1m30s` rather than `90s`). Two exceptions: the mode resets each run, and the context window is remembered per project alongside the model it was set on (see [configuration.md](configuration.md#the-context-window)). Search providers with unmet requirements (searxng without `base_url`, brave without `BRAVE_API_KEY`) are skipped |
-| `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config — plus a color-coded context breakdown (segmented bar + legend: system prompt, instructions, user/assistant messages, tool activity, attachments, overhead, free) estimated from the real conversation history |
+| `/status` (or `/usage`) | Overview: model, endpoint, mode, token usage, session, config — plus a color-coded context breakdown (segmented bar + legend: system prompt, instructions, user/assistant messages, tool activity, attachments, overhead, free) estimated from the real conversation history. The attachments row says where its figure came from — see [attachment tokens](#attachment-tokens) |
 | `/compact` | Compact the conversation into a summary — the last 2 user turns survive verbatim (the current task's context), only older messages are summarized. Also runs automatically after a turn once context usage reaches the `auto_compact` threshold (default 85% of the window; 0 or the `/config` "off" setting disables). As a softer stage, at 2/3 of that threshold old tool outputs are replaced with placeholders first (a notice reports how many) |
 | `/undo` | Revert the file edits of the most recent turn that made any — modified files are restored, created files deleted — and tell the model so. Repeat to walk further back (up to 20 turns). A file you have edited yourself since that turn is left alone and reported as such, rather than rolled back over. Only `edit_file` changes are covered: side effects of `bash` (or `!`) commands are not tracked. Works on a remote workspace too |
 | `/jobs` | List running background jobs (id, elapsed, command); `/jobs kill <id>` stops one — the kill is reported as the job's result, so the model knows too. Tab completes the ids |
@@ -109,6 +109,40 @@ as the same key.
 | `/resume` | Pick a saved session (↑↓ + Enter, Esc cancels); `/resume <id>` resumes directly |
 | `/clear` | Clear conversation history (a new session log starts) |
 | `/quit` (`Ctrl+C`) | Quit |
+
+## Attachment tokens
+
+Every other row of the `/status` breakdown is estimated from character
+counts, which say nothing about what an image costs. The attachments row
+is worked out separately, and names which of three ways it was:
+
+- **measured** — the provider counted it. Anthropic's `count_tokens`
+  endpoint takes the same content blocks a real request does, so picocode
+  sends each new attachment through it once (minus the cost of the probe's
+  own wrapper) and gets the real figure back, PDFs included. It is free,
+  rate limited separately from message creation, and the answer is cached
+  per attachment and model — a probe happens when something new is
+  attached, not on every turn. No other provider offers the question.
+- **computed** — from the image's own pixels, through the provider's
+  published rule. Claude sees an image as 28x28-pixel patches after
+  downscaling it to the model's resolution tier, so the count is exact;
+  OpenAI's families divide into 512-pixel tiles or 32-pixel patches with a
+  per-model multiplier, and a name that matches neither falls back to the
+  GPT-4o rates. On Ollama the cost belongs to whichever vision encoder the
+  pulled model carries — llava spends a flat 576 on any image, the
+  Qwen-VL family scales with the pixels — so a plain patch count is the
+  best available shape.
+- **estimated** — a flat 1,000, for anything with neither a measurement
+  nor dimensions: audio, PDFs on a provider that cannot be asked, an image
+  whose header will not parse.
+
+A conversation mixing the three reports the weakest of them, so one
+estimated audio file is never presented as a measurement.
+
+None of this changes the total: the breakdown's sum always matches the
+provider-reported context size, since whatever the estimates do not
+account for is reported as overhead. What a better attachment figure buys
+is the split between the two.
 
 ## Display details
 

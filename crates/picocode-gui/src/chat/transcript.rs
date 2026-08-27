@@ -556,7 +556,16 @@ fn context_block(breakdown: &picocode_core::context::Breakdown, cx: &App) -> Any
                 )
                 .child({
                     let key = format!("breakdown_{}", kind.key());
-                    t!(&key).to_string()
+                    let name = t!(&key).to_string();
+                    // The media row says where its figure came from; every
+                    // other row is a character estimate, said once in the
+                    // title.
+                    match (kind, breakdown.media_source) {
+                        (picocode_core::context::ContextKind::Media, Some(source)) => {
+                            format!("{name} ({})", source.label())
+                        }
+                        _ => name,
+                    }
                 })
                 .child(div().flex_1())
                 .child(

@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Attachments are counted, not guessed
+
+An image, an audio file or a PDF used to count as a flat 1,000 tokens in
+the `/status` breakdown, whatever it was. That figure was wrong in both
+directions and by a lot: on the published Claude table a 200x200 icon is
+64 tokens and a 4K screenshot on a high-resolution model is 4,784, so the
+same constant was fifteen times too high in one case and five times too
+low in the other.
+
+Attachments are now counted two ways, in order. Where the provider will
+answer the question, it is asked: Anthropic's `count_tokens` endpoint
+takes the same content blocks a real request does, so each new attachment
+goes through it once and comes back with the real number, PDFs included.
+It is free, rate limited separately from message creation, and cached per
+attachment and model — a probe happens when something is attached, not on
+every turn. Where no provider offers the question, the figure is computed
+from the image's own pixels through that provider's published rule: 28x28
+patches after the tier downscale on Anthropic (exact, and pinned to the
+published table by tests), 512-pixel tiles or 32-pixel patches with a
+per-model multiplier on OpenAI, a plain patch count on Ollama, where the
+cost belongs to whichever vision encoder the pulled model carries. Only
+what has neither — audio, a PDF nobody will count, an image whose header
+will not parse — keeps a flat estimate.
+
+The `/status` attachments row says which of the three it got, and a
+conversation mixing them reports the weakest, so one estimated audio file
+is never shown as a measurement.
+
+The total does not move: the breakdown already summed to the
+provider-reported figure, with the difference reported as overhead. What
+changes is the line between the two, which is what the breakdown exists
+to show.
+
 ### A raw view of the transcript
 
 Both front ends can now show the conversation as plain text: `Ctrl+R` in

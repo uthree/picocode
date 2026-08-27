@@ -429,10 +429,14 @@ impl ChatView {
         self.push(EntryKind::Notice, text);
         // The colored context-composition block. Before the first turn no
         // worker report exists yet — estimate from the config alone.
-        let breakdown = self
-            .context_info
-            .clone()
-            .unwrap_or_else(|| picocode_core::context::breakdown(&self.cfg, &[], 0));
+        let breakdown = self.context_info.clone().unwrap_or_else(|| {
+            picocode_core::context::breakdown(
+                &self.cfg,
+                &[],
+                0,
+                picocode_core::media::MediaTally::default(),
+            )
+        });
         self.push(EntryKind::Context, breakdown.encode());
     }
 
