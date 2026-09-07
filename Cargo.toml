@@ -50,6 +50,7 @@ png = "0.18"
 # providers accept are compiled in.
 imagesize = { version = "0.15", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tempfile = "3"
+dunce = "1"
 # Linux sandbox for model-initiated bash commands (kernel LSM, no helper binary)
 landlock = "0.4"
 unicodeit = "0.2"

@@ -69,6 +69,49 @@ impl App {
                 return;
             }
         };
+        // GUI-created worktree sessions share the source project's store.
+        // Restore their tool root before seeding history in either front end.
+        if !self.backend.is_remote() && std::path::Path::new(&saved.cwd) != self.cfg.root {
+            if !self.jobs.list().is_empty() {
+                self.push(
+                    EntryKind::Error,
+                    "Stop background jobs before changing the session workspace".into(),
+                );
+                return;
+            }
+            let opened = self
+                .cfg
+                .in_local_workspace(std::path::Path::new(&saved.cwd));
+            let mut cfg = match opened {
+                Ok(cfg) => cfg,
+                Err(error) => {
+                    self.push(
+                        EntryKind::Error,
+                        format!("Failed to restore session workspace: {error:#}"),
+                    );
+                    return;
+                }
+            };
+            self.saved.apply(&mut cfg);
+            let (mcp, errors) =
+                picocode_core::mcp::connect_all_in(&cfg.mcp_servers, Some(&cfg.root)).await;
+            let previous_mcp = std::mem::replace(&mut self.mcp, mcp);
+            if let Err(error) = self.respawn_worker(cfg).await {
+                self.mcp = previous_mcp;
+                self.push(
+                    EntryKind::Error,
+                    format!("Failed to restore session workspace: {error:#}"),
+                );
+                return;
+            }
+            for error in errors {
+                self.push(EntryKind::Error, error);
+            }
+            self.git_branch = picocode_core::git::branch(&self.cfg.root);
+            self.model_label = self.cfg.model_label();
+            self.goal = None;
+            self.goal_round = 0;
+        }
         let messages = saved.history.len();
         if self
             .cmd_tx

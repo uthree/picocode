@@ -811,6 +811,39 @@ pub struct Config {
 }
 
 impl Config {
+    /// Copy settings for another conversation without sharing mutable handles.
+    /// Ordinary clones intentionally share these handles with the worker.
+    pub fn for_session(&self) -> Self {
+        let mut cfg = self.clone();
+        cfg.bash_timeout = NumHandle::new(self.bash_timeout.get());
+        cfg.read_max_lines = NumHandle::new(self.read_max_lines.get());
+        cfg.read_max_line_bytes = NumHandle::new(self.read_max_line_bytes.get());
+        cfg.auto_compact = NumHandle::new(self.auto_compact.get());
+        cfg.max_tokens = NumHandle::new(self.max_tokens.get());
+        cfg.context_window = NumHandle::new(self.context_window.get());
+        cfg.context_window_max = NumHandle::new(self.context_window_max.get());
+        cfg.mode = ModeHandle::new(self.mode.get());
+        cfg.approval = RulesHandle::new(self.approval.snapshot());
+        cfg.search = SearchHandle::new(self.search.snapshot());
+        cfg
+    }
+
+    /// Resolve a local session's saved working directory, retaining the model
+    /// selection and permission mode while reloading workspace instructions.
+    pub fn in_local_workspace(&self, root: &Path) -> anyhow::Result<Self> {
+        let mut args = Args::for_workspace(None);
+        args.provider = Some(self.provider);
+        args.model = Some(self.model.clone());
+        args.base_url = self.base_url.clone();
+        let mut cfg = Self::from_args_in(args, root)?;
+        cfg.mode.set(self.mode.get());
+        // A saved workspace is the tool boundary even when the project config
+        // is inherited from an ancestor directory.
+        cfg.root = dunce::canonicalize(root)?;
+        cfg.instructions = load_instructions(&cfg.root, &cfg.instruction_names);
+        Ok(cfg)
+    }
+
     /// `/config` ←/→ steppers for the numeric rows, one per setting so both
     /// front ends share the step sizes and ranges.
     pub fn step_bash_timeout(&self, delta: i64) {
@@ -936,12 +969,26 @@ impl Config {
     }
 
     pub fn from_args(args: Args) -> anyhow::Result<Self> {
+        Self::from_args_in(args, &std::env::current_dir()?)
+    }
+
+    /// Resolve a workspace without changing the process working directory.
+    pub fn from_args_in(args: Args, cwd: &Path) -> anyhow::Result<Self> {
         install_tls_provider();
 
         // The project root is the nearest ancestor holding a picocode.toml,
         // so starting from a subdirectory finds the same config, sessions
         // and state; without one the current directory is the root.
-        let cwd = std::env::current_dir()?;
+        anyhow::ensure!(
+            cwd.is_dir(),
+            "workspace is not a directory: {}",
+            cwd.display()
+        );
+        let cwd = if cwd.is_absolute() {
+            cwd.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(cwd)
+        };
         let local_root = cwd
             .ancestors()
             .find(|d| d.join("picocode.toml").is_file())

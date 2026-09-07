@@ -1,7 +1,40 @@
-//! Minimal git repository info for the status displays — reads `.git`
-//! directly instead of pulling in a git library or shelling out.
+//! Git worktree creation and lightweight repository information for the UI.
+//! Status reads `.git` directly; worktree creation uses Git's locking.
 
 use std::path::{Path, PathBuf};
+
+/// Create a persistent worktree from the source checkout's HEAD. Git handles
+/// repository locking and rejects existing branches or destination directories.
+pub fn create_worktree(root: &Path, directory: &Path, id: &str) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        !id.is_empty() && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-'),
+        "invalid worktree session id"
+    );
+    std::fs::create_dir_all(directory)?;
+    // Git for Windows cannot use the verbatim paths std::fs returns here.
+    let directory = dunce::canonicalize(directory)?;
+    let path = directory.join(id);
+    let mut command = std::process::Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let output = command
+        .arg("-C")
+        .arg(dunce::simplified(root))
+        .args(["worktree", "add", "-b"])
+        .arg(format!("picocode/{id}"))
+        .arg(&path)
+        .arg("HEAD")
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(path)
+}
 
 /// The current branch of the repository containing `root`, if any:
 /// the branch name, or a short commit hash when HEAD is detached.

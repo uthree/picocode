@@ -149,20 +149,24 @@ signing/notarization) may come later.
   [configuration.md](configuration.md#trusting-a-project-config)), `/quit`.
 - **Sessions**: autosaved after each turn to the same per-project store as
   the TUI, so either front end can resume the other's conversations.
-- **Session sidebar**: this project's saved sessions, newest first, in a
-  panel down the left edge — each row is the conversation's first prompt
-  over its age and message count, and the one you are in is highlighted
-  (a conversation with nothing saved yet shows as "new session"). Click
-  a row to load it: the same path `/resume` takes, so a running turn
-  refuses with a notice instead of switching under the agent's feet.
-  Right-clicking a row opens a menu: open the session, copy its id (what
-  `/resume <id>` takes) or delete it — deleting asks first, and deleting
-  the conversation you are in also starts a fresh one so the next
-  autosave doesn't write the file straight back. The ✎ button in its
-  header starts a new session (`/clear` — the old one stays in the
-  list), and the panel button at the top of the conversation shows or
-  hides the sidebar, remembered across restarts. Switching workspaces
-  re-lists the new project's sessions.
+- **Session sidebar**: open threads appear above the current project's saved
+  conversations. Each open thread shows its first prompt, branch or workspace,
+  and whether it is running, ready, or waiting for your input. Switching rows
+  keeps other threads running with their own history, draft, attachments,
+  approval dialogs, settings and Stop control. Background approval requests
+  mark their row; select it to respond. `/resume <id>` selects an already open
+  thread or opens a saved conversation in a separate worker.
+  **New thread** (also `/clear`) opens a conversation in the current workspace.
+  **New thread in worktree** creates a local Git worktree and a
+  `picocode/<session-id>` branch from the current checkout's committed `HEAD`.
+  Uncommitted edits stay in the source checkout. Worktrees are kept under the
+  project's session directory in `worktrees/<session-id>`; their conversations
+  stay in that project's sidebar and restore the same working directory when
+  reopened. Git must be installed and the repository must have a commit.
+  Right-click a row to open, copy its id, or delete the conversation after
+  confirmation. Running threads must finish or be stopped before deletion.
+  Deleting a conversation keeps its worktree and branch, including any edits.
+  The panel button shows or hides the sidebar, remembered across restarts.
 - **Toolbar**: above the conversation, the sidebar toggle on the left and
   a settings button on the right — the same dialog as `/config`.
 - **Theme**: follows the system light/dark appearance live by default; the

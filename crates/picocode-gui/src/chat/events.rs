@@ -54,7 +54,9 @@ impl ChatView {
                     respond,
                 });
                 // y/n/a and Esc go to the dialog, not the text input.
-                self.dialog_focus.focus(window);
+                if self.visible {
+                    self.dialog_focus.focus(window);
+                }
             }
             AgentEvent::AutoDecision {
                 name,
@@ -106,7 +108,9 @@ impl ChatView {
                     options,
                     respond,
                 });
-                self.dialog_focus.focus(window);
+                if self.visible {
+                    self.dialog_focus.focus(window);
+                }
             }
             AgentEvent::Usage { input, output } => {
                 self.tokens_in = input;
@@ -227,6 +231,10 @@ impl ChatView {
                 }
             }
             AgentEvent::Cancelled => {
+                let had_dialog = self.approval.take().is_some() | self.question.take().is_some();
+                if had_dialog && self.visible {
+                    self.input.update(cx, |input, cx| input.focus(window, cx));
+                }
                 self.speed.reset();
                 self.push(EntryKind::Notice, t!("cancelled").to_string());
                 // Stop means stop: give held-back prompts to the input box

@@ -137,7 +137,8 @@ fn main() -> anyhow::Result<()> {
                     }
                     view
                 });
-                cx.new(|cx| Root::new(view, window, cx))
+                let threads = cx.new(|cx| chat::ThreadsView::new(view, window, cx));
+                cx.new(|cx| Root::new(threads, window, cx))
             })
             .expect("failed to open the picocode window");
 

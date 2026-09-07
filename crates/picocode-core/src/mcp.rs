@@ -67,11 +67,20 @@ impl McpConnections {
 /// failed server is reported as a message for the UI to show, and the
 /// app runs with whatever connected.
 pub async fn connect_all(configs: &[McpServer]) -> (McpConnections, Vec<String>) {
+    connect_all_in(configs, None).await
+}
+
+/// Connect session-owned servers. Local stdio processes start in that
+/// session's workspace; remote workspaces keep the local launch directory.
+pub async fn connect_all_in(
+    configs: &[McpServer],
+    root: Option<&std::path::Path>,
+) -> (McpConnections, Vec<String>) {
     let mut servers = Vec::new();
     let mut errors = Vec::new();
     let mut taken = HashSet::new();
     for config in configs {
-        match tokio::time::timeout(CONNECT_TIMEOUT, connect_one(config)).await {
+        match tokio::time::timeout(CONNECT_TIMEOUT, connect_one(config, root)).await {
             Ok(Ok(mut connection)) => {
                 let mut refused = Vec::new();
                 connection.tools.retain(|tool| {
@@ -126,10 +135,16 @@ fn may_register(name: &str, taken: &mut HashSet<String>) -> bool {
     !crate::tools::ALL_TOOLS.contains(&name) && taken.insert(name.to_string())
 }
 
-async fn connect_one(config: &McpServer) -> anyhow::Result<Connection> {
+async fn connect_one(
+    config: &McpServer,
+    root: Option<&std::path::Path>,
+) -> anyhow::Result<Connection> {
     let service = match (&config.command, &config.url) {
         (Some(command), None) => {
             let mut cmd = tokio::process::Command::new(command);
+            if let Some(root) = root {
+                cmd.current_dir(root);
+            }
             cmd.args(&config.args);
             for (key, value) in &config.env {
                 cmd.env(key, value);

@@ -14,8 +14,11 @@ mod models;
 mod prompt;
 mod sessions;
 mod status;
+mod threads;
 mod transcript;
 mod workspace;
+
+pub use threads::ThreadsView;
 
 use models::AddModel;
 use status::mode_name;
@@ -83,6 +86,9 @@ struct Question {
 }
 
 pub struct ChatView {
+    /// A retained conversation in the multi-thread window.
+    hosted: bool,
+    visible: bool,
     cfg: Config,
     entries: Vec<Entry>,
     input: Entity<InputState>,
@@ -297,6 +303,8 @@ impl ChatView {
         let sessions_dir = session::sessions_dir_for(&cfg);
         let git_branch = picocode_core::git::branch(&cfg.root);
         let mut view = Self {
+            hosted: false,
+            visible: true,
             cfg,
             entries: Vec::new(),
             input,
@@ -1140,8 +1148,10 @@ impl Render for ChatView {
             .children(self.render_add_remote(cx))
             .children(self.render_prompt_edit(cx))
             .children(self.render_session_picker(cx))
-            .children(self.render_session_menu(window, cx))
-            .children(self.render_session_delete(cx))
+            .when(!self.hosted, |view| {
+                view.children(self.render_session_menu(window, cx))
+                    .children(self.render_session_delete(cx))
+            })
             .children(self.render_approval(cx))
             .children(self.render_question(cx))
             .children(self.render_image_preview(cx))

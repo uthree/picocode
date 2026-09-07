@@ -82,17 +82,9 @@ impl ChatView {
             cx.notify();
             return;
         }
-        if let Err(e) = std::env::set_current_dir(&root) {
-            self.push(
-                EntryKind::Error,
-                t!("cd_failed", error = format!("{e:#}")).to_string(),
-            );
-            cx.notify();
-            return;
-        }
         // Changing the working directory always opens a local project;
         // remote workspaces are entered with `/remote` (or --remote).
-        let new_cfg = match config::Config::from_args(config::Args::for_workspace(None)) {
+        let new_cfg = match config::Config::from_args_in(config::Args::for_workspace(None), &root) {
             Ok(cfg) => cfg,
             Err(e) => {
                 self.push(

@@ -45,7 +45,7 @@ impl ChatView {
                 // Starting a new session stops *future* autosaves writing
                 // this id, but not the one already in flight — without this
                 // a session deleted right after a turn came straight back.
-                if view.deleted_sessions.remove(&id)
+                if view.deleted_sessions.contains(&id)
                     && let Some(dir) = &view.sessions_dir
                 {
                     let _ = session::delete(dir, &id);
@@ -77,10 +77,16 @@ impl ChatView {
         cx.notify();
     }
 
-    /// `/clear` (and the sidebar's new-session button): drop the
-    /// conversation and start a fresh session log. The old session stays on
-    /// disk, so it remains one click away in the sidebar.
+    /// `/clear` opens another retained conversation in a multi-thread window.
     pub(super) fn new_session(&mut self, cx: &mut Context<Self>) {
+        if self.hosted {
+            cx.emit(super::threads::ThreadAction::New);
+            return;
+        }
+        self.reset_session(cx);
+    }
+
+    pub(super) fn reset_session(&mut self, cx: &mut Context<Self>) {
         let _ = self.cmd_tx.try_send(WorkerCmd::Clear);
         self.goal = None;
         self.goal_round = 0;
@@ -102,7 +108,7 @@ impl ChatView {
 
     /// `/resume`: open the session-selection dialog.
     pub(super) fn open_session_picker(&mut self, cx: &mut Context<Self>) {
-        if self.running {
+        if self.running && !self.hosted {
             self.push(EntryKind::Error, t!("resume_while_running").to_string());
             cx.notify();
             return;
@@ -131,6 +137,10 @@ impl ChatView {
     /// transcript.
     pub(super) fn resume_session(&mut self, id: &str, cx: &mut Context<Self>) {
         self.session_picker = None;
+        if self.hosted {
+            cx.emit(super::threads::ThreadAction::Resume(id.to_string()));
+            return;
+        }
         if self.running {
             self.push(EntryKind::Error, t!("resume_while_running").to_string());
             cx.notify();
@@ -188,11 +198,9 @@ impl ChatView {
         cx.notify();
     }
 
-    /// The sidebar: this project's saved sessions, newest first, with the
-    /// current one marked. Clicking a row resumes it — the same path
-    /// `/resume` takes, so a running turn blocks it with a notice.
+    /// Standalone sidebar; hosted conversations use the window's thread list.
     pub(super) fn render_sidebar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.sidebar {
+        if !self.sidebar || self.hosted {
             return None;
         }
         let theme = cx.theme();
@@ -389,7 +397,12 @@ impl ChatView {
 
     /// Ask before deleting: the session file is the only copy of that
     /// conversation.
-    fn confirm_delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_delete_session(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.session_menu = None;
         // Clearing the conversation under a running turn would strand it,
         // so the current session waits until the turn ends.
@@ -477,6 +490,10 @@ impl ChatView {
     /// starts a fresh one, so the next autosave doesn't write it back.
     fn delete_session(&mut self, id: &str, cx: &mut Context<Self>) {
         self.session_delete = None;
+        if self.hosted {
+            cx.emit(super::threads::ThreadAction::Delete(id.to_string()));
+            return;
+        }
         let Some(dir) = self.sessions_dir.clone() else {
             self.push(EntryKind::Error, t!("no_home").to_string());
             cx.notify();
@@ -524,7 +541,7 @@ fn menu_item(
 /// One sidebar row: the first prompt over its age and message count. The
 /// current session is marked with the accent fill instead of being
 /// clickable.
-fn session_row(
+pub(super) fn session_row(
     id: SharedString,
     title: String,
     detail: String,
