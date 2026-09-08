@@ -1,4 +1,6 @@
 _version: 1
+set_effort: "推論量 (Effort)"
+val_effort_default: "プロバイダー既定"
 
 group_model: "モデル"
 group_tools: "ツール"

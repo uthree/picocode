@@ -24,6 +24,11 @@ fn durations_and_counts_speak_japanese() {
 
     // The row that got us here, and the one value on it that is a word.
     assert_eq!(SettingId::Language.label(), "言語");
+    assert_eq!(SettingId::Effort.label(), "推論量 (Effort)");
+    assert_eq!(
+        picocode_core::config::Effort::Default.label(),
+        "プロバイダー既定"
+    );
     assert_eq!(Language::System.label(), "システム");
 
     // The raw-transcript row lives in the front ends but is named here:

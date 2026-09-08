@@ -194,6 +194,8 @@ pub(crate) struct FileConfig {
     /// Cap on the tokens one reply may generate (default 8192). 0 means
     /// picocode sets no cap and leaves the limit to the provider.
     max_tokens: Option<u64>,
+    /// Reasoning effort; absent leaves the provider default.
+    effort: Option<Effort>,
     /// Tools to leave unregistered entirely (schemas never sent to the
     /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
     disable_tools: Option<Vec<String>>,
@@ -545,6 +547,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         auto_compact: project.auto_compact.or(global.auto_compact),
         goal_max_rounds: project.goal_max_rounds.or(global.goal_max_rounds),
         max_tokens: project.max_tokens.or(global.max_tokens),
+        effort: project.effort.or(global.effort),
         after_edit: project.after_edit.or(global.after_edit),
         submit_key: project.submit_key.or(global.submit_key),
         // Like the approval lists: a project can add disables, not re-enable.
@@ -730,6 +733,8 @@ pub struct Config {
     /// its agents when it changes — for Ollama it also travels as
     /// `num_predict`, next to the `num_ctx` taken from `context_window`.
     pub max_tokens: NumHandle,
+    /// Reasoning effort, applied by the worker before the next turn.
+    pub effort: EffortHandle,
     /// Working directory the tools operate in.
     pub root: PathBuf,
     /// Approval rules, shared with the hook and extensible at runtime.
@@ -820,6 +825,7 @@ impl Config {
         cfg.read_max_line_bytes = NumHandle::new(self.read_max_line_bytes.get());
         cfg.auto_compact = NumHandle::new(self.auto_compact.get());
         cfg.max_tokens = NumHandle::new(self.max_tokens.get());
+        cfg.effort = EffortHandle::new(self.effort.get());
         cfg.context_window = NumHandle::new(self.context_window.get());
         cfg.context_window_max = NumHandle::new(self.context_window_max.get());
         cfg.mode = ModeHandle::new(self.mode.get());
@@ -1103,6 +1109,7 @@ impl Config {
             auto_compact: NumHandle::new(settings.auto_compact),
             goal_max_rounds: settings.goal_max_rounds,
             max_tokens: NumHandle::new(settings.max_tokens),
+            effort: EffortHandle::new(file.effort.unwrap_or_default()),
             root,
             approval: RulesHandle::new(file.approval.clone()),
             mode: ModeHandle::new(match (args.bypass, args.auto) {
@@ -1179,6 +1186,7 @@ impl Config {
         self.auto_compact.set(settings.auto_compact);
         self.goal_max_rounds = settings.goal_max_rounds;
         self.max_tokens.set(settings.max_tokens);
+        self.effort.set(file.effort.unwrap_or_default());
         self.disable_tools = settings.disable_tools;
         self.approval = RulesHandle::new(file.approval);
         self.after_edit = file.after_edit.filter(|c| !c.trim().is_empty());
@@ -1215,6 +1223,7 @@ impl Config {
             auto_compact: NumHandle::new(85),
             goal_max_rounds: DEFAULT_GOAL_MAX_ROUNDS,
             max_tokens: NumHandle::new(DEFAULT_MAX_TOKENS),
+            effort: EffortHandle::new(Effort::Default),
             root: std::path::PathBuf::from("/tmp/proj"),
             submit_key: crate::keys::SubmitKey::default(),
             language: Language::default(),
@@ -1249,6 +1258,7 @@ impl Config {
     }
 }
 
+mod effort;
 mod language;
 mod rules;
 pub mod saved;
@@ -1256,6 +1266,7 @@ mod search;
 mod settings;
 pub mod trust;
 
+pub use effort::{Effort, EffortHandle};
 pub use language::Language;
 pub use rules::*;
 pub use search::*;

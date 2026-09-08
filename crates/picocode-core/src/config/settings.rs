@@ -46,6 +46,7 @@ pub enum SettingId {
     Model,
     ContextWindow,
     MaxTokens,
+    Effort,
     AutoCompact,
     Mode,
     BashTimeout,
@@ -60,10 +61,11 @@ pub enum SettingId {
 impl SettingId {
     /// Every shared row, in display order (grouped, so a front end can
     /// render [`Group::ALL`] and filter by [`SettingId::group`]).
-    pub const SHARED: [SettingId; 12] = [
+    pub const SHARED: [SettingId; 13] = [
         SettingId::Model,
         SettingId::ContextWindow,
         SettingId::MaxTokens,
+        SettingId::Effort,
         SettingId::AutoCompact,
         SettingId::Mode,
         SettingId::BashTimeout,
@@ -79,6 +81,7 @@ impl SettingId {
         match self {
             SettingId::Model
             | SettingId::ContextWindow
+            | SettingId::Effort
             | SettingId::MaxTokens
             | SettingId::AutoCompact => Group::Model,
             SettingId::Mode
@@ -93,6 +96,7 @@ impl SettingId {
 
     pub fn label(self) -> String {
         match self {
+            SettingId::Effort => t!("set_effort"),
             SettingId::Model => t!("set_model"),
             SettingId::ContextWindow => t!("set_context_window"),
             SettingId::MaxTokens => t!("set_max_tokens"),
@@ -114,6 +118,7 @@ impl SettingId {
     /// report the chosen combination says so next to it.
     pub fn value(self, cfg: &Config) -> String {
         match self {
+            SettingId::Effort => cfg.effort.get().for_model(cfg.provider, &cfg.model).label(),
             SettingId::Model => cfg.model_label(),
             SettingId::ContextWindow => human_count(cfg.context_window.get()),
             SettingId::MaxTokens => match cfg.max_tokens.get() {
@@ -151,6 +156,10 @@ impl SettingId {
             SettingId::Model => {}
             SettingId::ContextWindow => cfg.step_context_window(delta),
             SettingId::MaxTokens => cfg.step_max_tokens(delta),
+            SettingId::Effort => {
+                cfg.effort
+                    .set(cfg.effort.get().cycled(cfg.provider, &cfg.model, delta))
+            }
             SettingId::AutoCompact => cfg.step_auto_compact(delta),
             // Same cycle as the TUI's Shift+Tab; bypass stays
             // command-only, and adjusting away from it lands on read-only.
@@ -186,6 +195,7 @@ impl SettingId {
     pub fn save_into(self, cfg: &Config, saved: &mut Saved) {
         match self {
             SettingId::MaxTokens => saved.max_tokens = Some(cfg.max_tokens.get()),
+            SettingId::Effort => saved.effort = Some(cfg.effort.get()),
             SettingId::AutoCompact => saved.auto_compact = Some(cfg.auto_compact.get()),
             SettingId::BashTimeout => saved.bash_timeout = Some(cfg.bash_timeout.get()),
             SettingId::ReadLines => saved.read_max_lines = Some(cfg.read_max_lines.get()),

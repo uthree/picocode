@@ -38,6 +38,8 @@ pub struct Saved {
     /// Cap on the tokens one reply may generate (0 = no cap from picocode).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<super::Effort>,
     /// Which key sends the message (the rest of the Enter combinations
     /// insert a newline).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,6 +89,9 @@ impl Saved {
         set(&cfg.read_max_line_bytes, self.read_max_line_bytes);
         set(&cfg.auto_compact, self.auto_compact);
         set(&cfg.max_tokens, self.max_tokens);
+        if let Some(effort) = self.effort {
+            cfg.effort.set(effort);
+        }
         if let Some(key) = self.submit_key {
             cfg.submit_key = key;
         }

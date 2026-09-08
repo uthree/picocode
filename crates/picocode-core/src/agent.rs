@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::approval::ApprovalHook;
 use crate::attachment::Attachment;
-use crate::config::{Config, Provider};
+use crate::config::{Config, Effort, Provider};
 use crate::event::{AgentEvent, WorkerCmd};
 use crate::tools;
 
@@ -52,7 +52,7 @@ pub fn spawn(
     macro_rules! spawn_for {
         ($model:expr) => {{
             let model = $model;
-            // The agents are rebuilt whenever `max_tokens` changes, so the
+            // The agents are rebuilt whenever request settings change, so the
             // whole builder chain lives behind this factory: the worker calls
             // it again instead of being respawned (which would cost the
             // conversation). Rebuilding is local work — no network.
@@ -166,13 +166,28 @@ const GOAL_MAX_TOKENS: u64 = 1024;
 /// actually cuts a long reply short — Ollama's default window is 4096
 /// tokens, and generation stops when prompt + reply reach it.
 fn provider_params(cfg: &Config, max_tokens: u64) -> Option<serde_json::Value> {
+    let effort = cfg.effort.get().for_model(cfg.provider, &cfg.model);
     match cfg.provider {
-        Provider::Ollama => Some(serde_json::json!({
-            "num_predict": if max_tokens == 0 { -1 } else { max_tokens as i64 },
-            "num_ctx": cfg.context_window.get(),
-        })),
-        // Anthropic and OpenAI take the cap as the request's `max_tokens`
-        // (rig fills in a per-model default for Anthropic when it is unset).
+        Provider::Ollama => {
+            let mut params = serde_json::json!({
+                "num_predict": if max_tokens == 0 { -1 } else { max_tokens as i64 },
+                "num_ctx": cfg.context_window.get(),
+            });
+            // Rig extracts `think` to the top level, leaving model options intact.
+            if effort == Effort::None {
+                params["think"] = false.into();
+            } else if effort != Effort::Default {
+                params["think"] = effort.as_str().into();
+            }
+            Some(params)
+        }
+        Provider::Anthropic if effort != Effort::Default => {
+            Some(serde_json::json!({"output_config": {"effort": effort.as_str()}}))
+        }
+        // Rig's OpenAI client uses the Responses API.
+        Provider::Openai if effort != Effort::Default => {
+            Some(serde_json::json!({"reasoning": {"effort": effort.as_str()}}))
+        }
         Provider::Anthropic | Provider::Openai => None,
     }
 }
@@ -390,14 +405,21 @@ async fn worker<M, F>(
     // What the attached media costs, kept across turns: each attachment is
     // measured (or computed) once, not on every breakdown.
     let mut media = crate::media::MediaCounter::default();
-    // The two settings the built agents hold rather than read per use: the
-    // reply-length cap, and — on Ollama, where it travels as `num_ctx` —
-    // the context window. A `/config` change to either rebuilds the agents
+    // Settings captured in built agents: reply cap, context window and effort.
+    // A `/config` change rebuilds the agents
     // before the next turn, so the front ends only have to set the handle.
-    let mut built = (cfg.max_tokens.get(), cfg.context_window.get());
+    let mut built = (
+        cfg.max_tokens.get(),
+        cfg.context_window.get(),
+        cfg.effort.get(),
+    );
 
     while let Some(cmd) = cmd_rx.recv().await {
-        let current = (cfg.max_tokens.get(), cfg.context_window.get());
+        let current = (
+            cfg.max_tokens.get(),
+            cfg.context_window.get(),
+            cfg.effort.get(),
+        );
         if current != built {
             built = current;
             agents = make_agents(built.0);
@@ -467,6 +489,15 @@ async fn worker<M, F>(
                 // round limit is hit, or Esc stops it).
                 let mut round = 0u64;
                 while !cancelled && let Some(goal_text) = goal.clone() {
+                    let current = (
+                        cfg.max_tokens.get(),
+                        cfg.context_window.get(),
+                        cfg.effort.get(),
+                    );
+                    if current != built {
+                        built = current;
+                        agents = make_agents(built.0);
+                    }
                     let Some((done, reason)) =
                         check_goal(&agents.goal_judge, &history, &goal_text, &mut cancel_rx).await
                     else {
@@ -1078,6 +1109,141 @@ mod tests {
 
     fn test_cfg() -> Config {
         Config::for_tests()
+    }
+
+    /// Capture the real streaming HTTP request after Rig's provider conversion.
+    /// A deliberate 400 response avoids needing model inference or credentials.
+    #[tokio::test]
+    async fn effort_reaches_each_providers_wire_format() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn poll_request<M: CompletionModel>(
+            model: M,
+            request: rig::completion::CompletionRequest,
+        ) where
+            M::StreamingResponse: GetTokenUsage,
+        {
+            if let Ok(mut stream) = model.stream(request).await {
+                let _ = stream.next().await;
+            }
+        }
+
+        crate::config::install_tls_provider();
+        for provider in [Provider::Ollama, Provider::Openai, Provider::Anthropic] {
+            for &effort in Effort::choices(provider, "test-model") {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let capture = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = Vec::new();
+                    let body = loop {
+                        let mut buf = [0; 4096];
+                        let n = socket.read(&mut buf).await.unwrap();
+                        assert!(n > 0, "incomplete request");
+                        bytes.extend_from_slice(&buf[..n]);
+                        if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                            let headers = String::from_utf8_lossy(&bytes[..end]);
+                            let length: usize = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (key, value) = line.split_once(':')?;
+                                    key.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse().unwrap())
+                                })
+                                .unwrap();
+                            if bytes.len() >= end + 4 + length {
+                                break serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + length],
+                                )
+                                .unwrap();
+                            }
+                        }
+                    };
+                    socket.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+                    body
+                });
+                let mut cfg = test_cfg();
+                cfg.provider = provider;
+                cfg.effort.set(effort);
+                let request = rig::completion::CompletionRequest {
+                    model: None,
+                    preamble: None,
+                    chat_history: rig::OneOrMany::one(Message::user("hello")),
+                    documents: Vec::new(),
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_tokens: Some(8192),
+                    tool_choice: None,
+                    additional_params: provider_params(&cfg, 8192),
+                    output_schema: None,
+                };
+                let send = async {
+                    match provider {
+                        Provider::Ollama => {
+                            poll_request(
+                                ollama::Client::builder()
+                                    .api_key(ollama::OllamaApiKey::from("unused"))
+                                    .base_url(&url)
+                                    .build()
+                                    .unwrap()
+                                    .completion_model("test-model"),
+                                request,
+                            )
+                            .await
+                        }
+                        Provider::Openai => {
+                            poll_request(
+                                openai::Client::builder()
+                                    .api_key("unused")
+                                    .base_url(&url)
+                                    .build()
+                                    .unwrap()
+                                    .completion_model("test-model"),
+                                request,
+                            )
+                            .await
+                        }
+                        Provider::Anthropic => {
+                            poll_request(
+                                anthropic::Client::builder()
+                                    .api_key("unused")
+                                    .base_url(&url)
+                                    .build()
+                                    .unwrap()
+                                    .completion_model("claude-sonnet-4-6"),
+                                request,
+                            )
+                            .await
+                        }
+                    }
+                };
+                tokio::time::timeout(Duration::from_secs(10), send)
+                    .await
+                    .unwrap();
+                let body = tokio::time::timeout(Duration::from_secs(5), capture)
+                    .await
+                    .unwrap_or_else(|_| panic!("no request for {provider:?} / {effort:?}"))
+                    .unwrap();
+                let value = match provider {
+                    Provider::Ollama => {
+                        assert_eq!(body["options"]["num_predict"], 8192);
+                        assert_eq!(body["options"]["num_ctx"], cfg.context_window.get());
+                        assert!(body["options"].get("think").is_none());
+                        &body["think"]
+                    }
+                    Provider::Openai => &body["reasoning"]["effort"],
+                    Provider::Anthropic => &body["output_config"]["effort"],
+                };
+                if effort == Effort::Default {
+                    assert!(value.is_null(), "{body}");
+                } else if provider == Provider::Ollama && effort == Effort::None {
+                    assert_eq!(value, false);
+                } else {
+                    assert_eq!(value, effort.as_str());
+                }
+            }
+        }
     }
 
     #[test]

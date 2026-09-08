@@ -78,6 +78,36 @@ of gigabytes. There it bounds the setting rather than choosing it. Either
 way a window you set yourself, in `picocode.toml` or in `/config`, is left
 alone.
 
+### Reasoning effort
+
+In either front end, open `/config` (or `/settings`) and adjust **Model →
+effort** with the arrows. Lower effort favors speed and fewer reasoning
+tokens; higher effort gives the model more room to reason. Changes apply
+from the next turn, including automatic goal continuations, and are saved
+in the shared `settings.json` for future runs. Each open GUI conversation
+keeps its own active setting.
+
+The initial value, **provider default**, leaves effort unspecified. A config
+file can set the initial preference with top-level `effort = "high"`; a saved
+UI preference takes precedence. Selecting **provider default** resets that
+override to the provider's behavior.
+
+| Provider | Choices besides provider default | Request field |
+|---|---|---|
+| OpenAI / compatible Responses API | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` | `reasoning.effort` |
+| Anthropic | `low`, `medium`, `high`, `xhigh`, `max` | `output_config.effort` |
+| Ollama | `none`, `low`, `medium`, `high`, `max` | `think` (`false` for `none`) |
+
+These are API-level choices; the selected model must support the chosen
+level. Ollama's GPT-OSS entries offer only `low`, `medium`, and `high`.
+When switching providers, a choice the new provider cannot represent uses
+and displays **provider default**. This setting controls generation effort;
+the reasoning-display toggle only changes how the transcript is shown.
+
+Protocol references: [OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning),
+[Anthropic effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+and [Ollama thinking](https://docs.ollama.com/capabilities/thinking).
+
 ## Permissions
 
 Tools fall into two classes. **Local reads** (`read_file`, `list_files`,
