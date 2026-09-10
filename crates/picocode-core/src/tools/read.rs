@@ -26,7 +26,7 @@ pub struct ReadFile {
     /// Output limits, shared with the `/config` dialog.
     max_lines: NumHandle,
     max_line_bytes: NumHandle,
-    /// Read timestamps shared with edit_file (stale-write detection).
+    /// File versions shared with this agent's edit_file tool.
     stamps: ReadStamps,
 }
 
@@ -72,6 +72,7 @@ impl Tool for ReadFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let guard = self.stamps.lock().await;
         let path = resolve_in(&self.ws, &args.path)?;
         let bytes = self
             .ws
@@ -81,6 +82,7 @@ impl Tool for ReadFile {
             .map_err(|e| ToolError::new(format!("failed to read {}: {e}", path.display())))?;
         // Stamp the read so edit_file can detect external changes after it.
         self.stamps.record(&self.ws.backend, &path).await;
+        drop(guard);
 
         // Known media types don't go through the text pipeline.
         match Attachment::classify(&path).map(|a| a.kind) {

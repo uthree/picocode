@@ -11,6 +11,7 @@ use picocode_core::session;
 use super::{App, EntryKind};
 
 pub struct PendingApproval {
+    pub agent_id: Option<u64>,
     pub name: String,
     pub args: String,
     /// What the `a` (always) answer whitelists.

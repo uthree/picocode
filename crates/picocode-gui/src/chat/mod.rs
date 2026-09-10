@@ -72,6 +72,7 @@ enum Menu {
 
 /// A destructive tool call waiting for the user's yes / no / always.
 struct Approval {
+    agent_id: Option<u64>,
     name: String,
     args: String,
     respond: oneshot::Sender<bool>,
@@ -105,6 +106,8 @@ pub struct ChatView {
     /// provider requests (model lists) and model switches.
     rt: tokio::runtime::Handle,
     running: bool,
+    /// Parent text may keep growing while child activity adds later rows.
+    stream_entry: Option<usize>,
     /// Keyboard focus while an approval / question dialog is open, so
     /// y/n/a/Esc reach the dialog instead of the text input.
     dialog_focus: FocusHandle,
@@ -315,6 +318,7 @@ impl ChatView {
             cancel_tx,
             rt,
             running: false,
+            stream_entry: None,
             dialog_focus: cx.focus_handle(),
             waiting: false,
             approval: None,
@@ -611,12 +615,15 @@ impl ChatView {
         self.push(EntryKind::Tool, format!("{name} {}", one_line(args, 160)));
     }
 
-    /// Append a streamed delta to the last entry of the same kind, or start
-    /// a new entry (matches the TUI's transcript behavior).
+    /// Append a parent delta to its current block, even if child activity
+    /// has added transcript rows since the previous delta.
     fn append(&mut self, kind: EntryKind, delta: &str) {
-        match self.entries.last_mut() {
+        match self.stream_entry.and_then(|i| self.entries.get_mut(i)) {
             Some(e) if e.kind == kind => e.text.push_str(delta),
-            _ => self.push(kind, delta.to_string()),
+            _ => {
+                self.push(kind, delta.to_string());
+                self.stream_entry = Some(self.entries.len() - 1);
+            }
         }
     }
 
@@ -633,6 +640,7 @@ impl ChatView {
     /// virtualized list. In-place text growth (streamed deltas) needs no
     /// notification — visible items are re-measured every frame.
     fn push_entry(&mut self, entry: Entry) {
+        self.stream_entry = None;
         let n = self.entries.len();
         self.entries.push(entry);
         self.list_state.splice(n..n, 1);

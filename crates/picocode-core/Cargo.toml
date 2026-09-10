@@ -42,5 +42,5 @@ tempfile.workspace = true
 # The live media-count test encodes a real PNG for the endpoint to read.
 png.workspace = true
 base64.workspace = true
-rig.workspace = true
+rig = { workspace = true, features = ["test-utils"] }
 tokio.workspace = true

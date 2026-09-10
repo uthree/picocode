@@ -10,33 +10,53 @@ use super::{
 
 impl App {
     pub(super) fn handle_agent_event(&mut self, ev: AgentEvent) {
+        let parent_stream = ev.subagent_id().map(|_| self.stream_entry);
         match ev {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
                 self.delta_est += 1;
                 self.speed.record(1);
-                if !self.assistant_open {
-                    self.close_blocks();
-                    self.push(EntryKind::Assistant, String::new());
-                    self.assistant_open = true;
-                }
-                self.append_to_last(&s);
+                self.append(EntryKind::Assistant, &s);
             }
             AgentEvent::ReasoningDelta(s) => {
                 self.waiting = false;
                 self.delta_est += 1;
                 self.speed.record(1);
-                if !self.reasoning_open {
-                    self.close_blocks();
-                    self.push(EntryKind::Reasoning, String::new());
-                    self.reasoning_open = true;
-                }
-                self.append_to_last(&s);
+                self.append(EntryKind::Reasoning, &s);
             }
             AgentEvent::ToolCall { name, args } => {
                 self.waiting = false;
                 self.close_blocks();
                 self.push_tool_call(&name, &args);
+            }
+            AgentEvent::SubagentToolCall { id, name, args } => {
+                self.waiting = false;
+                self.close_blocks();
+                self.push(EntryKind::Notice, format!("Subagent #{id}: {name}"));
+                self.push_tool_call(&name, &args);
+            }
+            AgentEvent::SubagentStarted { id } => {
+                self.close_blocks();
+                self.push(EntryKind::Notice, format!("Subagent #{id} started"));
+            }
+            AgentEvent::SubagentFinished { id, success } => {
+                self.close_blocks();
+                let (kind, status) = if success {
+                    (EntryKind::Notice, "finished")
+                } else {
+                    (EntryKind::Warning, "failed")
+                };
+                self.push(kind, format!("Subagent #{id} {status}"));
+            }
+            AgentEvent::SubagentToolResult { id, output } => {
+                self.close_blocks();
+                self.push(
+                    EntryKind::ToolOut,
+                    format!(
+                        "Subagent #{id} result:\n{}",
+                        clamp_lines(output.trim_end(), TOOL_OUTPUT_MAX_LINES)
+                    ),
+                );
             }
             AgentEvent::ToolResult { output } => {
                 // The next completion request follows right after a tool
@@ -49,6 +69,7 @@ impl App {
                 }
             }
             AgentEvent::ApprovalRequest {
+                agent_id,
                 name,
                 args,
                 respond,
@@ -69,6 +90,7 @@ impl App {
                     None => AlwaysAllow::Tool(name.clone()),
                 };
                 self.pending = Some(PendingApproval {
+                    agent_id,
                     name,
                     args,
                     always,
@@ -76,11 +98,16 @@ impl App {
                 });
             }
             AgentEvent::AutoDecision {
+                agent_id,
                 name,
                 allowed,
                 reason,
             } => {
                 self.close_blocks();
+                let name = match agent_id {
+                    Some(id) => format!("subagent #{id}: {name}"),
+                    None => name,
+                };
                 let verb = if allowed { "approved" } else { "refused" };
                 self.push(
                     if allowed {
@@ -134,11 +161,21 @@ impl App {
                 });
             }
             AgentEvent::Usage { input, output } => {
+                self.close_blocks();
                 self.ctx_tokens = input;
                 // Snap the live estimate to the reported figure.
                 self.turn_out += output;
                 self.total_out += output;
                 self.delta_est = 0;
+            }
+            AgentEvent::SubagentUsage { id, input, output } => {
+                self.turn_out += output;
+                self.total_out += output;
+                self.close_blocks();
+                self.push(
+                    EntryKind::Notice,
+                    format!("Subagent #{id}: {input} input / {output} output tokens"),
+                );
             }
             AgentEvent::ContextBreakdown(breakdown) => {
                 self.context_info = Some(breakdown);
@@ -254,6 +291,7 @@ impl App {
                 // A cancelled stream drops the questioning tool future, so an
                 // open dialog can no longer deliver its answer — close it.
                 self.question = None;
+                self.pending = None;
                 self.push(EntryKind::Notice, "Generation stopped (Esc)".to_string());
             }
             AgentEvent::Compacted { messages, summary } => {
@@ -287,6 +325,7 @@ impl App {
                 if self.running == 0 {
                     // Any dialog still open belongs to a dropped tool future.
                     self.question = None;
+                    self.pending = None;
                     self.git_branch = picocode_core::git::branch(&self.cfg.root);
                     self.autosave();
                     self.maybe_auto_compact();
@@ -296,6 +335,9 @@ impl App {
                 self.close_blocks();
                 self.push(EntryKind::Error, s);
             }
+        }
+        if let Some(stream) = parent_stream {
+            self.stream_entry = stream;
         }
     }
 }

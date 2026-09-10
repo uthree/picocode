@@ -13,11 +13,34 @@ pub enum AgentEvent {
     /// Streamed reasoning (thinking) delta.
     ReasoningDelta(String),
     /// The model emitted a tool call.
-    ToolCall { name: String, args: String },
+    ToolCall {
+        name: String,
+        args: String,
+    },
+    /// A delegated agent's tool call; kept distinct from the parent's log.
+    SubagentToolCall {
+        id: u64,
+        name: String,
+        args: String,
+    },
+    SubagentToolResult {
+        id: u64,
+        output: String,
+    },
+    SubagentStarted {
+        id: u64,
+    },
+    SubagentFinished {
+        id: u64,
+        success: bool,
+    },
     /// A tool produced a result (or a skip reason).
-    ToolResult { output: String },
+    ToolResult {
+        output: String,
+    },
     /// A destructive tool call awaits user approval.
     ApprovalRequest {
+        agent_id: Option<u64>,
         name: String,
         args: String,
         respond: oneshot::Sender<bool>,
@@ -25,6 +48,7 @@ pub enum AgentEvent {
     /// In auto mode: the reviewer model answered an approval prompt on the
     /// user's behalf. Reported so the user can see what ran unattended.
     AutoDecision {
+        agent_id: Option<u64>,
         name: String,
         allowed: bool,
         reason: String,
@@ -49,7 +73,16 @@ pub enum AgentEvent {
         respond: oneshot::Sender<Option<usize>>,
     },
     /// Token usage for one completion request within the run.
-    Usage { input: u64, output: u64 },
+    Usage {
+        input: u64,
+        output: u64,
+    },
+    /// Child usage belongs to its own context, not the parent's context meter.
+    SubagentUsage {
+        id: u64,
+        input: u64,
+        output: u64,
+    },
     /// Estimated context composition, refreshed at the end of each turn
     /// (and after /compact). Backs the colored `/status` detail block.
     ContextBreakdown(crate::context::Breakdown),
@@ -65,7 +98,10 @@ pub enum AgentEvent {
     /// arriving after a model switch is dropped rather than capping the new
     /// model by the old one's figure. Providers that don't say produce no
     /// event at all.
-    ContextLimit { model: String, limit: u64 },
+    ContextLimit {
+        model: String,
+        limit: u64,
+    },
     /// Result of the add-model form's model-list probe. Separate from
     /// [`ModelList`](Self::ModelList), which caches the *current* endpoint's
     /// models; the echoed provider/base identify which probe answered (a
@@ -77,16 +113,26 @@ pub enum AgentEvent {
     },
     /// The conversation history was compacted into a summary.
     /// `messages == 0` means there was nothing to compact.
-    Compacted { messages: usize, summary: String },
+    Compacted {
+        messages: usize,
+        summary: String,
+    },
     /// Old tool outputs were replaced with placeholders to relieve context
     /// pressure (the soft stage before full compaction).
-    Pruned { outputs: usize },
+    Pruned {
+        outputs: usize,
+    },
     /// Output of a user-typed `!` shell command.
-    ShellOutput { output: String },
+    ShellOutput {
+        output: String,
+    },
     /// A bash command hit its timeout and was moved to the background
     /// (counted in the status bar; the GUI shows `command` in its
     /// background-jobs popup).
-    BackgroundStarted { id: u64, command: String },
+    BackgroundStarted {
+        id: u64,
+        command: String,
+    },
     /// A backgrounded bash command finished. The App displays the output and
     /// prompts the model with it so it reacts to the result.
     BackgroundDone {
@@ -96,13 +142,32 @@ pub enum AgentEvent {
     },
     /// `/undo` finished: a human-readable per-file summary, or an empty
     /// string when there was nothing to undo.
-    Undone { summary: String },
+    Undone {
+        summary: String,
+    },
     /// The user stopped the current generation with Esc.
     Cancelled,
     /// The current run finished (successfully or not).
     TurnComplete,
     /// An error occurred during the run.
     Error(String),
+}
+
+impl AgentEvent {
+    /// The child that emitted this event, including approval activity.
+    pub fn subagent_id(&self) -> Option<u64> {
+        match self {
+            Self::SubagentToolCall { id, .. }
+            | Self::SubagentToolResult { id, .. }
+            | Self::SubagentStarted { id }
+            | Self::SubagentFinished { id, .. }
+            | Self::SubagentUsage { id, .. } => Some(*id),
+            Self::ApprovalRequest { agent_id, .. } | Self::AutoDecision { agent_id, .. } => {
+                *agent_id
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Commands sent from the TUI to the agent worker.

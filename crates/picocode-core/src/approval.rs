@@ -41,6 +41,17 @@ pub const REVIEW_PREAMBLE: &str = "You review tool calls made by a coding agent 
      reason, or has nothing to do with the request. When you are unsure, refuse. \
      Answer with a single line: `ALLOW: <short reason>` or `DENY: <short reason>`.";
 
+/// One interactive dialog at a time across a parent and its children. A
+/// waiting agent does not prevent the other agents from doing approved work.
+#[derive(Clone, Default)]
+pub(crate) struct ApprovalGate(Arc<tokio::sync::Mutex<()>>);
+
+impl ApprovalGate {
+    pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.0.lock().await
+    }
+}
+
 pub struct ApprovalHook<M: CompletionModel> {
     tx: mpsc::Sender<AgentEvent>,
     rules: RulesHandle,
@@ -53,6 +64,8 @@ pub struct ApprovalHook<M: CompletionModel> {
     /// The working directory, shown to the reviewer as the boundary calls
     /// are expected to stay inside.
     root: std::path::PathBuf,
+    gate: ApprovalGate,
+    agent_id: Option<u64>,
 }
 
 impl<M: CompletionModel> ApprovalHook<M> {
@@ -71,14 +84,28 @@ impl<M: CompletionModel> ApprovalHook<M> {
             reviewer,
             intent,
             root,
+            gate: ApprovalGate::default(),
+            agent_id: None,
         }
+    }
+
+    pub(crate) fn with_gate(mut self, gate: ApprovalGate) -> Self {
+        self.gate = gate;
+        self
+    }
+
+    pub(crate) fn for_subagent(mut self, id: u64) -> Self {
+        self.agent_id = Some(id);
+        self
     }
 
     /// Ask the user (the normal approval dialog). `None` means the front end
     /// is gone.
     async fn ask_user(&self, tool_name: &str, args: &str) -> Option<bool> {
+        let _guard = self.gate.lock().await;
         let (respond, decision) = oneshot::channel();
         let request = AgentEvent::ApprovalRequest {
+            agent_id: self.agent_id,
             name: tool_name.to_string(),
             args: args.to_string(),
             respond,
@@ -212,6 +239,7 @@ impl<M: CompletionModel + 'static> AgentHook<M> for ApprovalHook<M> {
                 let _ = self
                     .tx
                     .send(AgentEvent::AutoDecision {
+                        agent_id: self.agent_id,
                         name: tool_name.to_string(),
                         allowed,
                         reason: reason.clone(),

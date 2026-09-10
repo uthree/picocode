@@ -28,7 +28,7 @@ pub struct EditFile {
     after_edit: Option<String>,
     /// Per-turn journal of pre-edit file states, powering `/undo`.
     journal: crate::undo::UndoJournal,
-    /// Read timestamps shared with read_file (stale-write detection).
+    /// File versions shared with this agent's read_file tool.
     stamps: super::ReadStamps,
 }
 
@@ -48,12 +48,12 @@ impl EditFile {
     }
 
     /// Refuse to write over external changes: the file moved since the
-    /// model last read it (user edit, another process, or `/undo`), so the
+    /// model last read it (user edit, another agent, or `/undo`), so the
     /// edit was decided against outdated contents.
     async fn check_stale(&self, path: &Path) -> Result<(), ToolError> {
         if self.stamps.is_stale(&self.ws.backend, path).await {
             return Err(ToolError::new(format!(
-                "{} changed on disk after you last read it (edited externally). \
+                "{} changed on disk since you last read it, or was written by another agent. \
                  Re-read the file and redo the edit against the current contents.",
                 path.display()
             )));
@@ -138,6 +138,7 @@ impl Tool for EditFile {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let guard = self.stamps.lock().await;
         let path = resolve_in(&self.ws, &args.path)?;
         let backend = &self.ws.backend;
 
@@ -147,7 +148,9 @@ impl Tool for EditFile {
             self.check_stale(&path).await?;
             self.journal.record(&path).await;
             let mut out = write_whole_file(backend, &path, &args.new_string).await?;
-            self.stamps.record(backend, &path).await;
+            self.stamps.mark_written(backend, &path).await;
+            self.journal.record_written(&path).await;
+            drop(guard);
             self.append_after_edit(&mut out).await;
             return Ok(out);
         };
@@ -189,7 +192,9 @@ impl Tool for EditFile {
                     .map_err(|e| {
                         ToolError::new(format!("failed to write {}: {e}", path.display()))
                     })?;
-                self.stamps.record(backend, &path).await;
+                self.stamps.mark_written(backend, &path).await;
+                self.journal.record_written(&path).await;
+                drop(guard);
                 let mut out = format!(
                     "Edited {}: -{} +{} lines",
                     path.display(),
@@ -497,6 +502,146 @@ mod tests {
             .unwrap();
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "three\n");
         });
+    }
+
+    #[tokio::test]
+    async fn concurrent_agents_cannot_overwrite_each_other_and_share_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "original").unwrap();
+        let ws = Workspace::local(dir.path().to_path_buf());
+        let stamps = crate::tools::ReadStamps::default();
+        let journal = crate::undo::UndoJournal::new(ws.clone(), stamps.clone());
+        journal.begin_turn();
+        let first = stamps.fork();
+        let second = stamps.fork();
+        first.record(&ws.backend, &path).await;
+        second.record(&ws.backend, &path).await;
+        let one = EditFile::new(ws.clone(), None, journal.clone(), first);
+        let two = EditFile::new(ws, None, journal.clone(), second);
+        let args = |text: &str| EditArgs {
+            path: "f.txt".into(),
+            old_string: None,
+            new_string: text.into(),
+        };
+        let (a, b) = tokio::join!(one.call(args("one")), two.call(args("two")));
+        let expected = match (a, b) {
+            (Ok(_), Err(e)) => {
+                assert!(e.0.contains("changed on disk"));
+                "one"
+            }
+            (Err(e), Ok(_)) => {
+                assert!(e.0.contains("changed on disk"));
+                "two"
+            }
+            other => panic!("exactly one conflicting edit must succeed: {other:?}"),
+        };
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+        assert_eq!(
+            journal.undo().await,
+            vec![crate::undo::Restored::Reverted(path.clone())]
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn agent_reads_are_independent_even_when_write_timestamps_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.txt");
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let ws = Workspace::local(dir.path().to_path_buf());
+        let first = crate::tools::ReadStamps::default();
+        let second = first.fork();
+        let unread = first.fork();
+        let read = |stamps| {
+            crate::tools::ReadFile::new(
+                ws.clone(),
+                crate::config::NumHandle::new(200),
+                crate::config::NumHandle::new(1000),
+                stamps,
+            )
+        };
+        let read_args = || serde_json::from_value(serde_json::json!({"path": "f.txt"})).unwrap();
+        read(first.clone()).call(read_args()).await.unwrap();
+        read(second.clone()).call(read_args()).await.unwrap();
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let one = EditFile::new(ws.clone(), None, Default::default(), first.clone());
+        one.call(EditArgs {
+            path: "f.txt".into(),
+            old_string: Some("one".into()),
+            new_string: "ONE".into(),
+        })
+        .await
+        .unwrap();
+        // Remote backends may only report whole-second mtimes. Reproduce
+        // that collision explicitly, without relying on filesystem timing.
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+        read(first).call(read_args()).await.unwrap();
+        let two = EditFile::new(ws.clone(), None, Default::default(), second.clone());
+        let args = || EditArgs {
+            path: "f.txt".into(),
+            old_string: Some("two".into()),
+            new_string: "TWO".into(),
+        };
+        assert!(
+            two.call(args())
+                .await
+                .unwrap_err()
+                .0
+                .contains("changed on disk")
+        );
+        let third = EditFile::new(ws.clone(), None, Default::default(), unread);
+        assert!(
+            third
+                .call(args())
+                .await
+                .unwrap_err()
+                .0
+                .contains("changed on disk")
+        );
+        read(second).call(read_args()).await.unwrap();
+        two.call(args()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "ONE\nTWO\n");
+    }
+
+    #[tokio::test]
+    async fn competing_creations_require_a_read_but_undo_allows_recreation() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = Workspace::local(dir.path().to_path_buf());
+        let first = crate::tools::ReadStamps::default();
+        let second = first.fork();
+        let journal = crate::undo::UndoJournal::new(ws.clone(), first.clone());
+        journal.begin_turn();
+        let one = EditFile::new(ws.clone(), None, journal.clone(), first);
+        let two = EditFile::new(ws, None, journal.clone(), second);
+        let args = || EditArgs {
+            path: "new.txt".into(),
+            old_string: None,
+            new_string: "created".into(),
+        };
+        one.call(args()).await.unwrap();
+        assert!(
+            two.call(args())
+                .await
+                .unwrap_err()
+                .0
+                .contains("changed on disk")
+        );
+        assert_eq!(
+            journal.undo().await,
+            vec![crate::undo::Restored::Removed(dir.path().join("new.txt"))]
+        );
+        journal.begin_turn();
+        two.call(args()).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new.txt")).unwrap(),
+            "created"
+        );
     }
 
     #[test]

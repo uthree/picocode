@@ -21,6 +21,7 @@ impl ChatView {
         // No explicit scroll-follow here: the bottom-aligned virtual list
         // sticks to the bottom on its own while the user hasn't scrolled up,
         // and pins the position (like the TUI) while they have.
+        let parent_stream = ev.subagent_id().map(|_| self.stream_entry);
         match ev {
             AgentEvent::TextDelta(s) => {
                 self.waiting = false;
@@ -39,16 +40,47 @@ impl ChatView {
                 self.est_out += est_tokens(&args);
                 self.push_tool_call(&name, &args);
             }
+            AgentEvent::SubagentToolCall { id, name, args } => {
+                self.waiting = false;
+                self.push(
+                    EntryKind::Notice,
+                    t!("subagent_tool", id = id, name = name).into(),
+                );
+                self.push_tool_call(&name, &args);
+            }
+            AgentEvent::SubagentStarted { id } => {
+                self.push(EntryKind::Notice, t!("subagent_started", id = id).into());
+            }
+            AgentEvent::SubagentFinished { id, success } => {
+                let (kind, key) = if success {
+                    (EntryKind::Notice, "subagent_finished")
+                } else {
+                    (EntryKind::Warning, "subagent_failed")
+                };
+                self.push(kind, t!(key, id = id).into());
+            }
+            AgentEvent::SubagentToolResult { id, output } => {
+                self.push(
+                    EntryKind::ToolOut,
+                    format!(
+                        "{}\n{}",
+                        t!("subagent_result", id = id),
+                        clip(&output, TOOL_OUTPUT_MAX_LINES)
+                    ),
+                );
+            }
             AgentEvent::ToolResult { output } => {
                 self.push(EntryKind::ToolOut, clip(&output, TOOL_OUTPUT_MAX_LINES));
             }
             AgentEvent::ApprovalRequest {
+                agent_id,
                 name,
                 args,
                 respond,
             } => {
                 self.waiting = false;
                 self.approval = Some(Approval {
+                    agent_id,
                     name,
                     args,
                     respond,
@@ -59,10 +91,15 @@ impl ChatView {
                 }
             }
             AgentEvent::AutoDecision {
+                agent_id,
                 name,
                 allowed,
                 reason,
             } => {
+                let name = match agent_id {
+                    Some(id) => t!("subagent_tool", id = id, name = name).to_string(),
+                    None => name,
+                };
                 let (kind, key) = if allowed {
                     (EntryKind::Notice, "auto_approved")
                 } else {
@@ -113,11 +150,18 @@ impl ChatView {
                 }
             }
             AgentEvent::Usage { input, output } => {
+                self.stream_entry = None;
                 self.tokens_in = input;
                 self.tokens_out = output;
                 // Real usage supersedes the streaming estimate; the next
                 // completion in this run starts estimating from zero again.
                 self.est_out = 0;
+            }
+            AgentEvent::SubagentUsage { id, input, output } => {
+                self.push(
+                    EntryKind::Notice,
+                    t!("subagent_usage", id = id, input = input, output = output).into(),
+                );
             }
             AgentEvent::ContextBreakdown(breakdown) => {
                 self.context_info = Some(breakdown);
@@ -265,6 +309,7 @@ impl ChatView {
                 }
             }
             AgentEvent::TurnComplete => {
+                self.stream_entry = None;
                 self.running = false;
                 self.waiting = false;
                 self.speed.reset();
@@ -280,6 +325,10 @@ impl ChatView {
                 self.waiting = false;
                 self.push(EntryKind::Error, e);
             }
+        }
+        if let Some(stream) = parent_stream {
+            // Child logs and dialogs do not split the parent's paragraph.
+            self.stream_entry = stream;
         }
     }
 }

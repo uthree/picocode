@@ -290,9 +290,14 @@ submit_key = "enter"
 # adjustable in /config)
 auto_compact = 85
 
+# Enable parallel subagents (default: false). Requires a restart.
+# Registers delegate_task and agent_result. See subagents.md for usage.
+subagents = false
+
 # Leave tools unregistered entirely — their schemas are never sent to the
-# model, saving context on models that don't need them. Only the web tools
-# can be listed; default: [] (everything on). Needs a restart to change.
+# model, saving context on models that don't need them. The web tools and
+# delegate_task can be listed; disabling delegate_task also removes agent_result.
+# Default: [] (no extra disables). Needs a restart to change.
 disable_tools = ["web_search", "web_fetch"]
 
 # Shell command run after every successful edit_file write; its verdict is

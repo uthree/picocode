@@ -10,7 +10,7 @@
 //! All I/O goes through the workspace backend, so `/undo` works on a remote
 //! workspace instead of quietly operating on same-named local paths. And a
 //! file the user has edited by hand since the turn is left alone rather than
-//! silently rolled back over: the read stamps `edit_file` keeps say whether
+//! silently rolled back over: the write stamps the journal keeps say whether
 //! a path still holds what picocode last wrote there.
 
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ struct Frame {
 pub struct UndoJournal {
     frames: Arc<Mutex<Vec<Frame>>>,
     ws: Workspace,
-    /// The mtimes `read_file`/`edit_file` recorded, used to tell a file
+    /// The versions `edit_file` recorded, used to tell a file
     /// picocode last wrote from one the user has changed since.
     stamps: ReadStamps,
 }
@@ -61,8 +61,14 @@ impl UndoJournal {
         Self {
             frames: Arc::new(Mutex::new(Vec::new())),
             ws,
-            stamps,
+            stamps: stamps.fork(),
         }
+    }
+
+    /// Track the last completed edit independently of each agent's read
+    /// history, so reading a user-modified file cannot authorize its undo.
+    pub(crate) async fn record_written(&self, path: &Path) {
+        self.stamps.record(&self.ws.backend, path).await;
     }
 
     /// Open a fresh frame for the coming turn. A trailing empty frame (a
@@ -121,6 +127,7 @@ impl UndoJournal {
     /// Restore the newest non-empty frame and pop it. Returns what happened
     /// per file, oldest-recorded first; empty when there is nothing to undo.
     pub async fn undo(&self) -> Vec<Restored> {
+        let _guard = self.stamps.lock().await;
         let frame = {
             let mut stack = self.frames.lock().unwrap();
             loop {
@@ -145,13 +152,16 @@ impl UndoJournal {
             out.push(match original {
                 Some(bytes) => match backend.write(&path, &bytes).await {
                     Ok(()) => {
-                        self.stamps.record(backend, &path).await;
+                        self.stamps.mark_written(backend, &path).await;
                         Restored::Reverted(path)
                     }
                     Err(e) => Restored::Failed(path, e.to_string()),
                 },
                 None => match backend.remove_file(&path).await {
-                    Ok(()) => Restored::Removed(path),
+                    Ok(()) => {
+                        self.stamps.mark_written(backend, &path).await;
+                        Restored::Removed(path)
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Restored::Removed(path),
                     Err(e) => Restored::Failed(path, e.to_string()),
                 },
@@ -270,7 +280,7 @@ mod tests {
             j.record(path).await;
             std::fs::write(path, "agent").unwrap();
             // What edit_file does after every successful write.
-            stamps.record(&ws.backend, path).await;
+            j.record_written(path).await;
         }
 
         // Only b.txt is touched afterwards. mtime has second granularity on

@@ -192,6 +192,22 @@ async fn run_print(
             }
             AgentEvent::ReasoningDelta(_) => {}
             AgentEvent::ToolCall { name, args } => eprintln!("[tool] {name} {args}"),
+            AgentEvent::SubagentToolCall { id, name, args } => {
+                eprintln!("[subagent #{id} tool] {name} {args}");
+            }
+            AgentEvent::SubagentUsage { id, input, output } => {
+                eprintln!("[subagent #{id} usage] input={input} output={output}");
+            }
+            AgentEvent::SubagentStarted { id } => eprintln!("[subagent #{id} started]"),
+            AgentEvent::SubagentFinished { id, success } => {
+                eprintln!("[subagent #{id} finished] success={success}")
+            }
+            AgentEvent::SubagentToolResult { id, output } => {
+                eprintln!(
+                    "[subagent #{id} result] {}",
+                    output.lines().next().unwrap_or("")
+                );
+            }
             AgentEvent::ToolResult { output } => {
                 let first = output.lines().next().unwrap_or("");
                 eprintln!("[tool result] {first} … ({} bytes)", output.len());
@@ -201,10 +217,15 @@ async fn run_print(
                 let _ = respond.send(false);
             }
             AgentEvent::AutoDecision {
+                agent_id,
                 name,
                 allowed,
                 reason,
             } => {
+                let name = match agent_id {
+                    Some(id) => format!("subagent #{id}: {name}"),
+                    None => name,
+                };
                 let verb = if allowed { "approved" } else { "refused" };
                 eprintln!("[auto {verb}] {name}: {reason}");
             }
@@ -247,6 +268,22 @@ async fn run_smoke(
             }
             AgentEvent::ReasoningDelta(_) => {}
             AgentEvent::ToolCall { name, args } => println!("\n[tool] {name} {args}"),
+            AgentEvent::SubagentToolCall { id, name, args } => {
+                println!("\n[subagent #{id} tool] {name} {args}");
+            }
+            AgentEvent::SubagentUsage { id, input, output } => {
+                println!("\n[subagent #{id} usage] input={input} output={output}");
+            }
+            AgentEvent::SubagentStarted { id } => println!("\n[subagent #{id} started]"),
+            AgentEvent::SubagentFinished { id, success } => {
+                println!("\n[subagent #{id} finished] success={success}")
+            }
+            AgentEvent::SubagentToolResult { id, output } => {
+                println!(
+                    "[subagent #{id} result] {}",
+                    output.lines().next().unwrap_or("")
+                );
+            }
             AgentEvent::ToolResult { output } => {
                 let first = output.lines().next().unwrap_or("");
                 println!("[result] {first} ... ({} bytes)", output.len());
@@ -279,10 +316,15 @@ async fn run_smoke(
                 println!("[background job #{id} done]\n{output}");
             }
             AgentEvent::AutoDecision {
+                agent_id,
                 name,
                 allowed,
                 reason,
             } => {
+                let name = match agent_id {
+                    Some(id) => format!("subagent #{id}: {name}"),
+                    None => name,
+                };
                 let verb = if allowed { "approved" } else { "refused" };
                 println!("[auto {verb}] {name}: {reason}");
             }

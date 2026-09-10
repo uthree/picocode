@@ -495,12 +495,40 @@ mod tests {
             matches!(commands2.try_recv(), Ok(WorkerCmd::Prompt { text, .. }) if text == "second prompt")
         );
         let focus = cx.update(|window, cx| window.focused(cx));
-        tx1.try_send(AgentEvent::TextDelta("first response".into()))
-            .unwrap();
+        for event in [
+            AgentEvent::Usage {
+                input: 100,
+                output: 3,
+            },
+            AgentEvent::TextDelta("first ".into()),
+            AgentEvent::SubagentStarted { id: 7 },
+            AgentEvent::SubagentToolCall {
+                id: 7,
+                name: "read_file".into(),
+                args: "{}".into(),
+            },
+            AgentEvent::SubagentToolResult {
+                id: 7,
+                output: "child tool output".into(),
+            },
+            AgentEvent::SubagentUsage {
+                id: 7,
+                input: 999,
+                output: 400,
+            },
+            AgentEvent::SubagentFinished {
+                id: 7,
+                success: true,
+            },
+            AgentEvent::TextDelta("response".into()),
+        ] {
+            tx1.try_send(event).unwrap();
+        }
         tx2.try_send(AgentEvent::TextDelta("second response".into()))
             .unwrap();
         let (respond, mut answer) = tokio::sync::oneshot::channel();
         tx1.try_send(AgentEvent::ApprovalRequest {
+            agent_id: Some(7),
             name: "bash".into(),
             args: "{}".into(),
             respond,
@@ -514,6 +542,9 @@ mod tests {
                 "background approvals must not steal focus"
             );
             assert!(first.read(cx).approval.is_some());
+            assert_eq!(first.read(cx).approval.as_ref().unwrap().agent_id, Some(7));
+            assert_eq!(first.read(cx).tokens_in, 100);
+            assert_eq!(first.read(cx).tokens_out, 3);
             assert!(second.read(cx).approval.is_none());
             assert!(
                 first

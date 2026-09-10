@@ -12,9 +12,11 @@ OpenAI-compatible server (vLLM, etc.).
 
 - **Chat** with streaming output, markdown rendering, syntax-highlighted
   code blocks and line diffs for file edits
-- **8 built-in tools**: `read_file` / `list_files` / `grep` / `edit_file` /
+- **8 default tools**: `read_file` / `list_files` / `grep` / `edit_file` /
   `bash` / `web_search` / `web_fetch` / `submit_plan` — file tools are
   confined to the project directory, symlinks leading out of it included
+- **Opt-in subagents** — `subagents = true` enables `delegate_task` and
+  `agent_result` for parallel tasks. Off by default
 - **Approval flow** for anything that changes state or talks to the
   network, with allow/deny rules and **permission modes**
   (read-only / edit / plan / auto / bypass) — `auto` hands the
@@ -134,3 +136,4 @@ keys, permission modes and bash rules, sessions — is described in
 - [docs/gui.md](docs/gui.md) — GUI features and build notes
 - [docs/architecture.md](docs/architecture.md) — workspace layout: the
   `picocode-core` engine and the two front-end crates
+- [docs/subagents.md](docs/subagents.md) — delegating tasks to parallel agents

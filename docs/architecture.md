@@ -52,6 +52,8 @@ crates/
     steer.rs     — mid-turn steering queue + rig hook (injects user
                    messages at tool-call boundaries)
     tools/       — built-in tool implementations
+                   (delegate.rs starts children and collects their reports;
+                   delegate/tasks.rs owns their per-turn task registry)
     transcript.rs — renderer-agnostic transcript entries (Entry/EntryKind)
                    and diff-line parsing shared by both front ends
     undo.rs      — per-turn journal of pre-edit file states backing /undo
@@ -88,3 +90,40 @@ crates/
 The agent worker runs on tokio in both front ends; the TUI drives it from
 its own tokio main loop, while the GUI creates a runtime beside gpui's
 executor and pumps the event channel from a gpui task.
+
+## Subagents
+
+Subagent tools are opt-in: `subagents = true` in the config registers both
+tools and includes their default workflow instructions. The default is
+`false`. An explicit `disable_tools = ["delegate_task"]` also removes both
+tools, even when the opt-in is set.
+
+The `delegate_task` tool starts a Tokio task with a fresh child conversation
+and immediately returns its ID. The parent can keep working and collect
+reports through `agent_result`, which can wait or poll. See
+[subagents.md](subagents.md) for usage. Parent and child use the same
+completion model, request settings, workspace backend, permission handles,
+MCP connections, background jobs and undo journal. Each child uses the
+common project tools; coordination tools are registered on the parent.
+
+Each agent has independent read stamps. A shared file-access lock keeps
+`read_file` read-and-stamp operations and `edit_file` read-modify-write
+operations together. Shared write revisions detect stale edits even when
+filesystem timestamps match. The undo journal tracks the last write
+separately from each agent's last read. Model requests and shell commands
+can run concurrently.
+
+The worker passes the human's request through Rig's runtime tool extensions
+so the child's approval reviewer uses the original intent. Each child tool
+call passes through `ApprovalHook`. A shared approval gate serializes
+interactive dialogs from the parent and children, including plan approval.
+
+`SubagentScope` owns the children for the entire parent turn. Before ending
+the turn, the worker collects any remaining reports and resumes the parent
+to integrate them, retaining the original human intent for approval
+reviews. Cancellation aborts and joins children before emitting the turn's
+completion events; dropping the scope also aborts outstanding tasks.
+Children therefore share the parent's undo frame across automatic report
+continuations. Child lifecycle, tool activity and usage events carry IDs;
+child usage never replaces the parent's context meter. Only final reports
+join the parent's model history.

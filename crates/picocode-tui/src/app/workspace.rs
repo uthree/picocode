@@ -233,8 +233,7 @@ impl App {
         self.turn_out = 0;
         self.total_out = 0;
         self.delta_est = 0;
-        self.assistant_open = false;
-        self.reasoning_open = false;
+        self.close_blocks();
         self.follow = true;
         self.top_line = 0;
         self.push(EntryKind::Logo, LOGO.to_string());

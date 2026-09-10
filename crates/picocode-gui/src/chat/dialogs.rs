@@ -147,11 +147,12 @@ impl ChatView {
                                         .flex_none()
                                         .text_color(color),
                                 )
-                                .child(
-                                    div()
-                                        .font_bold()
-                                        .child(t!("run_tool", tool = a.name).to_string()),
-                                )
+                                .child(div().font_bold().child(match a.agent_id {
+                                    Some(id) => {
+                                        t!("subagent_approval", id = id, tool = a.name).to_string()
+                                    }
+                                    None => t!("run_tool", tool = a.name).to_string(),
+                                }))
                         })
                         .child(
                             div()

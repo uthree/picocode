@@ -1,6 +1,7 @@
 //! Built-in tools exposed to the agent.
 
 mod bash;
+mod delegate;
 mod edit;
 mod fetch;
 mod grep;
@@ -10,6 +11,8 @@ mod read;
 mod search;
 
 pub use bash::{BackgroundJobs, Bash, BashArgs};
+pub use delegate::{AgentResult, DELEGATE_TASK, DelegateTask};
+pub(crate) use delegate::{ParentRequest, SubagentScope};
 pub use edit::EditFile;
 pub use fetch::WebFetch;
 pub use grep::Grep;
@@ -32,6 +35,8 @@ pub const ALL_TOOLS: &[&str] = &[
     WebSearch::NAME,
     WebFetch::NAME,
     SubmitPlan::NAME,
+    DELEGATE_TASK,
+    AgentResult::NAME,
 ];
 
 /// Tools that need approval by default: everything that changes state or
@@ -47,8 +52,7 @@ pub const WRITE_TOOLS: &[&str] = &[EditFile::NAME];
 
 /// Tools whose registration can be turned off entirely via `disable_tools`
 /// in the config file (their schemas are then never sent to the model).
-/// Restricted to the web tools: everything else is part of the core loop.
-pub const OPTIONAL_TOOLS: &[&str] = &[WebSearch::NAME, WebFetch::NAME];
+pub const OPTIONAL_TOOLS: &[&str] = &[WebSearch::NAME, WebFetch::NAME, DELEGATE_TASK];
 
 /// Run a user-typed `!` command: no model, no approval, no sandbox — the
 /// user typed it. Both front ends spawn this future. The output is shown
@@ -98,36 +102,91 @@ pub async fn user_shell(
     let _ = event_tx.send(crate::event::AgentEvent::TurnComplete).await;
 }
 
-/// Last-seen modification times of files read via `read_file`, checked by
-/// `edit_file` before writing: an mtime that moved since the last read means
-/// the file was changed externally (by the user, another process, or
-/// `/undo`), and blindly applying the edit would clobber that change. Only
-/// files with a recorded stamp are checked — the `old_string` exact-match
-/// requirement guards unread files on its own.
+/// Per-agent file versions checked by `edit_file` before writing. Mtimes
+/// detect external changes; shared revisions also catch another agent's
+/// writes when the filesystem's timestamp resolution is too coarse. Each
+/// agent must read files changed by another agent before overwriting them.
 #[derive(Clone, Default)]
-pub struct ReadStamps(
-    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, std::time::SystemTime>>>,
-);
+pub struct ReadStamps {
+    seen: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<PathBuf, FileStamp>>>,
+    access: std::sync::Arc<FileAccess>,
+}
+
+#[derive(Clone, Copy)]
+struct FileStamp {
+    mtime: std::time::SystemTime,
+    revision: u64,
+}
+
+#[derive(Default)]
+struct FileAccess {
+    lock: tokio::sync::Mutex<()>,
+    revisions: std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
+}
 
 impl ReadStamps {
+    /// A separate agent's read history, with shared coordination for file
+    /// operations. Reading in one agent never refreshes another's stamps.
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            seen: Default::default(),
+            access: self.access.clone(),
+        }
+    }
+
+    /// Keep each read-and-stamp or read-modify-write transaction together.
+    /// Model requests and shell commands remain free to run in parallel.
+    pub(crate) async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.access.lock.lock().await
+    }
+
+    fn revision(&self, path: &Path) -> u64 {
+        self.access
+            .revisions
+            .lock()
+            .unwrap()
+            .get(path)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub(crate) async fn mark_written(&self, backend: &crate::backend::Backend, path: &Path) {
+        *self
+            .access
+            .revisions
+            .lock()
+            .unwrap()
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+        self.record(backend, path).await;
+    }
+
     /// Remember `path`'s current mtime (after a successful read or write),
     /// via the backend so remote files are stamped too.
     pub async fn record(&self, backend: &crate::backend::Backend, path: &Path) {
         if let Ok(mtime) = backend.mtime(path).await {
-            self.0.lock().unwrap().insert(path.to_path_buf(), mtime);
+            let stamp = FileStamp {
+                mtime,
+                revision: self.revision(path),
+            };
+            self.seen.lock().unwrap().insert(path.to_path_buf(), stamp);
         }
     }
 
-    /// Whether `path` changed since it was last recorded. `false` when it
-    /// was never recorded or no longer exists (other checks cover those).
+    /// Whether an existing file changed since this agent last read it, or
+    /// another agent wrote it without this agent having read it. Missing
+    /// files can be created, including files removed by `/undo`.
     pub async fn is_stale(&self, backend: &crate::backend::Backend, path: &Path) -> bool {
-        let Some(seen) = self.0.lock().unwrap().get(path).copied() else {
+        let Ok(now) = backend.mtime(path).await else {
             return false;
         };
-        match backend.mtime(path).await {
-            Ok(now) => now != seen,
-            Err(_) => false,
-        }
+        let revision = self.revision(path);
+        let Some(seen) = self.seen.lock().unwrap().get(path).copied() else {
+            // An agent must inspect a file another agent has written before
+            // overwriting it, including when it thought it was creating it.
+            return revision != 0;
+        };
+        revision != seen.revision || now != seen.mtime
     }
 }
 

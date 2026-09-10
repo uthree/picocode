@@ -2,7 +2,7 @@
 //! approves it in a dialog, and approval switches picocode to edit mode so
 //! the same turn can go on to execute it.
 
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolCallExtensions};
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
@@ -59,10 +59,24 @@ impl Tool for SubmitPlan {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        self.call_with_extensions(args, &ToolCallExtensions::new())
+            .await
+    }
+
+    async fn call_with_extensions(
+        &self,
+        args: Self::Args,
+        extensions: &ToolCallExtensions,
+    ) -> Result<Self::Output, Self::Error> {
         let plan = args.plan.trim().to_string();
         if plan.is_empty() {
             return Err(ToolError::new("plan must not be empty"));
         }
+        let gate = extensions
+            .get::<super::ParentRequest>()
+            .map(|parent| parent.approvals.clone())
+            .unwrap_or_default();
+        let _guard = gate.lock().await;
         if self.mode.get() != Mode::Plan {
             return Ok(
                 "picocode is not in plan mode, so there is no plan to approve. \

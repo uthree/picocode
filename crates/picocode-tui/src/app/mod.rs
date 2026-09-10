@@ -193,8 +193,8 @@ pub struct App {
     /// so Shift/Ctrl/Super+Enter arrive as distinct key events.
     pub enhanced_keys: bool,
     should_quit: bool,
-    assistant_open: bool,
-    reasoning_open: bool,
+    /// Parent text may keep growing while child activity adds later rows.
+    stream_entry: Option<usize>,
 }
 
 impl App {
@@ -272,8 +272,7 @@ impl App {
             settings: None,
             enhanced_keys,
             should_quit: false,
-            assistant_open: false,
-            reasoning_open: false,
+            stream_entry: None,
         };
         app.push(EntryKind::Logo, LOGO.to_string());
         app.push(
@@ -362,12 +361,6 @@ impl App {
             picocode_core::config::Mode::Auto => app.push(EntryKind::Warning, AUTO_WARNING.into()),
             _ => {}
         }
-        // Fetch the provider's model list in the background so `/model` can
-        // offer and validate provider models right away.
-        app.refresh_models();
-        app.probe_context_limit();
-        // Whatever model this run starts with is the one to restore next time.
-        picocode_core::state::save_last_model(&app.cfg);
         app
     }
 
@@ -376,6 +369,11 @@ impl App {
         mut terminal: DefaultTerminal,
         mut agent_rx: mpsc::Receiver<AgentEvent>,
     ) -> anyhow::Result<()> {
+        // Start provider requests and persistence when the UI runs, keeping
+        // construction usable for event handling without network side effects.
+        self.refresh_models();
+        self.probe_context_limit();
+        picocode_core::state::save_last_model(&self.cfg);
         let mut open_rx = self
             .open_rx
             .take()
@@ -769,8 +767,7 @@ impl App {
                     self.turn_out = 0;
                     self.total_out = 0;
                     self.delta_est = 0;
-                    self.assistant_open = false;
-                    self.reasoning_open = false;
+                    self.close_blocks();
                     self.follow = true;
                     self.top_line = 0;
                     self.goal = None;
@@ -1120,15 +1117,18 @@ impl App {
         );
     }
 
-    fn append_to_last(&mut self, s: &str) {
-        if let Some(last) = self.entries.last_mut() {
-            last.text.push_str(s);
+    fn append(&mut self, kind: EntryKind, delta: &str) {
+        match self.stream_entry.and_then(|i| self.entries.get_mut(i)) {
+            Some(e) if e.kind == kind => e.text.push_str(delta),
+            _ => {
+                self.push(kind, delta.to_string());
+                self.stream_entry = Some(self.entries.len() - 1);
+            }
         }
     }
 
     fn close_blocks(&mut self) {
-        self.assistant_open = false;
-        self.reasoning_open = false;
+        self.stream_entry = None;
     }
 }
 
@@ -1189,6 +1189,90 @@ fn clamp_lines(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_events_preserve_parent_paragraphs_and_context_usage() {
+        let mut args = picocode_core::config::Args::for_workspace(None);
+        args.provider = Some(picocode_core::config::Provider::Ollama);
+        args.model = Some(String::new());
+        let cfg = Config::from_args_in(args, &std::env::temp_dir()).unwrap();
+        let (event_tx, _events) = mpsc::channel(16);
+        let (cmd_tx, _commands) = mpsc::channel(16);
+        let (cancel_tx, _cancel) = watch::channel(());
+        let mut app = App::new(
+            &cfg,
+            event_tx,
+            cmd_tx,
+            Default::default(),
+            Default::default(),
+            cancel_tx,
+            Default::default(),
+            picocode_core::backend::Backend::Local,
+            false,
+            Default::default(),
+        );
+        for event in [
+            AgentEvent::Usage {
+                input: 100,
+                output: 3,
+            },
+            AgentEvent::TextDelta("parent ".into()),
+            AgentEvent::SubagentStarted { id: 7 },
+            AgentEvent::SubagentToolCall {
+                id: 7,
+                name: "read_file".into(),
+                args: "{}".into(),
+            },
+            AgentEvent::SubagentToolResult {
+                id: 7,
+                output: "child tool output".into(),
+            },
+            AgentEvent::SubagentUsage {
+                id: 7,
+                input: 999,
+                output: 400,
+            },
+            AgentEvent::SubagentFinished {
+                id: 7,
+                success: true,
+            },
+            AgentEvent::TextDelta("response".into()),
+        ] {
+            app.handle_agent_event(event);
+        }
+        let text: Vec<_> = app
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::Assistant)
+            .collect();
+        assert_eq!(text.len(), 1);
+        assert_eq!(text[0].text, "parent response");
+        assert_eq!(app.ctx_tokens, 100);
+        assert_eq!(app.total_out, 403);
+        assert_eq!(app.delta_est, 2);
+        app.handle_agent_event(AgentEvent::Usage {
+            input: 110,
+            output: 6,
+        });
+        app.handle_agent_event(AgentEvent::TextDelta("next response".into()));
+        assert_eq!(
+            app.entries
+                .iter()
+                .filter(|e| e.kind == EntryKind::Assistant)
+                .count(),
+            2
+        );
+        let (respond, _answer) = tokio::sync::oneshot::channel();
+        app.handle_agent_event(AgentEvent::ApprovalRequest {
+            agent_id: Some(7),
+            name: "bash".into(),
+            args: "{}".into(),
+            respond,
+        });
+        assert_eq!(app.pending.as_ref().unwrap().agent_id, Some(7));
+        app.handle_agent_event(AgentEvent::Cancelled);
+        assert!(app.pending.is_none());
+    }
 
     #[test]
     fn enter_combinations_map_to_send_keys() {

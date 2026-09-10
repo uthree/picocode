@@ -196,8 +196,11 @@ pub(crate) struct FileConfig {
     max_tokens: Option<u64>,
     /// Reasoning effort; absent leaves the provider default.
     effort: Option<Effort>,
+    /// Register parallel subagent tools (default false; opt-in).
+    subagents: Option<bool>,
     /// Tools to leave unregistered entirely (schemas never sent to the
-    /// model). Only the web tools (`web_search`, `web_fetch`) can be listed.
+    /// model). Web tools and `delegate_task` can be listed; disabling
+    /// delegation also removes `agent_result`.
     disable_tools: Option<Vec<String>>,
     /// Shell command run after every successful edit_file write (e.g.
     /// `cargo check`); its verdict is appended to the tool result so the
@@ -548,6 +551,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
         goal_max_rounds: project.goal_max_rounds.or(global.goal_max_rounds),
         max_tokens: project.max_tokens.or(global.max_tokens),
         effort: project.effort.or(global.effort),
+        subagents: project.subagents.or(global.subagents),
         after_edit: project.after_edit.or(global.after_edit),
         submit_key: project.submit_key.or(global.submit_key),
         // Like the approval lists: a project can add disables, not re-enable.
@@ -575,7 +579,7 @@ fn merge(global: FileConfig, project: FileConfig) -> FileConfig {
     }
 }
 
-/// The numeric and list settings of a merged file config, validated.
+/// The worker settings of a merged file config, validated.
 struct Settings {
     bash_timeout: u64,
     read_max_lines: u64,
@@ -583,6 +587,7 @@ struct Settings {
     auto_compact: u64,
     goal_max_rounds: u64,
     max_tokens: u64,
+    subagents: bool,
     disable_tools: Vec<String>,
 }
 
@@ -632,6 +637,7 @@ fn resolve_settings(file: &FileConfig) -> anyhow::Result<Settings> {
         auto_compact,
         goal_max_rounds,
         max_tokens,
+        subagents: file.subagents.unwrap_or(false),
         disable_tools,
     })
 }
@@ -744,7 +750,10 @@ pub struct Config {
     /// Web-search settings, shared with the tool and editable at runtime
     /// (`/config`: provider and result count).
     pub search: SearchHandle,
-    /// Tools left unregistered entirely (only web tools; from `disable_tools`
+    /// Opt-in registration of parallel subagent tools. Changes require a
+    /// restart; explicit `disable_tools` entries still take precedence.
+    pub subagents: bool,
+    /// Tools left unregistered entirely (web/delegation tools; from `disable_tools`
     /// in the config file, so a change requires a restart).
     pub disable_tools: Vec<String>,
     /// Shell command run after each successful edit_file write; its verdict
@@ -1118,6 +1127,7 @@ impl Config {
                 _ => Mode::default(),
             }),
             search: SearchHandle::new(search),
+            subagents: settings.subagents,
             disable_tools: settings.disable_tools,
             after_edit: file.after_edit.clone().filter(|c| !c.trim().is_empty()),
             submit_key: file.submit_key.unwrap_or_default(),
@@ -1187,6 +1197,7 @@ impl Config {
         self.goal_max_rounds = settings.goal_max_rounds;
         self.max_tokens.set(settings.max_tokens);
         self.effort.set(file.effort.unwrap_or_default());
+        self.subagents = settings.subagents;
         self.disable_tools = settings.disable_tools;
         self.approval = RulesHandle::new(file.approval);
         self.after_edit = file.after_edit.filter(|c| !c.trim().is_empty());
@@ -1198,6 +1209,14 @@ impl Config {
         self.instructions =
             load_instructions_via(backend, &self.root, &self.instruction_names).await;
         Ok(())
+    }
+
+    pub(crate) fn subagents_enabled(&self) -> bool {
+        self.subagents
+            && !self
+                .disable_tools
+                .iter()
+                .any(|name| name == crate::tools::DELEGATE_TASK)
     }
 
     pub fn model_label(&self) -> String {
@@ -1236,6 +1255,7 @@ impl Config {
                 max_results: 5,
                 api_key: None,
             }),
+            subagents: false,
             disable_tools: Vec::new(),
             after_edit: None,
             system_prompt: None,
@@ -1459,6 +1479,44 @@ mod tests {
         let merged = merge(global, project);
         assert_eq!(merged.default_model.as_deref(), Some("b"));
         assert_eq!(merged.models.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn subagents_default_off_and_project_opt_in_overrides_global() {
+        assert!(!resolve_settings(&FileConfig::default()).unwrap().subagents);
+        assert!(!Config::for_tests().subagents);
+        for (global, project, expected) in [
+            ("", "", false),
+            ("subagents = true", "", true),
+            ("", "subagents = true", true),
+            ("subagents = true", "subagents = false", false),
+            ("subagents = false", "subagents = true", true),
+        ] {
+            let file = merge(
+                toml::from_str(global).unwrap(),
+                toml::from_str(project).unwrap(),
+            );
+            assert_eq!(resolve_settings(&file).unwrap().subagents, expected);
+        }
+        assert!(toml::from_str::<FileConfig>("subagents = 'true'").is_err());
+    }
+
+    #[test]
+    fn startup_reads_the_subagent_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        for enabled in [true, false] {
+            std::fs::write(
+                dir.path().join("picocode.toml"),
+                format!("subagents = {enabled}\n"),
+            )
+            .unwrap();
+            let mut args = Args::for_workspace(None);
+            args.provider = Some(Provider::Ollama);
+            args.model = Some(String::new());
+            let cfg = Config::from_args_in(args, dir.path()).unwrap();
+            assert_eq!(cfg.subagents, enabled);
+            assert_eq!(cfg.for_session().subagents, enabled);
+        }
     }
 
     #[test]

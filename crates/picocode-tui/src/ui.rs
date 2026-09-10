@@ -1166,7 +1166,10 @@ fn draw_approval(f: &mut Frame, pending: &PendingApproval) {
 
     let mut lines: Vec<Line> = vec![
         Line::from(Span::styled(
-            format!("Tool: {}", pending.name),
+            match pending.agent_id {
+                Some(id) => format!("Subagent #{id} — Tool: {}", pending.name),
+                None => format!("Tool: {}", pending.name),
+            },
             Style::new().fg(Color::Yellow).bold(),
         )),
         Line::default(),
